@@ -32,6 +32,7 @@ from curator.services import (
     DocumentService,
     HashPipeline,
     LineageService,
+    MigrationService,
     MusicService,
     OrganizeService,
     PhotoService,
@@ -93,6 +94,7 @@ class CuratorRuntime:
     photo: PhotoService
     document: DocumentService
     cleanup: CleanupService
+    migration: MigrationService
 
     # Output controls (set by CLI flags)
     json_output: bool = False
@@ -169,6 +171,10 @@ def build_runtime(
         audit=audit_repo,
     )
     cleanup = CleanupService(safety, audit=audit_repo, file_repo=file_repo)
+    # v1.0.0a1: Migration tool (Feature M Phase 1).
+    migration = MigrationService(
+        file_repo=file_repo, safety=safety, audit=audit_repo,
+    )
 
     return CuratorRuntime(
         config=config,
@@ -195,6 +201,7 @@ def build_runtime(
         photo=photo,
         document=document,
         cleanup=cleanup,
+        migration=migration,
         json_output=json_output,
         no_color=no_color,
         verbosity=verbosity,

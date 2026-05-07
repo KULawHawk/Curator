@@ -1,0 +1,88 @@
+======================================================================
+Curator v1.0.0a1 Migration Tool Phase 1 - Real-World Demo
+======================================================================
+
+Demo location: C:\Users\jmlee\Desktop\curator_v100a1_demo
+Source root:   C:\Users\jmlee\Desktop\curator_v100a1_demo\library
+Dest root:     C:\Users\jmlee\Desktop\curator_v100a1_demo\library_new
+
+Seeded 5 files into C:\Users\jmlee\Desktop\curator_v100a1_demo\library
+
+----------------------------------------------------------------------
+STEP 1: Plan-mode (no --apply, no mutations)
+----------------------------------------------------------------------
+$ curator --json --db C:\Users\jmlee\Desktop\curator_v100a1_demo\demo.db migrate local C:\Users\jmlee\Desktop\curator_v100a1_demo\library C:\Users\jmlee\Desktop\curator_v100a1_demo\library_new
+
+Plan output (JSON, abbreviated):
+{
+  "action": "migrate.plan",
+  "src_source_id": "local",
+  "src_root": "C:\\Users\\jmlee\\Desktop\\curator_v100a1_demo\\library",
+  "dst_source_id": "local",
+  "dst_root": "C:\\Users\\jmlee\\Desktop\\curator_v100a1_demo\\library_new",
+  "total": 5,
+  "safe": 5,
+  "caution": 0,
+  "refuse": 0,
+  "planned_bytes": 14265,
+  "verify_hash": true
+}
+
+... and 5 move entries (omitted for brevity)
+
+Sanity check: 5/5 source files still on disk
+              dst_root exists: False (should be False)
+
+----------------------------------------------------------------------
+STEP 2: Apply mode (--apply, real moves with hash verification)
+----------------------------------------------------------------------
+$ curator --json --db C:\Users\jmlee\Desktop\curator_v100a1_demo\demo.db migrate local C:\Users\jmlee\Desktop\curator_v100a1_demo\library C:\Users\jmlee\Desktop\curator_v100a1_demo\library_new --apply
+
+Apply output (JSON, abbreviated):
+{
+  "action": "migrate.apply",
+  "moved": 5,
+  "skipped": 0,
+  "failed": 0,
+  "bytes_moved": 14265,
+  "duration_seconds": 0.306991
+}
+
+----------------------------------------------------------------------
+STEP 3: Verify post-conditions
+----------------------------------------------------------------------
+Source files still on disk: 0/5 (should be 0)
+Destination files:          5/5 (should be 5)
+
+Subpath preservation:
+  library_new/Beatles\Abbey Road\01 - Come Together.mp3
+  library_new/Pink Floyd\The Wall\01 - In the Flesh.mp3
+  library_new/Pink Floyd\The Wall\02 - The Thin Ice.mp3
+  library_new/Radiohead\OK Computer\01 - Airbag.mp3
+  library_new/Radiohead\OK Computer\02 - Paranoid Android.mp3
+
+Hash verification (re-hashing dst files):
+  5dcd1ced3875ca79...  Beatles\Abbey Road\01 - Come Together.mp3
+  fa890193dd968a7c...  Pink Floyd\The Wall\01 - In the Flesh.mp3
+  9d86674f587da026...  Pink Floyd\The Wall\02 - The Thin Ice.mp3
+  d23a0c455aab7fa5...  Radiohead\OK Computer\01 - Airbag.mp3
+  edc3df17524f65d5...  Radiohead\OK Computer\02 - Paranoid Android.mp3
+
+----------------------------------------------------------------------
+STEP 4: Verify index updated correctly (curator_id constancy)
+----------------------------------------------------------------------
+FileEntity rows after migration: 5 active
+  c513549f...  -> library_new/Beatles\Abbey Road\01 - Come Together.mp3
+  1f6e2e93...  -> library_new/Pink Floyd\The Wall\01 - In the Flesh.mp3
+  5706bda1...  -> library_new/Pink Floyd\The Wall\02 - The Thin Ice.mp3
+  20fffc8e...  -> library_new/Radiohead\OK Computer\01 - Airbag.mp3
+  262e1155...  -> library_new/Radiohead\OK Computer\02 - Paranoid Android.mp3
+
+Audit log entries (action='migration.move'): 5
+  Sample: actor=curator.migrate  action=migration.move  entity_type=file
+          src_path: C:\Users\jmlee\Desktop\curator_v100a1_demo\library\Radiohead\OK Computer\02 - Paranoid Android.mp3
+          dst_path: C:\Users\jmlee\Desktop\curator_v100a1_demo\library_new\Radiohead\OK Computer\02 - Paranoid Android.mp3
+          xxhash3_128: edc3df17524f65d5...
+
+Demo complete. Saving demo summary to C:\Users\jmlee\Desktop\AL\Curator\docs/v100a1_migration_demo.txt
+

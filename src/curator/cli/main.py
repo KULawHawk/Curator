@@ -2499,5 +2499,221 @@ def gdrive_auth_cmd(
     )
 
 
+# ---------------------------------------------------------------------------
+# v1.0.0a1: Migration tool (Feature M Phase 1)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="migrate")
+def migrate_cmd(
+    ctx: typer.Context,
+    src_source_id: str = typer.Argument(
+        ...,
+        help="Source plugin id whose files to migrate (e.g. 'local').",
+    ),
+    src_root: str = typer.Argument(
+        ...,
+        help="Path prefix at the source. Only files under this prefix are candidates.",
+    ),
+    dst_root: str = typer.Argument(
+        ...,
+        help="Path prefix at the destination. Subpaths are preserved.",
+    ),
+    extensions: Optional[str] = typer.Option(
+        None, "--ext",
+        help="Comma-separated extension filter (e.g. '.mp3,.flac'). Case-insensitive.",
+    ),
+    apply: bool = typer.Option(
+        False, "--apply",
+        help="Required to actually perform the moves. Without this, plan-only.",
+    ),
+    verify_hash: bool = typer.Option(
+        True, "--verify-hash/--no-verify-hash",
+        help="Recompute xxhash3_128 of the destination after copy and require "
+             "a match before updating the index. Default ON (Hash-Verify-Before-Move "
+             "Constitutional discipline).",
+    ),
+) -> None:
+    """Relocate files across paths/sources with index integrity (Phase 1).
+
+    Same-source local-to-local migration with hash-verify-before-move per file.
+    The curator_id stays constant so lineage edges + bundle memberships persist.
+    Source files are trashed (recoverable via OS Recycle Bin) only after the
+    destination is verified.
+
+    Examples:
+      curator migrate local C:/Music D:/Music             # plan only
+      curator migrate local C:/Music D:/Music --apply     # actually move
+      curator migrate local C:/Music D:/Music --apply --ext .mp3,.flac
+
+    Phase 2 will add cross-source migration (local <-> gdrive), --resume,
+    worker concurrency, and a GUI Migrate tab.
+    """
+    rt: CuratorRuntime = ctx.obj
+    console = _console(rt)
+    err = _err_console(rt)
+    ext_list: list[str] | None = None
+    if extensions:
+        ext_list = [e.strip() for e in extensions.split(",") if e.strip()]
+
+    try:
+        plan = rt.migration.plan(
+            src_source_id=src_source_id,
+            src_root=src_root,
+            dst_root=dst_root,
+            extensions=ext_list,
+        )
+    except ValueError as e:
+        err.print(f"[red]{e}[/]")
+        raise typer.Exit(code=2) from e
+
+    # --- Plan rendering -------------------------------------------------
+    if not apply:
+        _render_migration_plan(rt, plan, verify_hash=verify_hash, console=console)
+        return
+
+    if plan.safe_count == 0:
+        if rt.json_output:
+            typer.echo(json.dumps({
+                "action": "migrate.apply",
+                "moved": 0,
+                "skipped": plan.caution_count + plan.refuse_count,
+                "failed": 0,
+                "reason": "no SAFE files in plan",
+            }, indent=2))
+        else:
+            console.print(
+                "[yellow]No SAFE files to migrate. "
+                f"({plan.caution_count} CAUTION, {plan.refuse_count} REFUSE skipped.)[/]"
+            )
+        return
+
+    # --- Apply rendering ------------------------------------------------
+    db_guard = Path(rt.db.db_path) if rt.db.db_path else None
+    report = rt.migration.apply(
+        plan, verify_hash=verify_hash, db_path_guard=db_guard,
+    )
+    _render_migration_report(rt, report, console=console)
+    # Non-zero exit if anything failed
+    if report.failed_count:
+        raise typer.Exit(code=1)
+
+
+def _render_migration_plan(rt, plan, *, verify_hash: bool, console=None) -> None:
+    """Render a migration plan (no mutations)."""
+    if console is None:
+        console = _console(rt)
+    if rt.json_output:
+        typer.echo(json.dumps({
+            "action": "migrate.plan",
+            "src_source_id": plan.src_source_id,
+            "src_root": plan.src_root,
+            "dst_source_id": plan.dst_source_id,
+            "dst_root": plan.dst_root,
+            "total": plan.total_count,
+            "safe": plan.safe_count,
+            "caution": plan.caution_count,
+            "refuse": plan.refuse_count,
+            "planned_bytes": plan.planned_bytes,
+            "verify_hash": verify_hash,
+            "moves": [
+                {
+                    "curator_id": str(m.curator_id),
+                    "src_path": m.src_path,
+                    "dst_path": m.dst_path,
+                    "safety_level": m.safety_level.value,
+                    "size": m.size,
+                }
+                for m in plan.moves
+            ],
+        }, indent=2, default=str))
+        return
+
+    console.print(
+        f"\n[bold cyan]Migration plan[/]: "
+        f"{plan.src_source_id}:{plan.src_root} -> "
+        f"{plan.dst_source_id}:{plan.dst_root}"
+    )
+    console.print(
+        f"  [green]SAFE[/]: {plan.safe_count}    "
+        f"[yellow]CAUTION[/]: {plan.caution_count}    "
+        f"[red]REFUSE[/]: {plan.refuse_count}    "
+        f"Total: {plan.total_count}"
+    )
+    console.print(f"  Planned bytes: {plan.planned_bytes:,}")
+    console.print(
+        f"  Hash verify: {'[green]on[/]' if verify_hash else '[red]off[/]'}"
+    )
+    console.print()
+
+    safe_moves = [m for m in plan.moves if m.safety_level.value == "safe"]
+    if safe_moves:
+        console.print("[bold]Files that would move (SAFE):[/]")
+        for m in safe_moves[:20]:
+            console.print(f"  {m.src_path}  ->  {m.dst_path}")
+        if len(safe_moves) > 20:
+            console.print(f"  [dim]... and {len(safe_moves) - 20} more[/]")
+    skipped = [m for m in plan.moves if m.safety_level.value != "safe"]
+    if skipped:
+        console.print(f"\n[yellow]Skipped (not SAFE): {len(skipped)} files[/]")
+
+    if plan.safe_count > 0:
+        console.print(
+            "\n[dim]Re-run with [bold]--apply[/bold] to perform the moves.[/]"
+        )
+    else:
+        console.print("\n[yellow]Nothing to do.[/]")
+
+
+def _render_migration_report(rt, report, *, console=None) -> None:
+    """Render a migration apply report."""
+    moves = report.moves
+    moved = [m for m in moves if m.outcome and m.outcome.value == "moved"]
+    skipped = [m for m in moves if m.outcome and m.outcome.value.startswith("skipped")]
+    failed = [m for m in moves if m.outcome and m.outcome.value in ("failed", "hash_mismatch")]
+
+    if console is None:
+        console = _console(rt)
+    if rt.json_output:
+        typer.echo(json.dumps({
+            "action": "migrate.apply",
+            "moved": len(moved),
+            "skipped": len(skipped),
+            "failed": len(failed),
+            "bytes_moved": report.bytes_moved,
+            "duration_seconds": report.duration_seconds,
+            "results": [
+                {
+                    "curator_id": str(m.curator_id),
+                    "src_path": m.src_path,
+                    "dst_path": m.dst_path,
+                    "outcome": m.outcome.value if m.outcome else None,
+                    "error": m.error,
+                }
+                for m in moves
+            ],
+        }, indent=2, default=str))
+        return
+
+    console.print(
+        f"\n[bold green]Migration applied[/] in {report.duration_seconds:.2f}s"
+    )
+    console.print(
+        f"  [green]MOVED[/]: {len(moved)}    "
+        f"[yellow]SKIPPED[/]: {len(skipped)}    "
+        f"[red]FAILED[/]: {len(failed)}"
+    )
+    console.print(f"  Bytes moved: {report.bytes_moved:,}")
+
+    if failed:
+        console.print("\n[bold red]Failures:[/]")
+        for m in failed[:20]:
+            console.print(f"  [red]{m.outcome.value}[/]  {m.src_path}")
+            if m.error:
+                console.print(f"    [dim]{m.error}[/]")
+        if len(failed) > 20:
+            console.print(f"  [dim]... and {len(failed) - 20} more[/]")
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()

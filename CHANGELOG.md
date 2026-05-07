@@ -4,6 +4,97 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.1.0a1] — 2026-05-08 — Migration tool Phase 1 (alpha)
+
+**Headline:** Feature M (Migration tool) Phase 1 ships. Same-source
+local→local file relocation with hash-verify-before-move discipline,
+``curator_id`` constancy proven by lineage-edge + bundle-membership
+preservation, audit log integration, and a real-world end-to-end demo
+(5 files / 14,265 bytes / 0.31s, 5/5 verified, all index rows updated
+in place). **Alpha:** Phase 2 (cross-source via gdrive write hook,
+resume tables, worker concurrency, GUI Migrate tab) is needed before
+v1.1.0 stable.
+
+### Added
+
+- **`MigrationService` (Phase 1):** ``src/curator/services/migration.py``
+  (~430 LOC). Public API:
+  - ``MigrationService.plan(src_source_id, src_root, dst_root, *, dst_source_id=None, extensions=None)``
+    — walks every file under ``src_root`` via FileQuery, runs each through
+    SafetyService, partitions into SAFE/CAUTION/REFUSE buckets, computes
+    per-file ``dst_path`` preserving subpath. Refuses if ``dst_root`` is
+    inside ``src_root`` (loop guard). Optional case-insensitive extension
+    filter.
+  - ``MigrationService.apply(plan, *, verify_hash=True, db_path_guard=None)``
+    — per-file Atrium Constitution Hash-Verify-Before-Move discipline:
+    (1) hash src (cached if available), (2) make dst parent dirs,
+    (3) ``shutil.copy2``, (4) hash dst, (5) verify match — on mismatch
+    unlink dst and mark HASH_MISMATCH leaving src intact, (6) update
+    ``FileEntity.source_path`` (curator_id stays constant), (7) trash src
+    via vendored send2trash (best-effort). Skips CAUTION/REFUSE files,
+    pre-existing collisions, and the file at ``db_path_guard``.
+- **Types:** ``MigrationOutcome`` enum (MOVED / SKIPPED_NOT_SAFE /
+  SKIPPED_COLLISION / SKIPPED_DB_GUARD / HASH_MISMATCH / FAILED),
+  ``MigrationMove``, ``MigrationPlan`` (with ``total_count`` /
+  ``safe_count`` / ``caution_count`` / ``refuse_count`` / ``planned_bytes``),
+  ``MigrationReport`` (with ``moved_count`` / ``skipped_count`` /
+  ``failed_count`` / ``bytes_moved`` / ``duration_seconds``).
+- **CLI command** ``curator migrate <src_source_id> <src_root> <dst_root>``:
+  - Plan-only by default (no mutations). ``--apply`` runs moves.
+  - ``--ext .mp3,.flac`` extension filter (comma-separated, case-insensitive).
+  - ``--verify-hash / --no-verify-hash`` (default ON — Constitutional discipline).
+  - JSON output via top-level ``--json`` flag for both plan + apply.
+  - Auto DB-guard: passes ``rt.db.db_path`` to ``apply()`` so Curator's
+    own DB file can never migrate out from under itself.
+- **Runtime wiring:** ``CuratorRuntime.migration: MigrationService`` field;
+  constructed in ``build_runtime`` after safety + audit are ready.
+- **Service exports:** ``MigrationService``, ``MigrationPlan``,
+  ``MigrationReport``, ``MigrationMove``, ``MigrationOutcome`` available
+  from ``curator.services``.
+
+### Tests (+33 new — 1002 default passing total, was 969)
+
+- ``tests/unit/test_migration.py`` — 25 tests covering
+  ``_compute_dst_path`` (3), ``_xxhash3_128_of_file`` (3),
+  ``MigrationPlan`` dataclass (1), ``plan()`` (7), ``apply()`` (8),
+  lineage/bundle preservation (2), error handling (1).
+- ``tests/integration/test_cli_migrate.py`` — 8 tests covering CLI help,
+  plan-only no-mutation, plan JSON shape, apply moves files end-to-end,
+  no-SAFE returns moved=0, dst-inside-src exits 2, extension filter,
+  ``--apply`` gate.
+- **Headline invariants proven:** curator_id constancy (lineage edges +
+  bundle memberships persist after move); hash mismatch leaves source
+  intact and removes destination; DB-guard skip; collision skip;
+  audit entries with ``actor='curator.migrate'`` /
+  ``action='migration.move'`` per move; copy failure preserves source.
+- **Real-world end-to-end demo** at ``docs/v100a1_migration_demo.txt``
+  (4,098 bytes): Desktop-rooted demo (5 files / 14,265 bytes), plan
+  via ``curator --json migrate`` produces 5 SAFE / 0 CAUTION / 0 REFUSE,
+  apply moves all 5 in 0.31s with hash verification, sources trashed to
+  Recycle Bin, FileEntity rows re-pointed at new paths, 5 audit entries
+  written.
+
+### Phase 2 deferred (required for v1.1.0 stable)
+
+- Cross-source migration (local↔gdrive) via the v0.40
+  ``curator_source_write`` plugin hook.
+- Resume tables (``migration_jobs`` + ``migration_progress`` per
+  DESIGN_PHASE_DELTA.md §M.4) so interrupted migrations can pick up
+  where they left off.
+- Worker pool for concurrent file copies (``--workers N`` flag).
+- ``curator migrate --resume <job_id>`` / ``--list`` / ``--abort``.
+- GUI "Migrate" tab.
+- ``--keep-source`` and ``--delete-source`` flags (Phase 1 hardcodes ``trash``).
+- Opt-in CAUTION migration via ``--include-caution``.
+
+### Migration semver note
+
+v1.1.0a1 is alpha. Bumped from v1.0.0rc1 to v1.1.0a1 (NOT v1.0.0a1 —
+that would regress per PEP 440 since alpha < rc). Migration tool was
+always post-1.0 work per ``DESIGN_PHASE_DELTA.md`` Phase Δ+ Roadmap, so
+it ships as the first feature of the v1.1 minor cycle. v1.0.0rc1
+remains the stability anchor; the v1.0.0rc1 git tag is unchanged.
+
 ## [1.0.0rc1] — 2026-05-08 — First release candidate 🎉
 
 **Curator's first release candidate.** Phase α + Phase β are 100% complete.

@@ -36,6 +36,13 @@ from curator.services.cleanup import (
 from curator.services.document import DocumentService
 from curator.services.hash_pipeline import HashPipeline, HashPipelineStats
 from curator.services.lineage import LineageService
+from curator.services.migration import (
+    MigrationMove,
+    MigrationOutcome,
+    MigrationPlan,
+    MigrationReport,
+    MigrationService,
+)
 from curator.services.music import MusicService
 from curator.services.musicbrainz import MusicBrainzClient, MusicBrainzMatch
 from curator.services.organize import (
@@ -81,6 +88,11 @@ __all__ = [
     "HashPipeline",
     "HashPipelineStats",
     "LineageService",
+    "MigrationMove",
+    "MigrationOutcome",
+    "MigrationPlan",
+    "MigrationReport",
+    "MigrationService",
     "MusicBrainzClient",
     "MusicBrainzMatch",
     "MusicService",

@@ -2,7 +2,119 @@
 
 **Owner:** Jake Leese
 **Maintained by:** Claude (updated each implementation session)
-**Cross-references:** `DESIGN.md` (spec), `Github/CURATOR_RESEARCH_NOTES.md` (decisions), `Github/PROCUREMENT_INDEX.md` (deps), `docs/ROADMAP.md` (Phase Gamma+ planned features)
+**Cross-references:** `DESIGN.md` (spec), `DESIGN_PHASE_DELTA.md` (post-1.0 roadmap), `Github/CURATOR_RESEARCH_NOTES.md` (decisions), `Github/PROCUREMENT_INDEX.md` (deps), `docs/ROADMAP.md` (Phase Gamma+ planned features), `CHANGELOG.md` (per-version notes)
+
+---
+
+## v1.1.0a1 — Migration tool Phase 1 (alpha) — 2026-05-08 🚚
+
+**Headline:** Feature M (Migration tool) Phase 1 ships. First post-1.0
+feature on the v1.1 minor cycle. Same-source local→local file relocation
+with hash-verify-before-move, ``curator_id`` constancy, audit integration.
+**1002 default-suite passing + 9 opt-in (1 GUI smoke + 6 watch + 2 safety) =
+1011 total. 8 correctly-skipped, 0 failures, 61s.** Was 969 pre-Migration
+→ +33 new (25 unit + 8 CLI integration).
+
+### What shipped
+
+- ``src/curator/services/migration.py`` (~430 LOC):
+  ``MigrationService`` + ``MigrationPlan`` / ``MigrationReport`` /
+  ``MigrationMove`` / ``MigrationOutcome``. Plan walks SAFE files via
+  ``FileQuery(source_ids=[...], source_path_starts_with=..., deleted=False,
+  order_by='source_path ASC')``, partitions by ``SafetyService.check_path``
+  verdict, applies optional case-insensitive extension filter, refuses if
+  ``dst_root`` is inside ``src_root``. Apply does per-file Atrium Constitution
+  Hash-Verify-Before-Move: hash src (cached if available) → mkdir parents →
+  ``shutil.copy2`` → hash dst → verify match → update ``FileEntity.source_path``
+  via ``file_repo.update`` → trash src via vendored send2trash → audit with
+  ``actor='curator.migrate'`` / ``action='migration.move'``. Skips CAUTION/
+  REFUSE files, pre-existing collisions, and the file at ``db_path_guard``.
+- ``src/curator/services/__init__.py``: exports ``MigrationService`` +
+  ``MigrationMove`` / ``MigrationOutcome`` / ``MigrationPlan`` /
+  ``MigrationReport``.
+- ``src/curator/cli/runtime.py``: adds ``migration: MigrationService``
+  field; constructed in ``build_runtime`` after safety + audit are ready.
+- ``src/curator/cli/main.py``: ``@app.command(name="migrate")`` (~210 LOC
+  including ``_render_migration_plan`` + ``_render_migration_report``
+  helpers) supporting ``curator migrate <src_source_id> <src_root>
+  <dst_root> [--ext .mp3,.flac] [--apply] [--verify-hash/--no-verify-hash]``.
+  Plan-only by default; ``--apply`` runs moves. Honors ``rt.json_output``.
+  DB guard uses ``rt.db.db_path`` automatically when applying.
+- ``tests/unit/test_migration.py`` (25 tests across ``TestComputeDstPath``
+  / ``TestXxhashOfFile`` / ``TestMigrationPlanDataclass`` / ``TestPlan`` /
+  ``TestApply`` / ``TestLineagePreservation`` / ``TestErrorHandling``).
+- ``tests/integration/test_cli_migrate.py`` (8 CLI tests: command listed
+  in help, plan-only doesn't mutate, plan JSON shape, apply moves files
+  end-to-end, no-SAFE returns moved=0, dst-inside-src exits 2, extension
+  filter narrows, ``--apply`` gate).
+- ``docs/v100a1_migration_demo.txt`` (4,098 bytes): real-world end-to-end
+  demo transcript. 5 files / 14,265 bytes / 0.31s, all 5 verified, sources
+  trashed, FileEntity rows re-pointed, 5 audit entries.
+
+### Headline invariants proven
+
+- **curator_id constancy.** Lineage edges and bundle memberships persist
+  across moves (``test_lineage_edges_survive_move``,
+  ``test_bundle_membership_survives_move``).
+- **Hash mismatch leaves source intact.** When the dst hash doesn't match
+  src after copy, dst is unlinked and src is preserved
+  (``test_hash_mismatch_leaves_source_intact``).
+- **DB-guard.** The runtime's own ``curator.db`` file is never migrated
+  (``test_db_guard_skipped``).
+- **Audit per-move.** ``actor='curator.migrate'`` /
+  ``action='migration.move'`` with src_path + dst_path + size + xxhash3_128
+  in details (``test_audit_entries_written_on_success``).
+- **Copy failure preserves source.** OSError mid-copy leaves src on disk
+  and FileEntity row pointing at src
+  (``test_copy_failure_marks_failed_preserves_src``).
+
+### Mid-build catches
+
+- ``LineageEdgeKind`` is actually ``LineageKind``; ``LineageEdge.kind``
+  is actually ``LineageEdge.edge_kind``. Caught at first test-collection.
+- ``FileRepository.list_active(limit=N)`` doesn't exist — use
+  ``file_repo.query(FileQuery(deleted=False, limit=N))``.
+- ``FileEntity`` requires ``mtime`` field for construction.
+- ``SafetyReport`` constructor params are ``path, level, concerns,
+  holders, project_root`` (not just ``level``).
+- **pytest's ``tmp_path`` lives under ``%LOCALAPPDATA%\Temp`` on Windows.**
+  SafetyService correctly returns CAUTION (app-data) for everything there.
+  Most tests stub ``SafetyService.check_path`` to return SAFE for
+  migration-mechanics testing; one explicit test
+  (``test_caution_files_appear_in_plan_but_marked_caution``) exercises
+  real CAUTION verdict.
+- **Unicode arrows crash Typer's CliRunner on Windows cp1252 console.**
+  Same lesson as v0.22. ASCII-fied ``→`` to ``->`` and ``↔`` to ``<->``
+  in the migrate CLI docstring.
+- **No module-level ``console`` or ``err`` in ``cli/main.py``.** Per-command
+  pattern is ``console = _console(rt)`` + ``err = _err_console(rt)``.
+  Initial CLI tests had 2 NameError failures fixed by adopting the helper
+  pattern in ``migrate_cmd`` and threading ``console`` kwarg through
+  ``_render_migration_plan`` + ``_render_migration_report`` helpers.
+- **Version bump correction.** First attempted bump went from ``1.0.0rc1``
+  → ``1.0.0a1``, which would REGRESS per PEP 440 (alpha < rc). Caught and
+  corrected to ``1.1.0a1`` (alpha of next minor) since Migration is post-1.0
+  NEW functionality per ``DESIGN_PHASE_DELTA.md`` Phase Δ+ Roadmap.
+
+### Phase 2 (deferred to next ship; required for v1.1.0 stable)
+
+- Cross-source migration via the v0.40 ``curator_source_write`` plugin hook
+  (local↔gdrive).
+- Resume tables (``migration_jobs`` + ``migration_progress`` per
+  ``DESIGN_PHASE_DELTA.md`` §M.4).
+- Worker pool (``--workers N`` flag).
+- ``curator migrate --resume <job_id>`` / ``--list`` / ``--abort``.
+- GUI "Migrate" tab.
+- ``--keep-source`` / ``--delete-source`` source-action flags (Phase 1
+  hardcodes ``trash``).
+- Opt-in CAUTION migration via ``--include-caution``.
+
+### Atrium GATE-PM-013 status
+
+Git/backup risk gate (highest-priority CRITICAL from CLAUDE_LOGIC_GATES):
+remains "substantially mitigated" by the v1.0.0rc1 git_init ceremony.
+This v1.1.0a1 commit lands on ``main`` on top of the existing v1.0.0rc1
+tag. Single-disk SPOF still applies; remote push deferred.
 
 ---
 
