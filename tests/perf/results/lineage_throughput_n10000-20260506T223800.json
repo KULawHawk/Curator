@@ -1,0 +1,21 @@
+{
+  "corpus_size": 10000,
+  "ssdeep_threshold": 70,
+  "index_build_ms": 9391.928,
+  "baseline": {
+    "median_ms": 211.541,
+    "min_ms": 202.531,
+    "max_ms": 214.098,
+    "n_repeats": 3
+  },
+  "lsh": {
+    "median_ms": 0.823,
+    "min_ms": 0.785,
+    "max_ms": 1.129,
+    "n_repeats": 3
+  },
+  "speedup_x": 257.04,
+  "match_count_baseline": 2,
+  "match_count_lsh": 2,
+  "false_negative_rate": 0.0
+}

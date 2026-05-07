@@ -1,0 +1,50 @@
+BSD 3-Clause License
+
+Copyright (c) 2009-2021, Hardcoded Software (http://www.hardcoded.net)
+Copyright (c) 2017-2024, Virgil Dupras
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+THE POSSIBILITY OF SUCH DAMAGE.
+
+==============================================================================
+
+send2trash — Send files to OS trash / Recycle Bin
+Original source: https://github.com/arsenetar/send2trash
+
+Curator vendors a Windows-only subset of send2trash 1.8.3:
+    * curator/_vendored/send2trash/__init__.py        (top-level dispatch)
+    * curator/_vendored/send2trash/exceptions.py      (TrashPermissionError)
+    * curator/_vendored/send2trash/util.py            (preprocess_paths)
+    * curator/_vendored/send2trash/win/__init__.py    (Windows entry point)
+    * curator/_vendored/send2trash/win/legacy.py      (ctypes-based, no pywin32)
+
+The macOS implementation, the Linux GIO/freedesktop implementations, and
+the pywin32-based ``modern.py`` Windows path are NOT included in this
+Phase Alpha vendor. Phase Beta will expand to other platforms as needed.
+
+The unmodified upstream archive lives at
+``Github/03_send2trash/send2trash-master/`` for reference.
