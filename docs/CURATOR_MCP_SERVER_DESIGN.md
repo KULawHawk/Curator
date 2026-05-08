@@ -185,7 +185,7 @@ curator-mcp --http --port 8765
 
 **stdio:** trust the OS user. The server reads `CuratorRuntime` (which reads the user's SQLite DB at the user's config path); same trust boundary as the CLI.
 
-**HTTP:** v0.1 explicitly warns + binds to localhost only by default. v0.2 will add an `--api-key` flag (or read one from env) and reject requests without a matching `Authorization: Bearer <key>` header. Documented as a known gap in the v0.1 README.
+**HTTP:** v0.1 explicitly warns + binds to localhost only by default. A future MCP design version will add an `--api-key` flag (or read one from env) and reject requests without a matching `Authorization: Bearer <key>` header. Documented as a known gap in the v0.1 README. (Originally planned for Curator v1.3.0; pushed to v1.4.0 by Tracer Phase 3 ratification 2026-05-08, which claimed v1.3.0 for retry + conflict-resolution.)
 
 ---
 
@@ -293,4 +293,4 @@ Users opting into the new surface install `pip install curator[mcp]`. Users not 
   - `Curator/README.md` MCP server section.
   - MCP specification (`spec.modelcontextprotocol.io`) and FastMCP framework (bundled in `mcp` package as `mcp.server.fastmcp.FastMCP`).
 
-  **What's queued for v1.3.0 (post-MCP):** Write tools (migration apply, scan trigger, trash, organize) with confirmation UX. HTTP transport authentication (API keys). Real-time event streaming for `WatchService`. Each is its own future design cycle.
+  **What's queued for post-v1.2.0 (each its own future design cycle):** Write tools (migration apply, scan trigger, trash, organize) with confirmation UX. HTTP transport authentication (API keys) — originally targeted v1.3.0, pushed to **v1.4.0** by Tracer Phase 3 ratification 2026-05-08 (which claimed v1.3.0 for retry + conflict-resolution; see `TRACER_PHASE_3_DESIGN.md` v0.2 RATIFIED §3 DM-6). Real-time event streaming for `WatchService`.
