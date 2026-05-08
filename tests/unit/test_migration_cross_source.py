@@ -537,3 +537,214 @@ class TestSameSourceStillWorks:
         assert len(entries) == 1
         details = entries[0].details or {}
         assert "cross_source" not in details
+
+
+# ===========================================================================
+# v1.1.1: curator_source_write_post hook firing (P1 of curatorplug-atrium-safety)
+# ===========================================================================
+
+
+class TestCuratorSourceWritePostHook:
+    """v1.1.1 introduced ``curator_source_write_post`` as a Curator-side
+    prerequisite for the ``curatorplug-atrium-safety`` plugin. After every
+    successful ``curator_source_write`` (in the cross-source path), the
+    hook fires and any registered plugin can perform an independent
+    post-write verification or refuse the write by raising.
+
+    See ``curatorplug-atrium-safety/DESIGN.md`` for the design that
+    motivated this hookspec.
+    """
+
+    def _make_recorder_plugin(self):
+        """Build a simple hookimpl that records every post-write invocation.
+
+        Returns ``(plugin_instance, calls_list)``. The plugin can be
+        registered with ``rt.pm.register(plugin_instance)`` and the
+        calls_list will accumulate one dict per hook firing.
+        """
+        from curator.plugins import hookimpl
+        calls: list[dict] = []
+
+        class _PostWriteRecorder:
+            @hookimpl
+            def curator_source_write_post(
+                self, source_id, file_id, src_xxhash, written_bytes_len,
+            ):
+                calls.append({
+                    "source_id": source_id,
+                    "file_id": file_id,
+                    "src_xxhash": src_xxhash,
+                    "written_bytes_len": written_bytes_len,
+                })
+                return None
+
+        return _PostWriteRecorder(), calls
+
+    def test_hook_fires_after_successful_cross_source_write(
+        self, cross_source_runtime, tmp_path,
+    ):
+        """The headline: a successful cross-source migration triggers
+        exactly one ``curator_source_write_post`` invocation per file,
+        with the expected arguments populated."""
+        rt = cross_source_runtime
+        src_root = tmp_path / "src_a"
+        dst_root = tmp_path / "dst_b"
+        content = b"recorder-test-bytes\n" * 10
+        expected_hash = xxhash.xxh3_128(content).hexdigest()
+        _seed_real_file(rt, "local", src_root / "f.txt", content=content)
+
+        plugin, calls = self._make_recorder_plugin()
+        rt.pm.register(plugin)
+        try:
+            plan = rt.migration.plan(
+                src_source_id="local", src_root=str(src_root),
+                dst_source_id="local:vault", dst_root=str(dst_root),
+            )
+            report = rt.migration.apply(plan)
+        finally:
+            rt.pm.unregister(plugin)
+
+        assert report.moved_count == 1
+        assert len(calls) == 1
+        call = calls[0]
+        assert call["source_id"] == "local:vault"
+        assert call["file_id"] == str(dst_root / "f.txt")
+        assert call["src_xxhash"] == expected_hash
+        assert call["written_bytes_len"] == len(content)
+
+    def test_hook_does_not_fire_on_collision(
+        self, cross_source_runtime, tmp_path,
+    ):
+        """When ``curator_source_write`` raises FileExistsError (dst already
+        present), the move outcomes is SKIPPED_COLLISION and the post-write
+        hook MUST NOT fire -- nothing was actually written."""
+        rt = cross_source_runtime
+        src_root = tmp_path / "src_collide"
+        dst_root = tmp_path / "dst_collide"
+        _seed_real_file(rt, "local", src_root / "clash.txt", content=b"src")
+        # Pre-create the dst file so curator_source_write raises FileExistsError
+        dst_root.mkdir(parents=True, exist_ok=True)
+        (dst_root / "clash.txt").write_bytes(b"already here")
+
+        plugin, calls = self._make_recorder_plugin()
+        rt.pm.register(plugin)
+        try:
+            plan = rt.migration.plan(
+                src_source_id="local", src_root=str(src_root),
+                dst_source_id="local:vault", dst_root=str(dst_root),
+            )
+            report = rt.migration.apply(plan)
+        finally:
+            rt.pm.unregister(plugin)
+
+        assert report.moves[0].outcome == MigrationOutcome.SKIPPED_COLLISION
+        assert calls == []  # never fired
+
+    def test_hook_does_not_fire_on_hash_mismatch(
+        self, cross_source_runtime, tmp_path, monkeypatch,
+    ):
+        """When verify reads back bytes that don't match the source
+        hash, outcome is HASH_MISMATCH; the dst is deleted and the
+        post-write hook MUST NOT fire (the write didn't survive verify)."""
+        rt = cross_source_runtime
+        src_root = tmp_path / "src_mismatch"
+        dst_root = tmp_path / "dst_mismatch"
+        _seed_real_file(
+            rt, "local", src_root / "corrupt.txt", content=b"original",
+        )
+
+        # Force a hash mismatch by stubbing the verify step to return
+        # different bytes than were written.
+        original_read = rt.migration._read_bytes_via_hook
+        call_count = {"n": 0}
+        def _flaky_read(source_id, file_id):
+            call_count["n"] += 1
+            # First call (reading src for the transfer): real
+            # Second call (reading dst for verify): corrupt
+            if call_count["n"] == 1:
+                return original_read(source_id, file_id)
+            return b"corrupted-on-readback"
+        monkeypatch.setattr(
+            rt.migration, "_read_bytes_via_hook", _flaky_read,
+        )
+
+        plugin, calls = self._make_recorder_plugin()
+        rt.pm.register(plugin)
+        try:
+            plan = rt.migration.plan(
+                src_source_id="local", src_root=str(src_root),
+                dst_source_id="local:vault", dst_root=str(dst_root),
+            )
+            report = rt.migration.apply(plan)
+        finally:
+            rt.pm.unregister(plugin)
+
+        assert report.moves[0].outcome == MigrationOutcome.HASH_MISMATCH
+        assert calls == []  # never fired
+
+    def test_hook_receives_none_xxhash_when_verify_disabled(
+        self, cross_source_runtime, tmp_path,
+    ):
+        """When ``verify_hash=False``, the migration skips its own verify;
+        the hook still fires (so safety plugins can verify themselves)
+        but receives ``src_xxhash=None`` -- safety plugins must handle
+        this case gracefully (e.g., skip their own verify or refuse)."""
+        rt = cross_source_runtime
+        src_root = tmp_path / "src_noverify"
+        dst_root = tmp_path / "dst_noverify"
+        _seed_real_file(
+            rt, "local", src_root / "f.txt", content=b"no-verify-bytes",
+        )
+
+        plugin, calls = self._make_recorder_plugin()
+        rt.pm.register(plugin)
+        try:
+            plan = rt.migration.plan(
+                src_source_id="local", src_root=str(src_root),
+                dst_source_id="local:vault", dst_root=str(dst_root),
+            )
+            report = rt.migration.apply(plan, verify_hash=False)
+        finally:
+            rt.pm.unregister(plugin)
+
+        assert report.moved_count == 1
+        assert len(calls) == 1
+        assert calls[0]["src_xxhash"] is None
+        assert calls[0]["written_bytes_len"] == len(b"no-verify-bytes")
+
+    def test_hook_raising_makes_move_failed(
+        self, cross_source_runtime, tmp_path,
+    ):
+        """DM-1 (soft enforcement): a plugin can refuse a write by
+        raising from the post-write hook. The exception propagates,
+        the per-file outer boundary catches it, and the move's outcome
+        becomes FAILED with the exception message in ``error``."""
+        rt = cross_source_runtime
+        src_root = tmp_path / "src_refused"
+        dst_root = tmp_path / "dst_refused"
+        _seed_real_file(
+            rt, "local", src_root / "refused.txt", content=b"refuse me",
+        )
+
+        from curator.plugins import hookimpl
+
+        class _RefusingPlugin:
+            @hookimpl
+            def curator_source_write_post(
+                self, source_id, file_id, src_xxhash, written_bytes_len,
+            ):
+                raise RuntimeError("compliance: simulated refusal")
+
+        plugin = _RefusingPlugin()
+        rt.pm.register(plugin)
+        try:
+            plan = rt.migration.plan(
+                src_source_id="local", src_root=str(src_root),
+                dst_source_id="local:vault", dst_root=str(dst_root),
+            )
+            report = rt.migration.apply(plan)
+        finally:
+            rt.pm.unregister(plugin)
+
+        assert report.moves[0].outcome == MigrationOutcome.FAILED
+        assert "simulated refusal" in (report.moves[0].error or "")

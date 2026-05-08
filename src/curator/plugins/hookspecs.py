@@ -246,6 +246,64 @@ def curator_source_write(
 
 
 @hookspec
+def curator_source_write_post(
+    source_id: str,
+    file_id: str,
+    src_xxhash: str | None,
+    written_bytes_len: int,
+) -> None:
+    """Post-write notification hook (v1.1.1+).
+
+    Fired AFTER a successful ``curator_source_write`` call (and after
+    the caller's own verify step, if any). Plugins can use this to:
+
+    * Perform an independent post-write verification (the
+      ``curatorplug-atrium-safety`` plugin re-reads the destination
+      via ``curator_source_read_bytes`` and verifies the hash against
+      ``src_xxhash``).
+    * Record the successful write in an out-of-band ledger or audit
+      channel.
+    * Cross-check the written bytes against an external policy.
+
+    Hook semantics:
+
+    * **Multi-plugin:** all plugins implementing this hook are invoked.
+      Pluggy's default ``firstresult=False`` applies; results (typically
+      ``None``) are collected but not consumed.
+    * **Exception propagation:** a plugin raising from this hook
+      propagates the exception to the caller of
+      ``curator_source_write``. Safety / compliance plugins use this to
+      *refuse* a write that violates policy (e.g., raise
+      ``ComplianceError``). The originating caller's outer
+      exception-boundary turns this into the appropriate failure outcome
+      (``MigrationOutcome.FAILED`` for migrations).
+    * **No-op for plugins that don't care:** plugins that don't
+      implement this hook are simply not invoked; this hook is
+      *strictly additive* and existing source plugins do not need to
+      be modified.
+
+    Args:
+        source_id: the source the write went to (passes the same value
+            ``curator_source_write`` was called with).
+        file_id: the destination's identifier as returned by the write
+            hook (e.g. for local: an absolute path; for gdrive: a Drive
+            file ID).
+        src_xxhash: the source's xxhash3_128 hex digest, IF the caller
+            performed verify and has a value to share. ``None`` if
+            verification was skipped (e.g., ``verify_hash=False`` was
+            passed to the migration). Plugins must handle the ``None``
+            case gracefully.
+        written_bytes_len: the length in bytes of the data that was
+            written, as observed by the caller. Useful as a sanity
+            check against the post-write file size a plugin might read
+            back.
+
+    See ``curatorplug-atrium-safety/DESIGN.md`` §5 for the design that
+    motivated this hookspec.
+    """
+
+
+@hookspec
 async def curator_source_watch(
     source_id: str,
     root: str,

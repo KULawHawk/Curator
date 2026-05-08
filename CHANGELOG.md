@@ -4,6 +4,84 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.1.1] — 2026-05-08 — `curator_source_write_post` hookspec (Tracer P1)
+
+**Headline:** Patch release adding the `curator_source_write_post`
+plugin hookspec as a prerequisite for the
+[`curatorplug-atrium-safety`](https://github.com/KULawHawk/curatorplug-atrium-safety)
+plugin (P1 of its 3-session implementation plan; design ratified
+2026-05-08 in that package's `DESIGN.md` v0.2). User-visible behavior
+is unchanged for users who don't install third-party plugins consuming
+the new hook.
+
+### Added
+
+- **New hookspec** `curator_source_write_post(source_id, file_id,
+  src_xxhash, written_bytes_len)` in `src/curator/plugins/hookspecs.py`.
+  Fired AFTER a successful `curator_source_write` (and after
+  Curator's own verify step, if any). Plugins use this for independent
+  post-write verification, out-of-band ledger writes, or to *refuse*
+  a write by raising (which propagates through the caller's
+  exception-boundary and turns the operation into the appropriate
+  failure outcome). Multi-plugin: all registered hookimpls fire;
+  exception propagation is intentional. `src_xxhash` is `None` when
+  the caller skipped its own verify (e.g., `--no-verify-hash`); plugins
+  must handle that case gracefully. Strictly additive — existing
+  source plugins do not need to be modified.
+- **MigrationService wiring** (`_invoke_post_write_hook` helper in
+  `src/curator/services/migration.py`). Called from the cross-source
+  path (`_cross_source_transfer`) after the bytes are written and
+  hash-verified, just before the success return. Same-source
+  (`shutil.copy2`) path does not fire the hook — it never goes through
+  `curator_source_write` so the hookspec does not apply there.
+  Runtime-wise: if `MigrationService` is constructed with `pm=None`
+  (as in many test fixtures), the helper is a silent no-op, preserving
+  backward compatibility.
+
+### Tests (+5 new — 1150 → 1155 in the migration + GUI slice)
+
+- `tests/unit/test_migration_cross_source.py::TestCuratorSourceWritePostHook`
+  (5 tests): hook fires once per successful cross-source migration
+  with the expected arguments populated; hook does NOT fire when
+  `curator_source_write` raises `FileExistsError` (collision); hook
+  does NOT fire when verify reads back mismatched bytes (HASH_MISMATCH
+  — dst is deleted, write didn't survive); hook receives
+  `src_xxhash=None` when `verify_hash=False`; a plugin raising from
+  the hook turns the move into `MigrationOutcome.FAILED` with the
+  exception's message in `MigrationMove.error` (the soft-enforcement
+  UX that DM-1 of `curatorplug-atrium-safety` ratified).
+
+### Backward compatibility
+
+- **Strictly additive.** Plugins that don't implement the new hookspec
+  are not invoked. Existing source plugins (`local`, `gdrive`) need no
+  changes. Existing CLI invocations behave identically. Existing test
+  suites pass without modification (verified: 342/342 in the migration
+  + GUI slice, 0 failures).
+- **No new dependencies.** Uses pluggy's existing hook mechanism.
+- **Schema unchanged.** No new tables, no new columns.
+
+### Why a patch (1.1.0 → 1.1.1) and not a minor (1.1.0 → 1.2.0)
+
+User-facing functionality didn't change. The new hook is preparatory
+infrastructure for an *external* plugin (`curatorplug-atrium-safety`)
+that doesn't ship in this release. Plugin authors building against
+Curator can pin `>= 1.1.1` to require the hook; users who don't
+install such plugins see no difference. Patch bump is honest;
+`v1.2.0` is reserved for a more substantial feature release later.
+
+### Cross-references
+
+- `docs/TRACER_PHASE_2_DESIGN.md` v0.3 — the v1.1.0 release whose
+  `_cross_source_transfer` is the call site for the new hook.
+- `Atrium\CONSTITUTION.md` Principle 2 (Hash-Verify-Before-Move) —
+  the invariant the future safety plugin will defend across
+  third-party source plugins.
+- `curatorplug-atrium-safety/DESIGN.md` v0.2 (separate repo, not yet
+  pushed) — Session P1 (this release) closes the prerequisite; P2
+  (plugin scaffolding + verifier + enforcer) and P3 (integration
+  tests + v0.1.0 release) land in that package.
+
 ## [1.1.0] — 2026-05-08 — Migration tool Phase 2 (stable)
 
 **Headline:** Tracer (the Curator brand for migration capabilities)

@@ -1044,7 +1044,63 @@ class MigrationService:
                     actual_dst_file_id, verified_hash,
                 )
 
+        # Step 6: post-write notification (v1.1.1+).
+        # The bytes are written, hash-verified (if requested), and
+        # we're about to return success. Fire ``curator_source_write_post``
+        # so plugins like ``curatorplug-atrium-safety`` can perform an
+        # INDEPENDENT verification by re-reading dst and comparing hashes
+        # themselves. If a safety plugin raises here (e.g.
+        # ``ComplianceError``), the exception propagates and the caller
+        # turns it into ``MigrationOutcome.FAILED``.
+        self._invoke_post_write_hook(
+            source_id=dst_source_id,
+            file_id=actual_dst_file_id,
+            src_xxhash=computed_src_hash,
+            written_bytes_len=len(src_bytes),
+        )
+
         return (MigrationOutcome.MOVED, actual_dst_file_id, verified_hash)
+
+    def _invoke_post_write_hook(
+        self,
+        *,
+        source_id: str,
+        file_id: str,
+        src_xxhash: str | None,
+        written_bytes_len: int,
+    ) -> None:
+        """Fire ``curator_source_write_post`` after a successful write.
+
+        v1.1.1+. Lets plugins (e.g. ``curatorplug-atrium-safety``) do an
+        independent post-write verification. Pluggy invokes ALL plugins
+        implementing the hook; exceptions from any plugin propagate to
+        the caller (this is intentional -- it's how safety plugins
+        *refuse* a non-compliant write by raising ``ComplianceError``).
+
+        If the service was constructed without a ``pm``, the hook is a
+        no-op (the post-write notification simply doesn't fire). This
+        keeps the existing test fixtures that build MigrationService
+        with ``pm=None`` working without modification.
+
+        Note this method does NOT swallow exceptions. The caller (a
+        per-file path in ``_cross_source_transfer``) is already inside
+        an exception-boundary that turns hook-raised exceptions into
+        ``MigrationOutcome.FAILED`` with the exception's message in
+        ``MigrationMove.error`` -- which is exactly the soft-enforcement
+        UX the safety plugin's design (DM-1) ratified.
+        """
+        if self.pm is None:
+            return
+        try:
+            hook = getattr(self.pm.hook, "curator_source_write_post")
+        except AttributeError:
+            return  # hookspec not registered -- gracefully no-op
+        hook(
+            source_id=source_id,
+            file_id=file_id,
+            src_xxhash=src_xxhash,
+            written_bytes_len=written_bytes_len,
+        )
 
     # ==================================================================
     # Phase 2: persistent jobs (resumable + worker pool)
