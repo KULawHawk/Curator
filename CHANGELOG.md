@@ -4,6 +4,60 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.4.0] — 2026-05-08 — Tracer Phase 4 (cross-source overwrite-with-backup + rename-with-suffix)
+
+**Headline:** v1.3.0 → v1.4.0 (minor bump). Closes the cross-source simplification documented in Tracer Phase 3 v0.3 §12 P2 entry: cross-source `--on-conflict=overwrite-with-backup` and `--on-conflict=rename-with-suffix` no longer degrade to skip-with-warning. They now ship as full implementations using the new `curator_source_rename` hookspec (rename path) and the FileExistsError retry-write pattern (suffix path). Strictly additive at the user-facing surface; defaults preserve v1.3.0 behavior exactly. Plugins not implementing the new hook automatically retain the v1.3.0 degrade-to-skip behavior. See `docs/TRACER_PHASE_4_DESIGN.md` v0.3 IMPLEMENTED for the full design and per-DM implementation evidence.
+
+### Added
+
+- **New hookspec `curator_source_rename`** (P1 — commit `4a4c65e`). Signature: `curator_source_rename(source_id, file_id, new_name, *, overwrite=False) -> FileInfo | None`. Strict same-parent rename semantic, distinct from the existing `curator_source_move` whose path-vs-parent-id ambiguity made it unsafe to retrofit (per design DM-1). FileExistsError raise contract on `overwrite=False` mirrors `curator_source_write` (DM-2). Strictly additive: plugins that don't implement return None (pluggy default), `MigrationService` falls back to v1.3.0 degrade-to-skip behavior. No plugin contract version bump (DM-4).
+- **Local source plugin implementation** (~30 LOC). `Path.rename` for default (atomic on same filesystem per POSIX); `Path.replace` for `overwrite=True`. Returns `FileInfo` with new path's stat including inode in `extras`.
+- **Gdrive source plugin implementation** (~108 LOC). PyDrive2 title-only patch via `f['title'] = new_name; f.Upload()`; no bytes re-upload. Sibling-collision check via Drive query `'{parent_id}' in parents and title='{escaped}' and trashed=false`. Excludes self from collision check (handles eventual-consistency races). `overwrite=True` trashes colliders before rename; per-collider failures logged at warning rather than aborting.
+- **Cross-source dispatch wiring** (P2 — commit `4aa4085`). Both `_execute_one_cross_source` (apply path) and `_execute_one_persistent_cross_source` (worker path) replace v1.3.0 degrade-to-skip in their SKIPPED_COLLISION blocks with full mode-dispatch on `self._on_conflict_mode`. Successful retry produces `MOVED_OVERWROTE_WITH_BACKUP` or `MOVED_RENAMED_WITH_SUFFIX`; degrade paths retain v1.3.0 SKIPPED_COLLISION behavior.
+- **8 new helper methods** on `MigrationService` (~520 LOC total in `migration.py`):
+  - `_compute_suffix_name(dst_p, n)` — sister of `_find_available_suffix` for the cross-source retry-write loop where existence is probed implicitly via FileExistsError (DM-3, no exists-probe hookspec needed).
+  - `_find_existing_dst_file_id_for_overwrite(dst_source_id, dst_path)` — two-strategy resolver: (1) try `curator_source_stat` with dst_path as file_id (works for local-style sources where `file_id == path`); (2) fall back to `curator_source_enumerate(parent_id)` and match by display name (works for cloud sources). No source-type hardcoding.
+  - `_attempt_cross_source_backup_rename(dst_source_id, file_id, backup_name)` — calls `pm.hook.curator_source_rename`. Returns `(success, error)`. Plugin-not-implementing OR FileExistsError OR other exception maps to `(False, reason)`; caller degrades to skip.
+  - `_cross_source_overwrite_with_backup(move, ...)` (in-memory) + `_cross_source_overwrite_with_backup_for_progress(progress, ...)` (worker) — full rename + retry flow. Per DM-5: if retry fails (transfer exception OR HASH_MISMATCH OR retry-time SKIPPED_COLLISION), the renamed backup is preserved and the error message advertises `[backup at <name> preserved per DM-5]`.
+  - `_cross_source_rename_with_suffix(move, ...)` (in-memory) + `_cross_source_rename_with_suffix_for_progress(progress, ...)` (worker) — retry-write loop n=1..9999 using DM-3 implicit FileExistsError existence probe. On rename-with-suffix success in the worker path, `progress.dst_path` is mutated to the suffix variant so the post-transfer entity update + audit_move reference the correct path.
+  - `_emit_progress_audit_conflict(progress, mode, details_extra)` — sister of `_audit_conflict` adding `job_id` to audit details for the persistent worker path.
+- **`migration.conflict_resolved` audit details extended.** Success paths now emit `mode='overwrite-with-backup'` (with `backup_name` + `existing_file_id` + `cross_source: True`) or `mode='rename-with-suffix'` (with `original_dst` + `renamed_dst` + `suffix_n` + `cross_source: True`). Degrade paths emit `mode='<m>-degraded-cross-source'` with `reason` + `fallback: 'skipped'` + `cross_source: True`. Existing v1.3.0 details (size, src_path, dst_path, mode) preserved.
+
+### Changed
+
+- **`_execute_one_cross_source` (apply path)** — replaced v1.3.0 degrade-to-skip block at L853-895 with mode-dispatch. The four conflict modes now branch as: `skip` keeps SKIPPED_COLLISION (v1.2.0 behavior); `fail` marks FAILED_DUE_TO_CONFLICT (existing v1.3.0 logic); `overwrite-with-backup` calls the new helper and finalizes as MOVED_OVERWROTE_WITH_BACKUP on retry success; `rename-with-suffix` calls the new helper and finalizes as MOVED_RENAMED_WITH_SUFFIX on retry success. The trailing `move.outcome = MigrationOutcome.MOVED` is replaced with `move.outcome = final_outcome` to honor the variant outcome.
+- **`_execute_one_persistent_cross_source` (worker path)** — same dispatch shape using `_for_progress` sister helpers. The trailing `return (MigrationOutcome.MOVED, verified_hash)` is replaced with `return (final_outcome, verified_hash)`.
+
+### Tests (+24 new — 444 → 468 in regression slice)
+
+- **`tests/unit/test_curator_source_rename.py`** (NEW, 10 tests — P1):
+  - `TestLocalRename` (5): rename to new name same parent; FileInfo includes inode + stat fields; FileExistsError on collision without overwrite; overwrite=True replaces atomically; None returned for non-local source_id (gdrive/onedrive).
+  - `TestGdriveRename` (5): title patch via `f['title']=new_name; f.Upload()`; collision raises FileExistsError; self-in-ListFile-results not counted as collision; overwrite=True trashes collider then renames; None returned for non-gdrive source_id. Mocking via `SimpleNamespace` + `_FakeDriveFile(dict)` class tracking FetchMetadata/Upload/Trash via outer dicts.
+- **`tests/unit/test_migration_phase4_cross_source_conflict.py`** (NEW, 14 tests — P2):
+  - `TestOverwriteWithBackupCrossSource` (4): rename + retry succeeds returns MOVED; audit captures backup_name + cross_source: True; retry exception leaves backup per DM-5; retry HASH_MISMATCH leaves backup per DM-5.
+  - `TestOverwriteWithBackupFallback` (2): resolver returns None degrades to skip with audit reason; rename hook returns False degrades to skip with audit reason.
+  - `TestRenameWithSuffixCrossSource` (4): first attempt at `.curator-1` succeeds; two collisions then third succeeds (suffix_n=3 in audit); HASH_MISMATCH during retry halts loop with HASH_MISMATCH outcome; transfer exception during retry halts loop with FAILED outcome.
+  - `TestRenameWithSuffixFallback` (1): 9999 candidates exhausted degrades to skip with audit reason.
+  - `TestComputeSuffixName` (3): basic `foo.mp3 → foo.curator-3.mp3`; no extension `foo → foo.curator-1`; multi-dot `archive.tar.gz → archive.tar.curator-7.gz`.
+- **All 24 tests passed first run with zero debugging needed** (lesson 8-for-8 read-code-first holding).
+
+### Backward compatibility (DM-4 strictly additive)
+
+- Plugins not implementing `curator_source_rename` get v1.3.0 degrade-to-skip behavior automatically. Pluggy returns None for plugins that don't implement → `_attempt_cross_source_backup_rename` returns `(False, 'plugin does not implement curator_source_rename')` → caller degrades.
+- `skip` and `fail` modes unchanged from v1.3.0.
+- Same-source paths unchanged.
+- Resume across v1.3.0 → v1.4.0 is safe: v1.3.0 jobs that recorded SKIPPED_COLLISION outcomes for cross-source overwrite/rename modes remain SKIPPED_COLLISION on resume; v1.4.0 only changes behavior for NEW jobs started after upgrade.
+- No schema changes. No CLI flag changes. No public API surface removals.
+
+### Out of scope (Phase 5+)
+
+- Separate `curator_source_exists` hookspec (DM-3 chose the FileExistsError retry-write pattern instead).
+- Gdrive `curator_source_move` semantics fix (still `NotImplementedError` for parent-id-vs-path ambiguity; Phase Gamma).
+- Retry-decorator interaction with rename (rename failure inside `_attempt_cross_source_backup_rename` doesn't go through `@retry_transient_errors`).
+- `MigrationConflictError` raised on rename failure (currently degrades to skip; could be a future opt-in).
+- Backup file visibility in `MigrationReport` (the renamed backup's path is currently in audit details only, not in report rows).
+- MCP HTTP-auth deferred to v1.5.0 per DM-6.
+
 ## [1.3.0] — 2026-05-08 — Tracer Phase 3 (retry decorator + conflict resolution)
 
 **Headline:** v1.2.0 → v1.3.0 (minor bump). Closes Tracer Phase 2's two highest-value deferrals: (1) quota-aware retry with exponential backoff for cross-source transient errors, and (2) four-mode destination-collision handling beyond the previous monolithic `SKIPPED_COLLISION` branch. Both are strictly additive at the user-facing surface; defaults preserve v1.2.0 behavior exactly. New CLI flags `--max-retries N` (default 3, capped 10) and `--on-conflict MODE` (`skip`|`fail`|`overwrite-with-backup`|`rename-with-suffix`; default `skip`). Three new `MigrationOutcome` variants (`MOVED_OVERWROTE_WITH_BACKUP`, `MOVED_RENAMED_WITH_SUFFIX`, `FAILED_DUE_TO_CONFLICT`) + new `MigrationConflictError` exception class + new `migration.conflict_resolved` audit action. See `docs/TRACER_PHASE_3_DESIGN.md` v0.3 IMPLEMENTED for the full design and per-DM implementation evidence.
