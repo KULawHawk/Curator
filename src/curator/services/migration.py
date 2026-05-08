@@ -338,6 +338,27 @@ class MigrationService:
         :meth:`_cross_source_transfer`. ``n=0`` disables retry entirely
         (immediate FAILED on first transient error).
 
+        .. warning::
+           **Calling this BEFORE :meth:`apply` or :meth:`run_job`
+           does NOT stick.** Both methods accept ``max_retries`` as a
+           kwarg with default ``3`` and call ``self.set_max_retries(...)``
+           at entry, overwriting whatever this method just set. Two
+           safe patterns:
+
+           1. **Recommended:** pass ``max_retries=N`` directly to
+              ``apply(plan, max_retries=N)`` or
+              ``run_job(job_id, max_retries=N)``.
+           2. **Library callers** that want a sticky setting can either
+              (a) pass the same value to both ``set_max_retries`` AND
+              the apply/run_job kwarg, or (b) subclass
+              :class:`MigrationService` and override ``apply`` /
+              ``run_job`` to skip the set call when sentinel-defaulted.
+
+           Tracker: this overwrite-at-entry pattern is a candidate for
+           a sentinel-default API hardening pass in a future minor
+           release; see ``BUILD_TRACKER.md`` ``[v1.5.0 candidate]``
+           section.
+
         See ``docs/TRACER_PHASE_3_DESIGN.md`` v0.2 §3 DM-2.
         """
         if n < 0:
@@ -365,18 +386,41 @@ class MigrationService:
         * ``'overwrite-with-backup'`` -- rename existing dst to
           ``<name>.curator-backup-<UTC-iso8601><ext>`` (atomic on the
           same filesystem), then proceed with the move. Per-file outcome
-          is :attr:`MigrationOutcome.MOVED_OVERWROTE_WITH_BACKUP`. Cross-
-          source paths degrade to ``skip`` with a warning (no atomic-
-          rename hook in the source plugin contract yet).
+          is :attr:`MigrationOutcome.MOVED_OVERWROTE_WITH_BACKUP`.
+          v1.4.0+: cross-source paths use the new
+          :func:`curator_source_rename` hook instead of the v1.3.0
+          degrade-to-skip; plugins that don't implement the hook
+          retain the v1.3.0 behavior.
         * ``'rename-with-suffix'`` -- migrate to ``<name>.curator-<n><ext>``
           where ``n`` is the lowest available integer in [1, 9999]. Per-
           file outcome is :attr:`MigrationOutcome.MOVED_RENAMED_WITH_SUFFIX`.
-          Cross-source paths degrade to ``skip`` with a warning.
+          v1.4.0+: cross-source paths use the FileExistsError retry-
+          write loop via :func:`curator_source_rename`.
 
         Unknown modes raise :class:`ValueError` so the CLI can surface
         a clean error before the migration starts.
 
-        See ``docs/TRACER_PHASE_3_DESIGN.md`` v0.2 §4.6 (DM-4).
+        .. warning::
+           **Calling this BEFORE :meth:`apply` or :meth:`run_job`
+           does NOT stick.** Both methods accept ``on_conflict`` as a
+           kwarg with default ``'skip'`` and call
+           ``self.set_on_conflict_mode(...)`` at entry, overwriting
+           whatever this method just set. Recommended pattern: pass
+           ``on_conflict=mode`` directly to
+           ``apply(plan, on_conflict=mode)`` or
+           ``run_job(job_id, on_conflict=mode)``.
+
+           This API quirk is captured in
+           ``tests/unit/test_migration_cross_source.py::TestPhase4CrossSourceConflictResolution``
+           (which had to work around it on first run).
+
+           Tracker: candidate for sentinel-default hardening in a
+           future minor release; see ``BUILD_TRACKER.md``
+           ``[v1.5.0 candidate]`` section.
+
+        See ``docs/TRACER_PHASE_3_DESIGN.md`` v0.2 §4.6 (DM-4) and
+        ``docs/TRACER_PHASE_4_DESIGN.md`` v0.3 IMPLEMENTED for the
+        v1.4.0 cross-source extension.
         """
         if mode not in self._VALID_CONFLICT_MODES:
             raise ValueError(
