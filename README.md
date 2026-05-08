@@ -2,15 +2,16 @@
 
 A content-aware artifact intelligence layer for files.
 
-**Status:** v1.2.0 stable (released 2026-05-08). v1.0.0rc1 was the stability anchor; v1.1.0 shipped the Migration tool ("Tracer") with persistent resumable jobs, worker-pool concurrency, cross-source migration, and a PySide6 Migrate tab. v1.1.1 → v1.1.2 → v1.1.3 added the plugin ecosystem hookspecs that let third-party plugins enforce constitutional invariants (Atrium Principles 2 & 4) over Curator's plugin surface. v1.2.0 adds an optional `[mcp]` extra exposing a Model Context Protocol server (`curator-mcp`) so LLM clients (Claude Desktop, Claude Code, third-party agents) can query Curator's index, audit log, and lineage programmatically. See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
+**Status:** v1.3.0 stable (released 2026-05-08). v1.0.0rc1 was the stability anchor; v1.1.0 shipped the Migration tool ("Tracer") with persistent resumable jobs, worker-pool concurrency, cross-source migration, and a PySide6 Migrate tab. v1.1.1 → v1.1.2 → v1.1.3 added the plugin ecosystem hookspecs that let third-party plugins enforce constitutional invariants (Atrium Principles 2 & 4) over Curator's plugin surface. v1.2.0 added an optional `[mcp]` extra exposing a Model Context Protocol server (`curator-mcp`) so LLM clients (Claude Desktop, Claude Code, third-party agents) can query Curator's index, audit log, and lineage programmatically. v1.3.0 closes Tracer's two highest-value Phase 2 deferrals: quota-aware retry with exponential backoff for cross-source transient errors (`--max-retries`) and four-mode destination-collision handling (`--on-conflict={skip,fail,overwrite-with-backup,rename-with-suffix}`). See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
 
 Curator gives every file a stable identity, tracks relationships and lineage between files with confidence scores, knows where files belong, and makes every destructive operation reversible.
 
 ## Documentation
 
-- [`CHANGELOG.md`](CHANGELOG.md) — release history (v1.0.0rc1, v1.1.0a1, v1.1.0, v1.1.1, v1.1.2, v1.1.3, v1.2.0)
+- [`CHANGELOG.md`](CHANGELOG.md) — release history (v1.0.0rc1, v1.1.0a1, v1.1.0, v1.1.1, v1.1.2, v1.1.3, v1.2.0, v1.3.0)
 - [`DESIGN.md`](DESIGN.md) — implementation specification (21 sections)
 - [`docs/TRACER_PHASE_2_DESIGN.md`](docs/TRACER_PHASE_2_DESIGN.md) — Migration tool (Tracer) Phase 2 design + implementation evidence
+- [`docs/TRACER_PHASE_3_DESIGN.md`](docs/TRACER_PHASE_3_DESIGN.md) — v0.3 IMPLEMENTED. Tracer Phase 3 (v1.3.0+) — quota-aware retry decorator + four-mode `--on-conflict` resolution. Closes the two highest-value Phase 2 deferrals.
 - [`docs/PLUGIN_INIT_HOOKSPEC_DESIGN.md`](docs/PLUGIN_INIT_HOOKSPEC_DESIGN.md) — v0.3 IMPLEMENTED. The `curator_plugin_init(pm)` hookspec (v1.1.2+) that gives plugins a pluggy reference for calling other plugins' hooks from inside their own hookimpls.
 - [`docs/CURATOR_AUDIT_EVENT_HOOKSPEC_DESIGN.md`](docs/CURATOR_AUDIT_EVENT_HOOKSPEC_DESIGN.md) — v0.3 IMPLEMENTED. The `curator_audit_event(...)` hookspec (v1.1.3+) and core `AuditWriterPlugin` that let plugins write structured audit log entries.
 - [`docs/CURATOR_MCP_SERVER_DESIGN.md`](docs/CURATOR_MCP_SERVER_DESIGN.md) — v0.3 IMPLEMENTED. The Model Context Protocol server (v1.2.0+) exposing 9 read-only tools to LLM clients via stdio.
@@ -139,6 +140,59 @@ Abort/Resume on running jobs and live cross-thread progress signals
 from the worker pool to the GUI thread (no manual Refresh needed).
 See [`docs/TRACER_PHASE_2_DESIGN.md`](docs/TRACER_PHASE_2_DESIGN.md)
 for the full Phase 2 design + per-DM implementation evidence.
+
+### Phase 3 — quota-aware retry + conflict resolution (v1.3.0+)
+
+v1.3.0 closes the two highest-value Phase 2 deferrals via two new
+flags. Both are strictly additive: defaults preserve v1.2.0 behavior
+exactly. See [`docs/TRACER_PHASE_3_DESIGN.md`](docs/TRACER_PHASE_3_DESIGN.md)
+v0.3 IMPLEMENTED for the full design + per-DM resolution.
+
+**`--max-retries N`** wraps `_cross_source_transfer` in a retry
+decorator that distinguishes retryable cloud errors (HTTP 403/429/5xx,
+ConnectionError, Timeout, ProtocolError) from fail-fast conditions
+(local OSError, hash mismatch, plugin rejection). Backoff is
+exponential capped at 60 s, with the `Retry-After` header honored
+when present. Default `3`; capped at `10`; `0` disables retry.
+Resumed jobs inherit their original `max_retries` from the persisted
+options unless explicitly overridden.
+
+**`--on-conflict MODE`** turns the previously-monolithic
+`SKIPPED_COLLISION` branch into four modes:
+
+* `skip` (default) — preserve v1.2.0 behavior; outcome
+  `SKIPPED_COLLISION`.
+* `fail` — abort the migration on the first collision; outcome
+  `FAILED_DUE_TO_CONFLICT`; CLI exits with code 1.
+* `overwrite-with-backup` — atomically rename existing dst to
+  `<name>.curator-backup-<UTC-iso8601><ext>` (same FS), then proceed;
+  outcome `MOVED_OVERWROTE_WITH_BACKUP`.
+* `rename-with-suffix` — migrate to `<name>.curator-N<ext>` (lowest
+  free `N` in `[1, 9999]`); outcome `MOVED_RENAMED_WITH_SUFFIX`.
+
+Every resolution emits a `migration.conflict_resolved` audit event
+with mode-specific details (backup_path, suffix_n, original_dst,
+etc.). Cross-source migrations support `skip` + `fail` fully;
+`overwrite-with-backup` and `rename-with-suffix` degrade to skip with
+a warning + audit (the source-plugin contract lacks an atomic-rename
+hook; revisit in Phase 4 if the hookspec is expanded).
+
+```powershell
+# Cross-source migration with retry budget tuned for a slow gdrive day
+curator migrate local "C:/Music" /Music --apply \
+    --dst-source-id gdrive:jake@example.com --max-retries 5
+
+# Local→local migration where existing dst files should be backed up, not skipped
+curator migrate local "C:/Music" "D:/Music" --apply \
+    --on-conflict overwrite-with-backup
+
+# Strict mode — abort the whole job on the first dst collision
+curator migrate local "C:/Music" "D:/Music" --apply --on-conflict fail
+
+# Migrate without overwriting; new files land at <name>.curator-1.<ext>
+curator migrate local "C:/Music" "D:/Music" --apply \
+    --on-conflict rename-with-suffix
+```
 
 ## Plugin ecosystem (v1.1.1+)
 

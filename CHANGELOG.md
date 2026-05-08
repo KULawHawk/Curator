@@ -4,6 +4,85 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.3.0] — 2026-05-08 — Tracer Phase 3 (retry decorator + conflict resolution)
+
+**Headline:** v1.2.0 → v1.3.0 (minor bump). Closes Tracer Phase 2's two highest-value deferrals: (1) quota-aware retry with exponential backoff for cross-source transient errors, and (2) four-mode destination-collision handling beyond the previous monolithic `SKIPPED_COLLISION` branch. Both are strictly additive at the user-facing surface; defaults preserve v1.2.0 behavior exactly. New CLI flags `--max-retries N` (default 3, capped 10) and `--on-conflict MODE` (`skip`|`fail`|`overwrite-with-backup`|`rename-with-suffix`; default `skip`). Three new `MigrationOutcome` variants (`MOVED_OVERWROTE_WITH_BACKUP`, `MOVED_RENAMED_WITH_SUFFIX`, `FAILED_DUE_TO_CONFLICT`) + new `MigrationConflictError` exception class + new `migration.conflict_resolved` audit action. See `docs/TRACER_PHASE_3_DESIGN.md` v0.3 IMPLEMENTED for the full design and per-DM implementation evidence.
+
+### Added
+
+- **`--max-retries N` CLI flag** (P1 — commit `fe5739f`). Per-job retry budget for transient cloud errors during cross-source migration. Default 3, clamped to `[0, 10]`. `0` disables retry entirely. Resumed jobs inherit the original `max_retries` from `migration_jobs.options_json` unless explicitly overridden.
+- **New module `src/curator/services/migration_retry.py`** (148 LOC) with `_is_retryable` helper + `retry_transient_errors` stateless decorator. Retryable error classes: `googleapiclient.errors.HttpError` with status in `(403, 429, 500, 502, 503, 504)`, `requests.exceptions.ConnectionError`, `requests.exceptions.Timeout`, `socket.timeout`/`TimeoutError`, `urllib3.exceptions.ProtocolError`. Fail-fast classes: `OSError`, `HashMismatchError`, `MigrationDestinationNotWritable`, all other Exception subclasses. Backoff is exponential capped at 60 s; `Retry-After` header honored when present (gdrive sometimes provides one with 429s).
+- **`@retry_transient_errors` applied to `_cross_source_transfer`**. Same-source local-FS errors are mostly permanent (disk full, permission denied, corruption) and don't benefit from retry per the v0.2 design discussion; only cross-source is decorated.
+- **`MigrationService.set_max_retries(n)` method** clamping `n` to `[0, 10]`. Called by `apply()` and `run_job()` to configure the per-job retry budget. **CRITICAL FIX:** the `max_retries` parameter on `apply()` and `run_job()` was previously accepted but ignored — a silent gap caught during code-touchpoint verification at v0.1 issuance. v1.3.0 actually wires it through.
+- **`--on-conflict MODE` CLI flag** (P2 — commit `08db2de`). Destination-collision policy. Valid modes: `skip` (default; preserves v1.2.0 behavior), `fail` (raise on first collision; CLI exits with code 1), `overwrite-with-backup` (rename existing dst to `<name>.curator-backup-<UTC-iso8601-compact><ext>` before proceeding), `rename-with-suffix` (migrate to `<name>.curator-N<ext>` for lowest free `N` in `[1, 9999]`). Cross-source migrations support `skip` + `fail` fully; `overwrite-with-backup` and `rename-with-suffix` degrade to skip with a warning + audit (no atomic-rename hook in the source-plugin contract yet; revisit in Phase 4).
+- **3 new `MigrationOutcome` variants:** `MOVED_OVERWROTE_WITH_BACKUP`, `MOVED_RENAMED_WITH_SUFFIX`, `FAILED_DUE_TO_CONFLICT`. `MigrationReport.moved_count` + `bytes_moved` span all four MOVED variants via `ClassVar` tuples; `failed_count` picks up `FAILED_DUE_TO_CONFLICT` alongside `FAILED` + `HASH_MISMATCH`.
+- **`MigrationConflictError`** exception class (carries `dst_path` + `src_path`). Raised by `apply()` on the first collision when `--on-conflict=fail`. The CLI catches it and renders a clean error message + exits with code 1. The Phase 2 worker loop catches it specifically and maps to `FAILED_DUE_TO_CONFLICT` outcome (distinct from generic `FAILED`).
+- **`migration.conflict_resolved` audit action** with mode-specific details: `mode` (one of `skip`/`fail`/`overwrite-with-backup`/`rename-with-suffix`/`<mode>-degraded-cross-source`/`<mode>-failed`); `backup_path` (overwrite mode); `original_dst` + `renamed_dst` + `suffix_n` (rename mode); `cross_source` + `reason` + `fallback` (cross-source degrade); `error` (setup failures). Queryable via the MCP server's `query_audit_log(action='migration.conflict_resolved')`.
+- **`MigrationService` helpers** for the conflict surface: `_compute_backup_path` (UTC ISO 8601 compact format, Windows-safe filename), `_find_available_suffix` (lowest free `N` in `[1, 9999]`; raises `RuntimeError` if exhausted), `_audit_conflict`, `_resolve_collision` (for the `MigrationMove` apply path), `_resolve_collision_for_progress` (sister method for the `MigrationProgress` persistent path — progress doesn't carry an in-memory outcome field, so the resolver returns a 4-tuple `(short_circuit, outcome_override, new_dst, conflict_error)` for the worker to act on).
+- **Worker-loop conflict handling** (`_worker_loop`): catches `MigrationConflictError` separately from generic `Exception`, mapping it to `FAILED_DUE_TO_CONFLICT` so the report's `failed_count` and audit log queries can distinguish conflict-specific failures. Recognizes the new MOVED variants in the success branch.
+- **`run_job()` reads `on_conflict` from `job.options`** for resumed jobs (mirrors the `max_retries` pattern from P1). An invalid persisted value falls back to `skip` with a warning rather than refusing to resume.
+- **`MigrationConflictError` exported in `__all__`** alongside `MigrationOutcome`, `MigrationMove`, `MigrationPlan`, `MigrationReport`, `MigrationService`.
+
+### Tests (+30 new — 414 → 444 in regression slice)
+
+- **`tests/unit/test_migration_phase3_retry.py`** (NEW, 15 tests — P1):
+  - `TestIsRetryable` (6): `HttpError 429` retryable; `HttpError 200` not retryable; `ConnectionError` retryable; `OSError` fail-fast; `HashMismatchError` fail-fast; arbitrary Exception fail-fast.
+  - `TestRetryDecorator` (7): success on first try; recover on retry 1; recover on retry 2; exhausted budget propagates final exception; `max_retries=0` disables retry; `Retry-After` header used when present; backoff capped at 60 s.
+  - `TestServiceIntegration` (2): `apply(max_retries=N)` actually calls `set_max_retries(N)`; `run_job` reads `max_retries` from `job.options` for resumed jobs.
+- **`tests/unit/test_migration_phase3_conflict.py`** (NEW, 15 tests — P2):
+  - `TestSkipMode` (1): default mode preserves v1.2.0 `SKIPPED_COLLISION` exactly.
+  - `TestFailMode` (2): first collision raises `MigrationConflictError`; audit emits `migration.conflict_resolved` with `mode='fail'` BEFORE the raise.
+  - `TestOverwriteWithBackup` (3): backup path format `<stem>.curator-backup-<iso-utc><ext>`; existing dst renamed to backup, src copied to dst; `report.moved_count` picks up `MOVED_OVERWROTE_WITH_BACKUP`.
+  - `TestRenameWithSuffix` (3): `_find_available_suffix` returns `n=1` when no `.curator-N` exists; skips existing `.curator-1` + `.curator-2`, returns `n=3`; move's `dst_path` mutated to `.curator-1.<ext>`, original preserved.
+  - `TestAuditConflictDetails` (3): overwrite-with-backup audit contains `backup_path`; rename-with-suffix audit contains `suffix_n` + `renamed_dst` + `original_dst`; fail mode audit emitted before `MigrationConflictError` raise.
+  - `TestServiceClamping` (3): unknown mode raises `ValueError`; all 4 valid modes accepted by `set_on_conflict_mode`; default mode is `skip`.
+
+### Changed
+
+- Version `1.2.0` → `1.3.0` (minor bump). New `MigrationOutcome` enum values + new `MigrationConflictError` class + new audit action are new public surface; minor is honest. Per DM-6 of `docs/TRACER_PHASE_3_DESIGN.md`.
+- `pyproject.toml` and `__init__.py` `__version__` reflect 1.3.0.
+- `MigrationService.__init__` now seeds `_max_retries=3`, `_retry_backoff_cap=60.0`, and `_on_conflict_mode='skip'` instance attrs (the mutable per-job state the new methods configure).
+- `MigrationReport.moved_count` / `failed_count` / `bytes_moved` now use `ClassVar` tuples (`_MOVED_VARIANTS`, `_FAILED_VARIANTS`) for inclusion sets, replacing the inline tuple literals. The change is internal; the reported counts remain correct for both old (v1.2.0) and new (v1.3.0) outcome enum values.
+
+### Backward compatibility
+
+- **Strictly additive.** All existing `curator migrate ... --apply` invocations behave identically when `--max-retries` and `--on-conflict` are unspecified. `--max-retries=3` is a behavior change in the failure path — cross-source transient errors that previously caused immediate `FAILED` may now succeed after retry. No successful-migration outcome changes.
+- **Existing `MigrationOutcome` consumers** see new enum values they didn't previously enumerate. Code that switch-cases on outcome values needs to handle the new variants OR fall through to a default. The GUI Migrate tab and `MigrationReport.moved_count` / `failed_count` properties already handle this via the `ClassVar` tuples.
+- **Existing audit log readers** see new action strings. Code filtering by exact action match (`action='migration.move'`) is unaffected. Code wildcard-matching `migration.*` sees the new `migration.retry` (when added in a future release) and `migration.conflict_resolved` events; this is the intended behavior.
+- **`migration_jobs` and `migration_progress` schemas: unchanged.** `options_json` accommodates the new `max_retries` and `on_conflict` keys via Phase 2's forward-compat design.
+- **Resume across v1.2.0 → v1.3.0:** A user who initiated a job on v1.2.0, killed the process, upgraded to v1.3.0, and runs `--resume` gets v1.3.0 default behavior (`max_retries=3`, `on_conflict='skip'`) for the remainder of the job. No partial-migration corruption — the per-file algorithm is idempotent up to `mark_completed`.
+- **Cross-source plugin contract:** unchanged. Plugins don't need to know about retry — the decorator wraps caller-side. Cross-source `overwrite-with-backup` and `rename-with-suffix` degrading to skip is a runtime behavior, not a contract change.
+- **Existing plugins (`local_source`, `gdrive_source`, `classify_filetype`, `lineage_*`, `curatorplug-atrium-safety` v0.3.0):** unchanged. Plugin suite 75/75 still passing.
+- **DB schema:** unchanged.
+
+### Lessons (now 6-for-6 read-code-first applications)
+
+| # | Design phase | Caught BEFORE coding |
+|---|---|---|
+| 1 | atrium-reversibility | `CleanupService.purge_trash` doesn't exist (deferred at v0.3) |
+| 2 | MCP P2 | 6 of 6 method-signature mismatches |
+| 3 | Tracer Phase 3 v0.1 | retry was claimed but never shipped (Phase 2 silent gap) |
+| 4 | Tracer Phase 3 v0.2 | all code-touchpoint claims in §4.4 verified |
+| 5 | Tracer Phase 3 P1 | 2 deviations from §4.4 documented + silent CLI flag bug fixed |
+| 6 | Tracer Phase 3 P2 | 3 collision sites + 3 downstream readers + `MigrationProgress` vs `MigrationMove` field divergence; raise-before-append bug caught during self-review |
+
+### Phase 4+ deferrals
+
+- Proactive bandwidth throttling beyond reactive retry-on-quota.
+- Per-source retry policy (different `--max-retries` per leg of a multi-source job).
+- `curator migrate-cleanup-backups <job_id>` utility for trashing accumulated `.curator-backup-*` files older than N days.
+- Retry observability (per-job retry distribution, longest backoff seen).
+- Async retry refactor for very long backoffs across many failed files.
+- **Cross-source `overwrite-with-backup` + `rename-with-suffix`** — requires expanding the source-plugin hookspec with an atomic-rename hook (`curator_source_rename`) or exists-probe hook (`curator_source_exists`). Current Phase 3 P2 degrades these modes to skip for cross-source with a documented warning + audit.
+
+### Cross-references
+
+- `docs/TRACER_PHASE_3_DESIGN.md` v0.3 IMPLEMENTED — the design this implements; §12 revision log has the v0.3 entry with both commit hashes (`fe5739f` for P1, `08db2de` for P2) and the 6-for-6 lessons table.
+- `docs/TRACER_PHASE_2_DESIGN.md` v0.3 IMPLEMENTED — the v1.1.0 stable foundation Phase 3 built on. §11 listed the deferrals; items 1 + 2 are now closed.
+- `docs/CURATOR_MCP_SERVER_DESIGN.md` v0.3 IMPLEMENTED — version-line collision (originally claimed v1.3.0 for HTTP-auth) resolved by Tracer Phase 3 DM-6: Phase 3 claims v1.3.0, MCP HTTP-auth pushed to v1.4.0.
+- `curatorplug-atrium-safety` v0.3.0 — plugin suite still 75/75 against v1.3.0; no plugin-side changes were needed for Phase 3.
+- The headline LLM-client use case: query the audit log for conflict resolutions via the MCP server. `query_audit_log(action='migration.conflict_resolved')` returns the structured details (mode + paths + suffix_n / backup_path / cross_source flag) for every conflict the migration engine resolved.
+
 ## [1.2.0] — 2026-05-08 — MCP server (P1: scaffolding + 3 read-only tools)
 
 **Headline:** v1.1.3 → v1.2.0 (minor bump). Adds an optional `[mcp]` extra that exposes a Model Context Protocol server (`curator-mcp`) for LLM clients (Claude Desktop, Claude Code, third-party MCP-aware agents). Speaks stdio by default; HTTP transport opt-in via `--http`. v1.2.0 ships P1 of the 3-session implementation plan: scaffolding + the first 3 read-only tools end-to-end functional. Remaining 6 tools land in P2 (next session). See `docs/CURATOR_MCP_SERVER_DESIGN.md` v0.2 RATIFIED for the design.
