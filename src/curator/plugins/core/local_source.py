@@ -199,6 +199,52 @@ class Plugin:
         )
 
     @hookimpl
+    def curator_source_rename(
+        self,
+        source_id: str,
+        file_id: str,
+        new_name: str,
+        *,
+        overwrite: bool = False,
+    ) -> FileInfo | None:
+        """Rename a local file within its current parent (v1.4.0+).
+
+        Atomic on the same filesystem via ``Path.rename`` (which calls
+        ``os.rename`` and is atomic per the POSIX spec). With
+        ``overwrite=False`` (default), raises ``FileExistsError`` if a
+        sibling with ``new_name`` already exists. With ``overwrite=True``
+        replaces whatever's there via ``Path.replace``.
+
+        Used by Tracer Phase 4's cross-source
+        ``--on-conflict=overwrite-with-backup`` flow to rename existing
+        destination files out of the way before the new transfer.
+        """
+        if not self._owns(source_id):
+            return None
+        old_path = Path(file_id)
+        new_path = old_path.parent / new_name
+        if new_path.exists() and not overwrite:
+            raise FileExistsError(
+                f"local source rename: {new_path} already exists; "
+                f"pass overwrite=True to replace"
+            )
+        if overwrite:
+            # Path.replace is atomic and overwrites unconditionally
+            old_path.replace(new_path)
+        else:
+            old_path.rename(new_path)
+        stat = new_path.stat()
+        return FileInfo(
+            file_id=str(new_path),
+            path=str(new_path),
+            size=stat.st_size,
+            mtime=datetime.fromtimestamp(stat.st_mtime),
+            ctime=datetime.fromtimestamp(stat.st_ctime),
+            is_directory=False,
+            extras={"inode": stat.st_ino},
+        )
+
+    @hookimpl
     def curator_source_delete(
         self,
         source_id: str,

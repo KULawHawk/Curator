@@ -412,6 +412,114 @@ class Plugin:
             "not paths. Use the Drive UI or PyDrive2 directly until then."
         )
 
+    @hookimpl
+    def curator_source_rename(
+        self,
+        source_id: str,
+        file_id: str,
+        new_name: str,
+        *,
+        overwrite: bool = False,
+    ) -> FileInfo | None:
+        """Rename a Drive file (title-only patch) within its parent (v1.4.0+).
+
+        Drive "rename" is a metadata patch on the file's ``title`` field;
+        no bytes re-upload required. The parent folder is unchanged. With
+        ``overwrite=False`` (default), raises ``FileExistsError`` if a
+        sibling with the same title already exists in the parent (Drive
+        permits duplicate titles in a folder, so we check explicitly).
+        With ``overwrite=True``, the existing sibling is sent to Drive's
+        trash before the rename proceeds.
+
+        Used by Tracer Phase 4's cross-source
+        ``--on-conflict=overwrite-with-backup`` flow to rename existing
+        destination files out of the way before the new cross-source
+        write.
+
+        Note on atomicity: Drive's metadata patch is server-atomic
+        (single API call), but the existence check + rename pair is
+        NOT atomic against concurrent Drive activity. A racy collision
+        (extremely rare) results in two files with the same title; the
+        next ``curator scan`` will surface them.
+        """
+        if not self._owns(source_id):
+            return None
+        client = self._get_or_build_client(source_id, options={})
+        if client is None:
+            return None
+        try:
+            f = client.CreateFile({"id": file_id})
+            f.FetchMetadata()
+        except Exception as e:
+            logger.error(
+                "gdrive rename: FetchMetadata failed for {fid}: {e}",
+                fid=file_id, e=e,
+            )
+            return None
+        # Determine parent for sibling-collision check.
+        parents = f.get("parents") or []
+        parent_id = parents[0].get("id") if parents else None
+        if not overwrite and parent_id:
+            try:
+                # Drive query: same parent, same title, not trashed.
+                # Escape single quotes in the title for the query.
+                escaped = new_name.replace("'", r"\'")
+                q = (
+                    f"'{parent_id}' in parents "
+                    f"and title='{escaped}' "
+                    f"and trashed=false"
+                )
+                siblings = client.ListFile({"q": q}).GetList()
+            except Exception as e:
+                logger.warning(
+                    "gdrive rename: sibling query failed for {fid}: {e}",
+                    fid=file_id, e=e,
+                )
+                siblings = []
+            # Exclude self from the collision check (file may already
+            # have its target name in some race scenarios).
+            colliders = [s for s in siblings if s.get("id") != file_id]
+            if colliders:
+                raise FileExistsError(
+                    f"gdrive source rename: a file titled {new_name!r} "
+                    f"already exists in parent {parent_id}; pass "
+                    f"overwrite=True to replace"
+                )
+        elif overwrite and parent_id:
+            # Send any colliding siblings to Drive trash before renaming.
+            try:
+                escaped = new_name.replace("'", r"\'")
+                q = (
+                    f"'{parent_id}' in parents "
+                    f"and title='{escaped}' "
+                    f"and trashed=false"
+                )
+                siblings = client.ListFile({"q": q}).GetList()
+                for s in siblings:
+                    if s.get("id") != file_id:
+                        try:
+                            s.Trash()
+                        except Exception as e:
+                            logger.warning(
+                                "gdrive rename overwrite: failed to trash collider {sid}: {e}",
+                                sid=s.get("id"), e=e,
+                            )
+            except Exception as e:
+                logger.warning(
+                    "gdrive rename overwrite: sibling cleanup failed: {e}", e=e,
+                )
+        # Patch the title.
+        f["title"] = new_name
+        try:
+            f.Upload()
+        except Exception as e:
+            logger.error(
+                "gdrive rename: title patch Upload failed for {fid}: {e}",
+                fid=file_id, e=e,
+            )
+            raise
+        return _drive_file_to_file_info(f)
+
     # ------------------------------------------------------------------
     # Write - v0.40 (Phase beta gate 5)
     # ------------------------------------------------------------------

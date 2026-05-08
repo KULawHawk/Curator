@@ -190,6 +190,78 @@ def curator_source_move(
 
 
 @hookspec
+def curator_source_rename(
+    source_id: str,
+    file_id: str,
+    new_name: str,
+    *,
+    overwrite: bool = False,
+) -> "FileInfo | None":
+    """Rename a file within its current parent (v1.4.0+).
+
+    Distinct from :func:`curator_source_move`: ``rename`` keeps the file
+    under the same parent and changes only its display name. For local
+    FS that's ``os.rename(file_id, file_id.parent / new_name)``. For
+    Drive that's a title-only metadata patch. For other cloud sources
+    plugins should implement the equivalent same-parent rename without
+    re-uploading bytes.
+
+    Tracer Phase 4 (v1.4.0+) calls this from :class:`MigrationService`'s
+    cross-source ``--on-conflict=overwrite-with-backup`` dispatch to
+    rename the existing destination file out of the way (e.g.,
+    ``foo.mp3`` -> ``foo.curator-backup-2026-05-08T17-30-00Z.mp3``)
+    before proceeding with the cross-source transfer. v1.3.0 had to
+    degrade those modes to skip with a warning because no rename hook
+    existed; v1.4.0 closes that gap.
+
+    Hook semantics:
+
+    * **Source-routing:** plugins check whether ``source_id`` belongs
+      to them and return ``None`` if not (the standard ``_owns``
+      pattern used by every other source hook).
+    * **Strictly additive:** plugins that don't implement this hook
+      are not invoked. ``MigrationService`` falls back to the v1.3.0
+      degrade-to-skip behavior for cross-source overwrite/rename when
+      the destination plugin returns None. No plugin contract version
+      bump.
+    * **FileExistsError contract:** with ``overwrite=False`` (default),
+      plugins MUST raise ``FileExistsError`` if a sibling file with
+      ``new_name`` already exists in the same parent. Mirrors the
+      :func:`curator_source_write` pattern.
+    * **Atomicity:** plugins SHOULD perform the rename atomically where
+      the underlying source supports it (``os.rename`` for local FS,
+      Drive's metadata patch endpoint for gdrive). Non-atomic renames
+      are acceptable for sources where atomicity isn't possible, but
+      the plugin should document that in its docstring.
+
+    Args:
+        source_id: which source the file lives in.
+        file_id: identifier of the file to rename. For local: an
+            absolute path. For gdrive: a Drive file ID.
+        new_name: new display name. For local: the new basename (parent
+            directory unchanged). For gdrive: the new title (parent
+            folder unchanged).
+        overwrite: if False (default), raise ``FileExistsError`` when a
+            file with ``new_name`` already exists in the same parent.
+            If True, atomically replace whatever's there.
+
+    Returns:
+        :class:`FileInfo` for the renamed file, or ``None`` if this
+        plugin doesn't own the source.
+
+    Raises:
+        FileExistsError: if ``overwrite=False`` and ``new_name`` exists
+            in the same parent.
+        OSError, RuntimeError: source-specific failures.
+
+    See ``docs/TRACER_PHASE_4_DESIGN.md`` v0.2 RATIFIED §3 DM-2 for
+    the signature rationale, DM-3 for why no exists-probe hookspec is
+    needed (the FileExistsError raise contract is sufficient), and
+    DM-4 for the strictly-additive backward-compat semantics.
+    """
+
+
+@hookspec
 def curator_source_delete(
     source_id: str,
     file_id: str,
