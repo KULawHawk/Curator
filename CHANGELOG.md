@@ -4,6 +4,69 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.2.0] — 2026-05-08 — MCP server (P1: scaffolding + 3 read-only tools)
+
+**Headline:** v1.1.3 → v1.2.0 (minor bump). Adds an optional `[mcp]` extra that exposes a Model Context Protocol server (`curator-mcp`) for LLM clients (Claude Desktop, Claude Code, third-party MCP-aware agents). Speaks stdio by default; HTTP transport opt-in via `--http`. v1.2.0 ships P1 of the 3-session implementation plan: scaffolding + the first 3 read-only tools end-to-end functional. Remaining 6 tools land in P2 (next session). See `docs/CURATOR_MCP_SERVER_DESIGN.md` v0.2 RATIFIED for the design.
+
+### Added
+
+- **New optional extra `[mcp]`** in `pyproject.toml`. Pulls in `mcp>=1.20` (the Anthropic Python SDK + bundled FastMCP framework). Users not opting in pay zero cost; install via `pip install curator[mcp]`.
+- **New console script `curator-mcp`** in `[project.scripts]`, mapped to `curator.mcp:main`. Launches the MCP server.
+- **New module `src/curator/mcp/`** with three files:
+  - `__init__.py` — exposes `main` and `create_server` as the public API.
+  - `server.py` — FastMCP construction + transport selection (stdio default; `--http`, `--port`, `--host` flags for HTTP). Defensive: refuses to bind HTTP to non-loopback addresses without auth.
+  - `tools.py` — Pydantic return models (`HealthStatus`, `SourceInfo`, `AuditEvent`) + `register_tools(mcp, runtime)` factory + 3 implemented v1.2.0 tools.
+- **3 read-only MCP tools (P1)** — the first slice of the 9 designed in `docs/CURATOR_MCP_SERVER_DESIGN.md` v0.2 §4.3:
+  - `health_check` — server / DB / plugin sanity check. Returns 'ok' if DB reachable AND plugin_count > 0.
+  - `list_sources` — lists every configured Curator source (enabled and disabled).
+  - `query_audit_log` — filtered query against the audit log. Supports `actor`, `action`, `entity_id`, `since`, `limit` (capped at 1000). The headline use case: an LLM client can ask "what did atrium-safety refuse last week?" and get structured data via `actor='curatorplug.atrium_safety', action='compliance.refused'`.
+- **Tools.py module-level documentation** of the 6 P2 stubs (`query_files`, `inspect_file`, `get_lineage`, `find_duplicates`, `list_trashed`, `get_migration_status`) with the implementation pattern P2 should follow. Adding a P2 tool prematurely is flagged as a regression.
+- **closure-based tool factory** (`register_tools(mcp, runtime)`) so tools bind to the runtime via closures — enables multiple servers with different runtimes to coexist (one per test case using a tmp DB).
+
+### Tests (+23 new — 357 → 380 in regression slice)
+
+- **`tests/unit/mcp/test_tools.py`** (NEW, 14 tests):
+  - `TestServerRegistration` (2): exactly 3 tools registered (regression guard against accidental P2 tool registration); each tool has a non-trivial description.
+  - `TestHealthCheck` (1): returns 'ok' status with default plugins + reachable DB; exposes curator_version + plugin_count + db_path.
+  - `TestListSources` (3): empty for fresh runtime; returns inserted sources with all fields; includes disabled sources.
+  - `TestQueryAuditLog` (8): empty for empty log; returns inserted events; filters by actor / action / entity_id; limit caps results; limit > 1000 capped silently; the headline atrium-safety use case (`actor='curatorplug.atrium_safety', action='compliance.refused'`) returns structured data.
+- **`tests/integration/mcp/test_stdio.py`** (NEW, 9 tests):
+  - `TestScriptEntryPoint` (6): subprocess `python -m curator.mcp.server --help` exits zero; help text describes the server and lists `--http`, `--port`, `--host` flags; invalid args exit nonzero.
+  - `TestImportPath` (3): `from curator.mcp import ...` works in subprocess + in-process; `main` and `create_server` are callable.
+  - **Note:** Full subprocess-based MCP protocol roundtrip (initialize → tools/list → tools/call) is deferred to P2. The unit tests already exercise `call_tool` through the same FastMCP code path the stdio server uses.
+
+### Changed
+
+- Version `1.1.3` → `1.2.0` (minor bump). New public surface (`curator-mcp` script + `curator.mcp` module + `[mcp]` extra) is meaningful enough to deserve a minor; patch would be dishonest. Per DM-6 of `docs/CURATOR_MCP_SERVER_DESIGN.md`.
+- `pyproject.toml` and `__init__.py` `__version__` reflect 1.2.0.
+- `[mcp]` added to the `all` aggregate extra so `pip install curator[all]` includes it.
+
+### Backward compatibility
+
+- **Strictly additive.** `pip install curator` (without `[mcp]`) is unaffected — no new mandatory deps, no new mandatory imports, no behavior change for users who don't opt in.
+- **Existing CLI commands — unaffected.** The 13 existing `curator <subcommand>` calls work identically. `curator-mcp` is a separate console script (separate binary), not a `curator` subcommand.
+- **Existing plugins — unaffected.** atrium-safety v0.3.0 + the three core hookspecs (v1.1.1 / v1.1.2 / v1.1.3) all continue to work. The MCP server reads from the audit log those plugins write to.
+- **DB schema — unchanged.**
+- **Config schema — unchanged.**
+- **`CuratorRuntime` API — unchanged.** The MCP server consumes it as-is.
+
+### What's deferred to P2
+
+- 6 read-only tools: `query_files`, `inspect_file`, `get_lineage`, `find_duplicates`, `list_trashed`, `get_migration_status`. Each is documented in `docs/CURATOR_MCP_SERVER_DESIGN.md` v0.2 §4.3 with input schema + return shape. P2 implements following the same pattern as P1 (Pydantic return model with LLM-targeted docs + `@mcp.tool()`-decorated function + ~3-4 unit tests per tool).
+- Full subprocess-based MCP protocol roundtrip test.
+
+### What's deferred to P3
+
+- README "MCP server (v1.2.0+)" section.
+- Design doc v0.2 → v0.3 IMPLEMENTED stamp.
+- End-to-end Claude Desktop demo notes.
+
+### Cross-references
+
+- `docs/CURATOR_MCP_SERVER_DESIGN.md` v0.2 RATIFIED — the design this implements.
+- `docs/CURATOR_AUDIT_EVENT_HOOKSPEC_DESIGN.md` v0.3 IMPLEMENTED — `query_audit_log` reads from the channel that design established. Plug atrium-safety v0.3.0 into Curator v1.2.0 and an LLM client gets queryable enforcement-decision history out of the box.
+- `curatorplug-atrium-safety` v0.3.0 — the headline consumer of `query_audit_log`. Run a migration with the safety plugin in strict mode, then query: `query_audit_log(actor='curatorplug.atrium_safety', action='compliance.refused')`.
+
 ## [1.1.3] — 2026-05-08 — `curator_audit_event` plugin hookspec (audit channel)
 
 **Headline:** v1.1.2 → v1.1.3 (patch bump). Adds the `curator_audit_event` plugin hookspec and a core `AuditWriterPlugin` that persists plugin-emitted events to `AuditRepository`. Closes the audit-channel gap that `curatorplug-atrium-safety/DESIGN.md` v0.3 §9 named as out-of-scope: plugins can now write structured audit entries instead of (or alongside) `loguru` logging. Strictly additive; existing plugins and `MigrationService`'s direct-to-repo path are unaffected.
