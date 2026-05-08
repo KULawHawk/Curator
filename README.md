@@ -2,17 +2,18 @@
 
 A content-aware artifact intelligence layer for files.
 
-**Status:** v1.1.3 stable (released 2026-05-08). v1.0.0rc1 was the stability anchor; v1.1.0 shipped the Migration tool ("Tracer") with persistent resumable jobs, worker-pool concurrency, cross-source migration, and a PySide6 Migrate tab. v1.1.1 → v1.1.2 → v1.1.3 add the plugin ecosystem hookspecs that let third-party plugins enforce constitutional invariants (Atrium Principles 2 & 4) over Curator's plugin surface. See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
+**Status:** v1.2.0 stable (released 2026-05-08). v1.0.0rc1 was the stability anchor; v1.1.0 shipped the Migration tool ("Tracer") with persistent resumable jobs, worker-pool concurrency, cross-source migration, and a PySide6 Migrate tab. v1.1.1 → v1.1.2 → v1.1.3 added the plugin ecosystem hookspecs that let third-party plugins enforce constitutional invariants (Atrium Principles 2 & 4) over Curator's plugin surface. v1.2.0 adds an optional `[mcp]` extra exposing a Model Context Protocol server (`curator-mcp`) so LLM clients (Claude Desktop, Claude Code, third-party agents) can query Curator's index, audit log, and lineage programmatically. See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
 
 Curator gives every file a stable identity, tracks relationships and lineage between files with confidence scores, knows where files belong, and makes every destructive operation reversible.
 
 ## Documentation
 
-- [`CHANGELOG.md`](CHANGELOG.md) — release history (v1.0.0rc1, v1.1.0a1, v1.1.0, v1.1.1, v1.1.2, v1.1.3)
+- [`CHANGELOG.md`](CHANGELOG.md) — release history (v1.0.0rc1, v1.1.0a1, v1.1.0, v1.1.1, v1.1.2, v1.1.3, v1.2.0)
 - [`DESIGN.md`](DESIGN.md) — implementation specification (21 sections)
 - [`docs/TRACER_PHASE_2_DESIGN.md`](docs/TRACER_PHASE_2_DESIGN.md) — Migration tool (Tracer) Phase 2 design + implementation evidence
 - [`docs/PLUGIN_INIT_HOOKSPEC_DESIGN.md`](docs/PLUGIN_INIT_HOOKSPEC_DESIGN.md) — v0.3 IMPLEMENTED. The `curator_plugin_init(pm)` hookspec (v1.1.2+) that gives plugins a pluggy reference for calling other plugins' hooks from inside their own hookimpls.
 - [`docs/CURATOR_AUDIT_EVENT_HOOKSPEC_DESIGN.md`](docs/CURATOR_AUDIT_EVENT_HOOKSPEC_DESIGN.md) — v0.3 IMPLEMENTED. The `curator_audit_event(...)` hookspec (v1.1.3+) and core `AuditWriterPlugin` that let plugins write structured audit log entries.
+- [`docs/CURATOR_MCP_SERVER_DESIGN.md`](docs/CURATOR_MCP_SERVER_DESIGN.md) — v0.3 IMPLEMENTED. The Model Context Protocol server (v1.2.0+) exposing 9 read-only tools to LLM clients via stdio.
 - [`Github/CURATOR_RESEARCH_NOTES.md`](Github/CURATOR_RESEARCH_NOTES.md) — research findings, decision rationale, tracker items
 - [`Github/PROCUREMENT_INDEX.md`](Github/PROCUREMENT_INDEX.md) — repository catalog and adoption verdicts
 - [`BUILD_TRACKER.md`](BUILD_TRACKER.md) — implementation progress
@@ -169,6 +170,67 @@ Query what the plugin observed:
 curator audit --actor curatorplug.atrium_safety
 ```
 
+## MCP server (v1.2.0+)
+
+Curator ships an optional Model Context Protocol server (`curator-mcp`) that exposes 9 read-only tools to LLM clients. The headline use case: an agent connected via MCP can ask "what did the safety plugin refuse last week?" or "find PDFs from August about taxes" and get back structured data straight from Curator's index — no CLI scraping, no full Python interpreter access required. See [`docs/CURATOR_MCP_SERVER_DESIGN.md`](docs/CURATOR_MCP_SERVER_DESIGN.md) v0.3 IMPLEMENTED for the full design.
+
+Install:
+
+```powershell
+pip install -e .[mcp]
+```
+
+The 9 v1.2.0 tools (all strictly read-only):
+
+* **`health_check`** — server / DB / plugin sanity check.
+* **`list_sources`** — every configured Curator source (enabled + disabled).
+* **`query_audit_log`** — filtered query with `actor`/`action`/`entity_id`/`since`/`limit`. The atrium-safety read-back use case.
+* **`query_files`** — file index with `source_ids`/`extensions`/`path_starts_with`/`min_size`/`max_size`/`limit` filters.
+* **`inspect_file`** — single-file deep view (metadata + lineage edges + bundle memberships).
+* **`get_lineage`** — BFS through the lineage graph (max depth 5).
+* **`find_duplicates`** — by `file_id` or `xxhash3_128` hash; returns the duplicate group.
+* **`list_trashed`** — trash registry with `since`/`trashed_by`/`source_id`/`limit` filters.
+* **`get_migration_status`** — by `job_id`, or recent jobs filtered by `status`.
+
+### Claude Desktop config
+
+Claude Desktop reads MCP server config from `%APPDATA%\Claude\claude_desktop_config.json` on Windows (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS). Add `curator` under `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "curator": {
+      "command": "C:\\Users\\jmlee\\AppData\\Roaming\\Python\\Python313\\Scripts\\curator-mcp.exe",
+      "args": []
+    }
+  }
+}
+```
+
+Adjust the `command` path to wherever pip installed `curator-mcp.exe` for your Python (`pip show -f curator | findstr curator-mcp` reveals it). After saving, restart Claude Desktop — it'll spawn `curator-mcp` automatically and the 9 tools will appear in the UI's tool picker.
+
+Query examples once connected (Claude Desktop will route these to the right tool):
+
+* *"What did the safety plugin refuse in the last week?"* → `query_audit_log(actor='curatorplug.atrium_safety', action='compliance.refused', since=...)`
+* *"Find PDFs in my local source larger than 10MB."* → `query_files(source_ids=['local'], extensions=['.pdf'], min_size=10000000)`
+* *"Are there any duplicates of this file?"* → `find_duplicates(file_id='...')`
+
+### HTTP transport (development only)
+
+For local-network use, the server can speak HTTP/SSE instead of stdio:
+
+```powershell
+curator-mcp --http --port 8765
+```
+
+**v1.2.0 has NO authentication for HTTP.** The server refuses to bind to non-loopback addresses without explicit override; v1.3.0 will add API key support. Use stdio (the default) for normal Claude Desktop / Claude Code integration.
+
+### What's NOT in v1.2.0
+
+* **No write tools.** Migration apply, scan trigger, trash send/restore, organize — all are write operations that need careful confirmation UX. Deferred to v1.3.0+. The `curator` CLI remains the canonical write surface.
+* **No HTTP authentication.** stdio is the supported production transport.
+* **No real-time event stream.** `WatchService` events are not exposed as a streaming MCP capability; polling-based query tools give point-in-time snapshots.
+
 ## Optional features
 
 Curator's core depends on a small set of always-installed packages. Larger or platform-
@@ -180,6 +242,9 @@ pip install -e .[beta]
 
 # Cloud source plugins (Google Drive, OneDrive, Dropbox — not yet implemented)
 pip install -e .[cloud]
+
+# MCP server (Model Context Protocol; LLM-client-facing read-only API)
+pip install -e .[mcp]
 
 # Development tooling (pytest, hypothesis, ruff, mypy)
 pip install -e .[dev]
