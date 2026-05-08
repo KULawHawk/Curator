@@ -8,6 +8,8 @@
 
 ## v1.1.0a1 — Migration tool Phase 1 (alpha) — 2026-05-08 🚚
 
+**Brand note (added 2026-05-08):** Jake assigned the user-facing name **Tracer** to Curator's Migration capability, and **Ad Astra** as the suite name covering Curator + APEX + Synergy + future products. Per `Atrium\NAMES.md` §1, names are brands for existing components — code paths (`curator.services.migration`) and the CLI command (`curator migrate`) remain unchanged; "Tracer" is user-facing only. See `Atrium\NAMES.md` and `Atrium\INSTALL_PATH_DESIGN.md`.
+
 **Headline:** Feature M (Migration tool) Phase 1 ships. First post-1.0
 feature on the v1.1 minor cycle. Same-source local→local file relocation
 with hash-verify-before-move, ``curator_id`` constancy, audit integration.
