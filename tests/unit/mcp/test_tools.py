@@ -23,7 +23,6 @@ from curator.mcp import create_server
 from curator.models.audit import AuditEntry
 from curator.models.source import SourceConfig
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -110,11 +109,15 @@ def _extract_text_json(content_list: Any) -> Any:
 class TestServerRegistration:
     """Server bootstrap should register exactly the 3 v1.2.0 tools."""
 
-    def test_three_tools_registered(self, server):
+    def test_nine_tools_registered(self, server):
         tools = asyncio.run(server.list_tools())
         names = {t.name for t in tools}
-        assert names == {"health_check", "list_sources", "query_audit_log"}, (
-            f"v1.2.0 P1 expects exactly 3 tools; got {len(tools)}: {names}"
+        assert names == {
+            "health_check", "list_sources", "query_audit_log",
+            "query_files", "inspect_file", "get_lineage",
+            "find_duplicates", "list_trashed", "get_migration_status",
+        }, (
+            f"v1.2.0 expects exactly 9 tools; got {len(tools)}: {names}"
         )
 
     def test_each_tool_has_description(self, server):
@@ -308,3 +311,438 @@ class TestQueryAuditLog:
         assert data[0]["action"] == "compliance.refused"
         assert data[0]["details"]["mode"] == "strict"
         assert data[0]["details"]["phase"] == "re-read"
+
+
+# ===========================================================================
+# Helpers for P2 tool tests (build real FileEntity / LineageEdge / etc.)
+# ===========================================================================
+
+
+def _ensure_source(runtime, source_id: str = "local"):
+    """Insert source if it doesn't already exist (FK requirement for files)."""
+    if runtime.source_repo.get(source_id) is None:
+        runtime.source_repo.upsert(SourceConfig(
+            source_id=source_id,
+            source_type=source_id.split(":")[0] if ":" in source_id else source_id,
+            enabled=True,
+        ))
+
+
+def _make_file(
+    runtime,
+    *,
+    source_id: str = "local",
+    source_path: str = "/tmp/x.txt",
+    size: int = 100,
+    xxhash3_128: str | None = "deadbeef" * 4,
+    extension: str | None = ".txt",
+    file_type: str | None = "text/plain",
+):
+    """Insert a file into the repo and return the resulting FileEntity.
+
+    Auto-creates the source if missing (FK requirement)."""
+    from curator.models.file import FileEntity
+
+    _ensure_source(runtime, source_id)
+    f = FileEntity(
+        source_id=source_id,
+        source_path=source_path,
+        size=size,
+        mtime=datetime.utcnow(),
+        xxhash3_128=xxhash3_128,
+        extension=extension,
+        file_type=file_type,
+    )
+    runtime.file_repo.insert(f)
+    return f
+
+
+def _make_lineage(runtime, from_file, to_file, kind="duplicate", confidence=0.9):
+    from curator.models.lineage import LineageEdge, LineageKind
+
+    edge = LineageEdge(
+        from_curator_id=from_file.curator_id,
+        to_curator_id=to_file.curator_id,
+        edge_kind=LineageKind(kind) if not isinstance(kind, LineageKind) else kind,
+        confidence=confidence,
+        detected_by="test",
+    )
+    runtime.lineage_repo.insert(edge)
+    return edge
+
+
+# ===========================================================================
+# Tool 4: query_files
+# ===========================================================================
+
+
+class TestQueryFiles:
+    def test_empty_for_empty_repo(self, server):
+        result = _call_tool_sync(server, "query_files")
+        data = _extract_payload(result)
+        assert isinstance(data, list)
+        assert len(data) == 0
+
+    def test_returns_inserted_file(self, server, runtime):
+        _make_file(runtime, source_path="/tmp/a.txt")
+        result = _call_tool_sync(server, "query_files")
+        data = _extract_payload(result)
+        assert len(data) == 1
+        assert data[0]["source_path"] == "/tmp/a.txt"
+        assert data[0]["size"] == 100
+        assert data[0]["file_id"]  # UUID string
+
+    def test_filters_by_source_ids(self, server, runtime):
+        _make_file(runtime, source_id="local", source_path="/a")
+        _make_file(runtime, source_id="gdrive", source_path="/b")
+        result = _call_tool_sync(
+            server, "query_files", {"source_ids": ["local"]},
+        )
+        data = _extract_payload(result)
+        assert len(data) == 1
+        assert data[0]["source_id"] == "local"
+
+    def test_filters_by_extension(self, server, runtime):
+        _make_file(runtime, source_path="/a.pdf", extension=".pdf")
+        _make_file(runtime, source_path="/b.txt", extension=".txt")
+        result = _call_tool_sync(
+            server, "query_files", {"extensions": [".pdf"]},
+        )
+        data = _extract_payload(result)
+        assert len(data) == 1
+        assert data[0]["extension"] == ".pdf"
+
+    def test_filters_by_size_range(self, server, runtime):
+        _make_file(runtime, source_path="/small", size=50)
+        _make_file(runtime, source_path="/medium", size=500)
+        _make_file(runtime, source_path="/large", size=5000)
+        result = _call_tool_sync(
+            server, "query_files", {"min_size": 100, "max_size": 1000},
+        )
+        data = _extract_payload(result)
+        assert len(data) == 1
+        assert data[0]["size"] == 500
+
+    def test_limit_caps_results(self, server, runtime):
+        for i in range(10):
+            _make_file(runtime, source_path=f"/f{i}.txt")
+        result = _call_tool_sync(server, "query_files", {"limit": 3})
+        data = _extract_payload(result)
+        assert len(data) == 3
+
+
+# ===========================================================================
+# Tool 5: inspect_file
+# ===========================================================================
+
+
+class TestInspectFile:
+    def test_returns_none_for_invalid_file_id(self, server):
+        result = _call_tool_sync(
+            server, "inspect_file", {"file_id": "not-a-uuid"},
+        )
+        data = _extract_payload(result)
+        assert data is None
+
+    def test_returns_none_for_unknown_file_id(self, server):
+        result = _call_tool_sync(
+            server, "inspect_file",
+            {"file_id": "00000000-0000-0000-0000-000000000000"},
+        )
+        data = _extract_payload(result)
+        assert data is None
+
+    def test_returns_file_detail(self, server, runtime):
+        f = _make_file(runtime, source_path="/x.pdf", extension=".pdf")
+        result = _call_tool_sync(
+            server, "inspect_file", {"file_id": str(f.curator_id)},
+        )
+        data = _extract_payload(result)
+        assert data["file"]["source_path"] == "/x.pdf"
+        assert data["file"]["extension"] == ".pdf"
+        assert data["lineage_edges"] == []
+        assert data["bundles"] == []
+
+    def test_includes_lineage_edges(self, server, runtime):
+        f1 = _make_file(runtime, source_path="/a")
+        f2 = _make_file(runtime, source_path="/b")
+        _make_lineage(runtime, f1, f2, kind="duplicate", confidence=0.95)
+        result = _call_tool_sync(
+            server, "inspect_file", {"file_id": str(f1.curator_id)},
+        )
+        data = _extract_payload(result)
+        assert len(data["lineage_edges"]) == 1
+        edge = data["lineage_edges"][0]
+        assert edge["edge_kind"] == "duplicate"
+        assert edge["confidence"] == 0.95
+
+
+# ===========================================================================
+# Tool 6: get_lineage
+# ===========================================================================
+
+
+class TestGetLineage:
+    def test_returns_none_for_invalid_file_id(self, server):
+        result = _call_tool_sync(
+            server, "get_lineage", {"file_id": "not-a-uuid"},
+        )
+        data = _extract_payload(result)
+        assert data is None
+
+    def test_single_node_when_no_edges(self, server, runtime):
+        f = _make_file(runtime)
+        result = _call_tool_sync(
+            server, "get_lineage", {"file_id": str(f.curator_id)},
+        )
+        data = _extract_payload(result)
+        assert data["root_file_id"] == str(f.curator_id)
+        assert len(data["nodes"]) == 1
+        assert data["edges"] == []
+
+    def test_walks_to_depth_1(self, server, runtime):
+        f1 = _make_file(runtime, source_path="/a")
+        f2 = _make_file(runtime, source_path="/b")
+        _make_lineage(runtime, f1, f2)
+        result = _call_tool_sync(
+            server, "get_lineage",
+            {"file_id": str(f1.curator_id), "max_depth": 1},
+        )
+        data = _extract_payload(result)
+        assert len(data["nodes"]) == 2
+        assert len(data["edges"]) == 1
+
+    def test_walks_to_depth_2(self, server, runtime):
+        # f1 -> f2 -> f3
+        f1 = _make_file(runtime, source_path="/a")
+        f2 = _make_file(runtime, source_path="/b")
+        f3 = _make_file(runtime, source_path="/c")
+        _make_lineage(runtime, f1, f2)
+        _make_lineage(runtime, f2, f3)
+        result = _call_tool_sync(
+            server, "get_lineage",
+            {"file_id": str(f1.curator_id), "max_depth": 2},
+        )
+        data = _extract_payload(result)
+        # Should reach all three
+        assert len(data["nodes"]) == 3
+        assert len(data["edges"]) == 2
+
+    def test_max_depth_capped_at_5(self, server, runtime):
+        f = _make_file(runtime)
+        result = _call_tool_sync(
+            server, "get_lineage",
+            {"file_id": str(f.curator_id), "max_depth": 999},
+        )
+        data = _extract_payload(result)
+        # Doesn't crash; returns OK
+        assert data["root_file_id"] == str(f.curator_id)
+
+
+# ===========================================================================
+# Tool 7: find_duplicates
+# ===========================================================================
+
+
+class TestFindDuplicates:
+    def test_empty_when_neither_input(self, server):
+        result = _call_tool_sync(server, "find_duplicates")
+        data = _extract_payload(result)
+        assert data == []
+
+    def test_finds_dups_by_hash(self, server, runtime):
+        h = "a" * 32
+        _make_file(runtime, source_path="/a", xxhash3_128=h)
+        _make_file(runtime, source_path="/b", xxhash3_128=h)
+        _make_file(runtime, source_path="/c", xxhash3_128="b" * 32)  # different
+        result = _call_tool_sync(
+            server, "find_duplicates", {"xxhash3_128": h},
+        )
+        data = _extract_payload(result)
+        assert len(data) == 1
+        assert data[0]["xxhash3_128"] == h
+        assert len(data[0]["files"]) == 2
+
+    def test_finds_dups_by_file_id(self, server, runtime):
+        h = "c" * 32
+        f1 = _make_file(runtime, source_path="/a", xxhash3_128=h)
+        _make_file(runtime, source_path="/b", xxhash3_128=h)
+        result = _call_tool_sync(
+            server, "find_duplicates", {"file_id": str(f1.curator_id)},
+        )
+        data = _extract_payload(result)
+        assert len(data) == 1
+        assert len(data[0]["files"]) == 2
+
+    def test_returns_single_file_group_for_unique_file(self, server, runtime):
+        """Querying a file with no dups returns a 1-file group.
+        len(files) == 1 conveys 'no duplicates' to the LLM."""
+        h = "d" * 32
+        f = _make_file(runtime, xxhash3_128=h)
+        result = _call_tool_sync(
+            server, "find_duplicates", {"file_id": str(f.curator_id)},
+        )
+        data = _extract_payload(result)
+        assert len(data) == 1
+        assert len(data[0]["files"]) == 1
+
+    def test_empty_for_unknown_hash(self, server):
+        result = _call_tool_sync(
+            server, "find_duplicates", {"xxhash3_128": "nonexistent"},
+        )
+        data = _extract_payload(result)
+        assert data == []
+
+    def test_empty_for_invalid_file_id(self, server):
+        result = _call_tool_sync(
+            server, "find_duplicates", {"file_id": "not-a-uuid"},
+        )
+        data = _extract_payload(result)
+        assert data == []
+
+
+# ===========================================================================
+# Tool 8: list_trashed
+# ===========================================================================
+
+
+class TestListTrashed:
+    def _make_trash(self, runtime, **kwargs):
+        """Insert a trash record. Auto-creates a backing file (FK requirement)
+        unless caller provided an explicit curator_id."""
+        from curator.models.trash import TrashRecord
+
+        if "curator_id" not in kwargs:
+            # Need a real file row for the FK to be satisfied
+            backing_file = _make_file(
+                runtime,
+                source_id=kwargs.get("original_source_id", "local"),
+                source_path=kwargs.get("original_path", "/tmp/x"),
+            )
+            kwargs["curator_id"] = backing_file.curator_id
+
+        defaults = {
+            "original_source_id": "local",
+            "original_path": "/tmp/x",
+            "trashed_by": "user.cli",
+            "reason": "manual delete",
+        }
+        defaults.update(kwargs)
+        record = TrashRecord(**defaults)
+        runtime.trash_repo.insert(record)
+        return record
+
+    def test_empty_when_nothing_trashed(self, server):
+        result = _call_tool_sync(server, "list_trashed")
+        data = _extract_payload(result)
+        assert data == []
+
+    def test_returns_inserted_trash(self, server, runtime):
+        self._make_trash(runtime, original_path="/old/file.txt")
+        result = _call_tool_sync(server, "list_trashed")
+        data = _extract_payload(result)
+        assert len(data) == 1
+        assert data[0]["original_path"] == "/old/file.txt"
+        assert data[0]["trashed_by"] == "user.cli"
+
+    def test_filters_by_trashed_by(self, server, runtime):
+        self._make_trash(runtime, trashed_by="user.cli", original_path="/u")
+        self._make_trash(
+            runtime, trashed_by="curator.cleanup", original_path="/c",
+        )
+        result = _call_tool_sync(
+            server, "list_trashed", {"trashed_by": "curator.cleanup"},
+        )
+        data = _extract_payload(result)
+        assert len(data) == 1
+        assert data[0]["trashed_by"] == "curator.cleanup"
+
+    def test_filters_by_source_id_client_side(self, server, runtime):
+        self._make_trash(runtime, original_source_id="local", original_path="/a")
+        self._make_trash(runtime, original_source_id="gdrive", original_path="/b")
+        result = _call_tool_sync(
+            server, "list_trashed", {"source_id": "gdrive"},
+        )
+        data = _extract_payload(result)
+        assert len(data) == 1
+        assert data[0]["original_source_id"] == "gdrive"
+
+
+# ===========================================================================
+# Tool 9: get_migration_status
+# ===========================================================================
+
+
+class TestGetMigrationStatus:
+    def _make_job(self, runtime, **kwargs):
+        from curator.models.migration import MigrationJob
+
+        defaults = {
+            "src_source_id": "local",
+            "src_root": "/src",
+            "dst_source_id": "local:vault",
+            "dst_root": "/dst",
+            "status": "completed",
+            "files_total": 10,
+            "files_copied": 8,
+            "files_skipped": 1,
+            "files_failed": 1,
+            "bytes_copied": 1024,
+        }
+        defaults.update(kwargs)
+        job = MigrationJob(**defaults)
+        runtime.migration_job_repo.insert_job(job)
+        return job
+
+    def test_empty_when_no_jobs(self, server):
+        result = _call_tool_sync(server, "get_migration_status")
+        data = _extract_payload(result)
+        assert data == []
+
+    def test_lists_recent_jobs(self, server, runtime):
+        self._make_job(runtime, src_root="/job1")
+        self._make_job(runtime, src_root="/job2")
+        result = _call_tool_sync(server, "get_migration_status")
+        data = _extract_payload(result)
+        assert len(data) == 2
+        # Each job has the expected fields
+        for j in data:
+            assert "job_id" in j
+            assert "files_total" in j
+            assert "files_copied" in j
+            assert "files_failed" in j
+
+    def test_get_specific_job_by_id(self, server, runtime):
+        job = self._make_job(runtime, src_root="/specific")
+        self._make_job(runtime, src_root="/other")
+        result = _call_tool_sync(
+            server, "get_migration_status", {"job_id": str(job.job_id)},
+        )
+        data = _extract_payload(result)
+        assert len(data) == 1
+        assert data[0]["src_root"] == "/specific"
+
+    def test_filters_by_status(self, server, runtime):
+        self._make_job(runtime, status="completed", src_root="/done")
+        self._make_job(runtime, status="failed", src_root="/oops")
+        result = _call_tool_sync(
+            server, "get_migration_status", {"status": "failed"},
+        )
+        data = _extract_payload(result)
+        assert len(data) == 1
+        assert data[0]["status"] == "failed"
+
+    def test_empty_for_invalid_job_id(self, server):
+        result = _call_tool_sync(
+            server, "get_migration_status", {"job_id": "not-a-uuid"},
+        )
+        data = _extract_payload(result)
+        assert data == []
+
+    def test_empty_for_unknown_job_id(self, server):
+        result = _call_tool_sync(
+            server, "get_migration_status",
+            {"job_id": "00000000-0000-0000-0000-000000000000"},
+        )
+        data = _extract_payload(result)
+        assert data == []
