@@ -8,6 +8,8 @@
 
 ## v1.1.0a1 — Migration tool Phase 1 (alpha) — 2026-05-08 🚚
 
+**Phase 2 cleared (added 2026-05-08):** Jake ratified all 5 DM recommendations (DM-1 through DM-5) in `docs/TRACER_PHASE_2_DESIGN.md` §3 as written. Phase 2 Session A (schema + `MigrationJobRepository` + service core + CLI core) is unblocked. The design doc is now v0.2 with status "RATIFIED." Estimated path to v1.1.0 stable: 3 sessions (~8.75h total) per the ratified spec.
+
 **Brand note (added 2026-05-08):** Jake assigned the user-facing name **Tracer** to Curator's Migration capability, and **Ad Astra** as the suite name covering Curator + APEX + Synergy + future products. Per `Atrium\NAMES.md` §1, names are brands for existing components — code paths (`curator.services.migration`) and the CLI command (`curator migrate`) remain unchanged; "Tracer" is user-facing only. See `Atrium\NAMES.md` and `Atrium\INSTALL_PATH_DESIGN.md`.
 
 **Headline:** Feature M (Migration tool) Phase 1 ships. First post-1.0

@@ -1,6 +1,6 @@
 # Tracer Phase 2 Design
 
-**Status:** v0.1 — design proposal, awaiting Jake's ratification of §3 (DM resolutions). Implementation does NOT begin until §3 is ratified.
+**Status:** v0.2 — RATIFIED 2026-05-08; Phase 2 implementation cleared to begin. Original v0.1 was a design proposal; Jake ratified all 5 DM recommendations as written on 2026-05-08.
 **Date:** 2026-05-08
 **Authority:** Subordinate to Atrium `CONSTITUTION.md`. Implements `DESIGN_PHASE_DELTA.md` §2 (Feature M) Phase 2.
 **Companion documents:**
@@ -72,7 +72,7 @@ The `--keep-source` flag interacts with the index update: in keep mode, do we st
 
 **Net result for ratification:** add `--keep-source` (default off) and `--trash-source` (default on, mutually exclusive with `--keep-source`). Skip `--delete-source` and `prompt-each-time`.
 
-**RATIFICATION STATUS:** ⏳ pending Jake's confirmation.
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. Implementation cleared.
 
 ### DM-2 — Hash-verify default
 
@@ -82,7 +82,7 @@ The `--keep-source` flag interacts with the index update: in keep mode, do we st
 
 **Phase 2 recommendation.** No change. Default ON is mandated by Constitution Principle 2 (Hash-Verify-Before-Move). The opt-out exists for trusted fast paths and tests but it should never be the default. The cost (re-hashing the destination after copy) is small relative to the I/O cost, and it catches real corruption (silent disk errors, cloud-side rounding bugs, partial writes from interrupted copies that somehow look "complete" to the OS).
 
-**RATIFICATION STATUS:** ⏳ pending Jake's confirmation. Recommendation: ratify and lock — this should not be revisited in future phases.
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. Locked — `verify_hash=True` is permanent default; not to be revisited in future phases.
 
 ### DM-3 — Concurrent workers
 
@@ -104,7 +104,7 @@ The simpler alternative — different defaults per migration type — adds compl
 
 **Ordering.** With workers, the migration_progress.status field becomes the source of truth for "which files have been moved." There is no global ordering guarantee — a worker may finish file N+1 before file N. This is fine because each row is self-contained.
 
-**RATIFICATION STATUS:** ⏳ pending Jake's confirmation. Default `--workers 4`.
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. Default `--workers 4`. Documentation must call out gdrive users may want `--workers 2` to avoid quota errors.
 
 ### DM-4 — Filter syntax
 
@@ -123,7 +123,7 @@ Globs use the standard `fnmatch` Windows-aware semantics from `pathlib.PurePath.
 
 **Full FileQuery is NOT exposed** to the CLI. That's a Python-API affordance. CLI ergonomics for FileQuery would require a JSON/YAML embedded language and that's net-negative complexity for a tool that 80% of users will use with `--ext`.
 
-**RATIFICATION STATUS:** ⏳ pending Jake's confirmation.
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. Implementation cleared.
 
 ### DM-5 — `SourceConfig` row after migration
 
@@ -135,7 +135,7 @@ Globs use the standard `fnmatch` Windows-aware semantics from `pathlib.PurePath.
 
 **Future enhancement (NOT Phase 2):** a `curator sources prune --empty` command that lists sources with zero active files and offers to remove them. This is useful but not blocking; defer to v1.2.0.
 
-**RATIFICATION STATUS:** ⏳ pending Jake's confirmation.
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. SourceConfig rows persist after migration; cleanup is a separate user-driven action.
 
 ---
 
@@ -646,3 +646,4 @@ Each session ends with a clean commit. The `1.1.0a1` alpha tag remains the ancho
 ## 13. Revision log
 
 - **2026-05-08 v0.1** — first issued. Captures: (1) explicit scope and Phase 3 deferrals, (2) Phase 1 invariants that must be preserved, (3) DM-1 through DM-5 resolutions awaiting Jake's ratification, (4) full schema + repository design, (5) service architecture for cross-source + resume + workers, (6) complete CLI flag matrix, (7) GUI Migrate tab wireframe, (8) test strategy targeting ~1062 total tests, (9) schema migration plan, (10) honest ~8.75h effort estimate split across 3 sessions.
+- **2026-05-08 v0.2** — RATIFIED. Jake ratified all 5 DM recommendations (DM-1 through DM-5) as written without modification. Doc status flips from "design proposal" to "approved spec"; Phase 2 Session A implementation cleared to begin. No structural changes to the design — only ratification-status flips on each DM and this revision-log entry.
