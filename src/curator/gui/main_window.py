@@ -24,6 +24,7 @@ event loop.
 
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -295,6 +296,18 @@ class CuratorMainWindow(QMainWindow):
             self._slot_migrate_job_selected,
         )
 
+        # v1.1.0 Tracer Phase 2 Session C2: right-click context menu for
+        # Abort / Resume mutations on individual jobs.
+        self._migrate_jobs_view.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu,
+        )
+        self._migrate_jobs_view.customContextMenuRequested.connect(
+            self._show_migrate_context_menu,
+        )
+        # Track background resume threads so tests can join them and
+        # the GUI's Refresh can prefer fresh state over stale cache.
+        self._migrate_resume_threads: list[threading.Thread] = []
+
         # Top half: jobs label + jobs view.
         jobs_wrapper = QWidget()
         jobs_layout = QVBoxLayout(jobs_wrapper)
@@ -386,6 +399,201 @@ class CuratorMainWindow(QMainWindow):
         # No prior selection (or job vanished) -> just refresh progress
         # for whatever the model currently shows.
         self._migrate_progress_model.refresh()
+
+    # ------------------------------------------------------------------
+    # v1.1.0 Tracer Phase 2 Session C2: Migrate tab mutations
+    # (right-click context menu -> Abort / Resume)
+    # ------------------------------------------------------------------
+
+    # Statuses for which Resume makes sense (queued, paused-by-abort,
+    # finished-with-failures, partial). Excluded: 'running' (already
+    # in flight) and 'completed' (no work left).
+    _MIGRATE_RESUMABLE_STATUSES = frozenset(
+        {"queued", "cancelled", "partial", "failed"}
+    )
+
+    def _show_migrate_context_menu(self, pos: QPoint) -> None:
+        """Right-click context menu on the migration jobs table.
+
+        Builds a menu with Abort + Resume actions. Each is enabled only
+        when the job's current status admits the action -- abort only
+        for ``running`` jobs, resume only for jobs in
+        :attr:`_MIGRATE_RESUMABLE_STATUSES`.
+        """
+        idx = self._migrate_jobs_view.indexAt(pos)
+        if not idx.isValid():
+            return
+        row = idx.row()
+        job = self._migrate_jobs_model.job_at(row)
+        if job is None:
+            return
+
+        menu = QMenu(self._migrate_jobs_view)
+        act_abort = menu.addAction("Abort job\u2026")
+        act_abort.setEnabled(job.status == "running")
+        act_abort.setToolTip(
+            "Signal a running job to stop. Workers finish their current "
+            "file (per-file atomicity is preserved), then exit."
+        )
+
+        act_resume = menu.addAction("Resume job (background)\u2026")
+        act_resume.setEnabled(
+            job.status in self._MIGRATE_RESUMABLE_STATUSES
+        )
+        act_resume.setToolTip(
+            "Start (or resume) the job in a background thread. The GUI "
+            "stays responsive; click Refresh to see updated progress."
+        )
+
+        chosen = menu.exec(
+            self._migrate_jobs_view.viewport().mapToGlobal(pos)
+        )
+        if chosen is act_abort:
+            self._slot_migrate_abort_at_row(row)
+        elif chosen is act_resume:
+            self._slot_migrate_resume_at_row(row)
+
+    def _slot_migrate_abort_at_row(self, row: int) -> None:
+        """Confirmation dialog -> :meth:`_perform_migrate_abort` -> result dialog."""
+        job = self._migrate_jobs_model.job_at(row)
+        if job is None:
+            return
+        short_id = str(job.job_id)[:8]
+        confirm = QMessageBox.question(
+            self,
+            "Abort migration job",
+            (
+                f"Abort job <code>{short_id}\u2026</code>? Workers will "
+                "finish their current file (per-file atomicity is "
+                "preserved) and then exit."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        success, message = self._perform_migrate_abort(job.job_id)
+        icon = (
+            QMessageBox.Icon.Information if success
+            else QMessageBox.Icon.Warning
+        )
+        box = QMessageBox(icon, "Abort job", message, parent=self)
+        box.exec()
+        # Refresh so the user sees the status update sooner rather than
+        # later -- abort_job is fire-and-forget; the actual status flip
+        # to 'cancelled' happens when workers return.
+        self._slot_migrate_refresh()
+
+    def _slot_migrate_resume_at_row(self, row: int) -> None:
+        """Confirmation dialog -> :meth:`_perform_migrate_resume` -> result dialog."""
+        job = self._migrate_jobs_model.job_at(row)
+        if job is None:
+            return
+        short_id = str(job.job_id)[:8]
+        confirm = QMessageBox.question(
+            self,
+            "Resume migration job",
+            (
+                f"Resume job <code>{short_id}\u2026</code> in the "
+                "background? The GUI will stay responsive; click "
+                "Refresh to see updated progress."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        success, message = self._perform_migrate_resume(job.job_id)
+        icon = (
+            QMessageBox.Icon.Information if success
+            else QMessageBox.Icon.Warning
+        )
+        box = QMessageBox(icon, "Resume job", message, parent=self)
+        box.exec()
+        # Refresh once now so the user sees the status flip from queued
+        # /cancelled/etc to 'running' as the worker thread starts.
+        self._slot_migrate_refresh()
+
+    def _perform_migrate_abort(
+        self, job_id: UUID,
+    ) -> tuple[bool, str]:
+        """Signal a running job to stop. Best-effort. Never raises.
+
+        Returns ``(success, message)`` suitable to display in a dialog.
+        Aborting a job that isn't currently running is a no-op at the
+        service layer, but we still surface that as ``success=True``
+        because the user's intent (job not running) is satisfied.
+        """
+        try:
+            self.runtime.migration.abort_job(job_id)
+        except Exception as e:  # noqa: BLE001 -- boundary catch
+            return False, f"Failed to abort job: {type(e).__name__}: {e}"
+        return True, (
+            f"Abort signaled for job {str(job_id)[:8]}\u2026\n\n"
+            "Workers finish their current files atomically. The job's "
+            "status will flip to 'cancelled' once all workers have "
+            "returned. Click Refresh to see the updated status."
+        )
+
+    def _perform_migrate_resume(
+        self, job_id: UUID, *, workers: int = 4,
+    ) -> tuple[bool, str]:
+        """Start a background thread running ``migration.run_job``. Best-effort.
+
+        Returns ``(success, message)`` indicating whether the thread was
+        started. Does NOT wait for run_job to complete -- that's the
+        whole point of running it in the background; the GUI stays
+        responsive.
+
+        Refuses if the job is currently 'running' (would race-condition
+        with the existing run) or 'completed' (no work left). Never
+        raises; refusal returns ``(False, message)``.
+        """
+        try:
+            status = self.runtime.migration.get_job_status(job_id)
+        except Exception as e:  # noqa: BLE001 -- boundary catch
+            return False, (
+                f"Failed to query job status: {type(e).__name__}: {e}"
+            )
+
+        cur = status.get("status", "")
+        if cur == "running":
+            return False, (
+                f"Job {str(job_id)[:8]}\u2026 is already running. Use Abort "
+                "first if you want to interrupt and re-start it."
+            )
+        if cur == "completed":
+            return False, (
+                f"Job {str(job_id)[:8]}\u2026 is already completed; "
+                "nothing to resume."
+            )
+
+        def _runner() -> None:
+            try:
+                self.runtime.migration.run_job(job_id, workers=workers)
+            except Exception as e:  # noqa: BLE001 -- non-Qt thread boundary
+                # The failure surfaces in the GUI on next Refresh via
+                # the job's status field. Log here so it's not silent.
+                from loguru import logger
+                logger.warning(
+                    "MigrationService.run_job (GUI background) raised: {e}",
+                    e=e,
+                )
+
+        thread = threading.Thread(
+            target=_runner,
+            name=f"curator-gui-resume-{str(job_id)[:8]}",
+            daemon=True,
+        )
+        thread.start()
+        # Track the thread so refresh / shutdown can prefer fresh state.
+        if not hasattr(self, "_migrate_resume_threads"):
+            self._migrate_resume_threads = []
+        self._migrate_resume_threads.append(thread)
+
+        return True, (
+            f"Resume started in the background.\n\n"
+            f"Job {str(job_id)[:8]}\u2026 will run with {workers} "
+            "workers. Click Refresh to see progress."
+        )
 
     def _build_audit_tab(self) -> QWidget:
         """v0.37: audit log view. Read-only, no context menu.

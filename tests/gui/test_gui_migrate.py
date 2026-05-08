@@ -22,6 +22,7 @@ progress signal wiring during ``run_job``. Those land in Session C2.
 from __future__ import annotations
 
 from datetime import datetime
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -507,5 +508,216 @@ class TestMigrateTabWiring:
             # The slot fires; progress should be cleared
             assert window._migrate_progress_model.job_id is None
             assert "select a job above" in window._migrate_progress_label.text()
+        finally:
+            window.deleteLater()
+
+
+# ===========================================================================
+# v1.1.0 Tracer Phase 2 Session C2: Migrate tab mutations
+# (Abort + Resume context menu actions)
+# ===========================================================================
+
+
+class TestPerformMigrateAbort:
+    """Unit tests for ``_perform_migrate_abort`` -- the no-raise wrapper
+    around ``migration.abort_job``. Tests don't run the modal dialog;
+    they exercise the perform method directly."""
+
+    def test_abort_calls_service_and_returns_success(
+        self, qapp, runtime_with_migrations,
+    ):
+        rt, jobs = runtime_with_migrations
+        window = CuratorMainWindow(rt)
+        try:
+            target_id = jobs[0].job_id
+            # Spy on the service-layer abort_job (it's a no-op for non-running
+            # jobs but should still be called).
+            with patch.object(
+                rt.migration, "abort_job", wraps=rt.migration.abort_job,
+            ) as spy:
+                success, message = window._perform_migrate_abort(target_id)
+            assert success is True
+            spy.assert_called_once_with(target_id)
+            assert str(target_id)[:8] in message
+            assert "abort" in message.lower()
+        finally:
+            window.deleteLater()
+
+    def test_abort_returns_failure_on_service_exception(
+        self, qapp, runtime_with_migrations,
+    ):
+        rt, jobs = runtime_with_migrations
+        window = CuratorMainWindow(rt)
+        try:
+            with patch.object(
+                rt.migration, "abort_job",
+                side_effect=RuntimeError("DB locked"),
+            ):
+                success, message = window._perform_migrate_abort(jobs[0].job_id)
+            assert success is False
+            assert "DB locked" in message
+            assert "failed to abort" in message.lower()
+        finally:
+            window.deleteLater()
+
+
+class TestPerformMigrateResume:
+    """Unit tests for ``_perform_migrate_resume`` -- starts a background
+    thread running ``migration.run_job`` and returns immediately. Tests
+    mock run_job so they don't actually move bytes."""
+
+    def test_resume_refuses_running_job(self, qapp, runtime_with_migrations):
+        rt, jobs = runtime_with_migrations
+        window = CuratorMainWindow(rt)
+        try:
+            running_job = next(j for j in jobs if j.status == "running")
+            success, message = window._perform_migrate_resume(running_job.job_id)
+            assert success is False
+            assert "already running" in message.lower()
+            # Defensive: no background thread was started
+            assert all(
+                t.name != f"curator-gui-resume-{str(running_job.job_id)[:8]}"
+                for t in window._migrate_resume_threads
+            )
+        finally:
+            window.deleteLater()
+
+    def test_resume_refuses_completed_job(self, qapp, runtime_with_migrations):
+        rt, jobs = runtime_with_migrations
+        window = CuratorMainWindow(rt)
+        try:
+            completed_job = next(j for j in jobs if j.status == "completed")
+            success, message = window._perform_migrate_resume(
+                completed_job.job_id,
+            )
+            assert success is False
+            assert "completed" in message.lower()
+            assert "nothing to resume" in message.lower()
+        finally:
+            window.deleteLater()
+
+    def test_resume_starts_background_thread_for_queued_job(
+        self, qapp, runtime_with_migrations,
+    ):
+        """Resume on a queued job spawns a daemon thread; the thread
+        calls ``migration.run_job`` with the right job_id; the perform
+        method returns immediately (does not block)."""
+        rt, _ = runtime_with_migrations
+        window = CuratorMainWindow(rt)
+        try:
+            # Insert a fresh queued job (the seeded ones are completed/running)
+            from curator.models.migration import MigrationJob
+            queued = MigrationJob(
+                src_source_id="local", src_root="/q",
+                dst_source_id="local", dst_root="/r",
+                status="queued", files_total=1,
+            )
+            rt.migration_job_repo.insert_job(queued)
+
+            # Mock run_job so it just records the call and returns instantly
+            mock_run = MagicMock(return_value=None)
+            with patch.object(rt.migration, "run_job", mock_run):
+                success, message = window._perform_migrate_resume(
+                    queued.job_id, workers=2,
+                )
+                assert success is True
+                assert "resume started" in message.lower()
+                assert "2 workers" in message
+                # Wait for the background thread to actually invoke run_job
+                assert len(window._migrate_resume_threads) >= 1
+                last_thread = window._migrate_resume_threads[-1]
+                assert last_thread.daemon is True
+                last_thread.join(timeout=5.0)
+                assert not last_thread.is_alive()
+            # The mock was called from inside the thread
+            mock_run.assert_called_once_with(queued.job_id, workers=2)
+        finally:
+            window.deleteLater()
+
+    def test_resume_thread_swallows_run_job_exception(
+        self, qapp, runtime_with_migrations,
+    ):
+        """If run_job raises in the background thread, the perform
+        method still returns success (it only reports thread-start),
+        and the exception doesn't propagate to the GUI thread."""
+        rt, _ = runtime_with_migrations
+        window = CuratorMainWindow(rt)
+        try:
+            from curator.models.migration import MigrationJob
+            queued = MigrationJob(
+                src_source_id="local", src_root="/q",
+                dst_source_id="local", dst_root="/r",
+                status="queued", files_total=1,
+            )
+            rt.migration_job_repo.insert_job(queued)
+
+            mock_run = MagicMock(side_effect=RuntimeError("boom"))
+            with patch.object(rt.migration, "run_job", mock_run):
+                success, message = window._perform_migrate_resume(
+                    queued.job_id,
+                )
+                # Perform method still returns True -- thread started fine
+                assert success is True
+                # Wait for the thread; it should swallow the exception
+                last_thread = window._migrate_resume_threads[-1]
+                last_thread.join(timeout=5.0)
+                assert not last_thread.is_alive()
+            mock_run.assert_called_once()
+        finally:
+            window.deleteLater()
+
+    def test_resume_returns_failure_when_job_not_found(
+        self, qapp, runtime_with_migrations,
+    ):
+        rt, _ = runtime_with_migrations
+        window = CuratorMainWindow(rt)
+        try:
+            success, message = window._perform_migrate_resume(uuid4())
+            assert success is False
+            assert "not found" in message.lower()
+        finally:
+            window.deleteLater()
+
+
+class TestMigrateContextMenuEnabling:
+    """Verify context-menu actions are enabled/disabled based on the
+    selected job's status. We don't pop the menu (would require modal
+    interaction); we test the encapsulated rule in
+    ``_MIGRATE_RESUMABLE_STATUSES`` and the per-action enable logic."""
+
+    def test_resumable_statuses_include_queued_cancelled_partial_failed(
+        self, qapp, runtime_with_migrations,
+    ):
+        rt, _ = runtime_with_migrations
+        window = CuratorMainWindow(rt)
+        try:
+            assert "queued" in window._MIGRATE_RESUMABLE_STATUSES
+            assert "cancelled" in window._MIGRATE_RESUMABLE_STATUSES
+            assert "partial" in window._MIGRATE_RESUMABLE_STATUSES
+            assert "failed" in window._MIGRATE_RESUMABLE_STATUSES
+        finally:
+            window.deleteLater()
+
+    def test_resumable_statuses_exclude_running_and_completed(
+        self, qapp, runtime_with_migrations,
+    ):
+        rt, _ = runtime_with_migrations
+        window = CuratorMainWindow(rt)
+        try:
+            assert "running" not in window._MIGRATE_RESUMABLE_STATUSES
+            assert "completed" not in window._MIGRATE_RESUMABLE_STATUSES
+        finally:
+            window.deleteLater()
+
+    def test_context_menu_policy_is_custom(self, qapp, runtime_with_migrations):
+        """The jobs view must have a CustomContextMenu policy so right-click
+        triggers ``customContextMenuRequested`` -> ``_show_migrate_context_menu``."""
+        rt, _ = runtime_with_migrations
+        window = CuratorMainWindow(rt)
+        try:
+            assert (
+                window._migrate_jobs_view.contextMenuPolicy()
+                == Qt.ContextMenuPolicy.CustomContextMenu
+            )
         finally:
             window.deleteLater()
