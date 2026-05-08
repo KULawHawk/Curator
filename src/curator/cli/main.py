@@ -2560,6 +2560,16 @@ def migrate_cmd(
              "job is persisted as a migration_jobs row so it can be "
              "--resume'd later. Phase 2.",
     ),
+    max_retries: int = typer.Option(
+        3, "--max-retries",
+        help="Per-file retry budget for transient cloud errors "
+             "(HTTP 4xx/5xx, ConnectionError, Timeout). Default 3; "
+             "0 disables retry; capped at 10. Exponential backoff "
+             "capped at 60s, with Retry-After header honored when "
+             "present. Affects cross-source migrations only "
+             "(same-source local-FS errors are mostly permanent and "
+             "don't benefit from retry). Phase 3.",
+    ),
     keep_source: bool = typer.Option(
         False, "--keep-source/--trash-source",
         help="--keep-source: dst created+verified, src untouched, index "
@@ -2740,6 +2750,7 @@ def migrate_cmd(
             "keep_source": keep_source, "include_caution": include_caution,
             "ext": ext_list, "includes": include_list, "excludes": exclude_list,
             "path_prefix": path_prefix,
+            "max_retries": max_retries,
         }
         job_id = rt.migration.create_job(
             plan, options=options,
@@ -2756,6 +2767,7 @@ def migrate_cmd(
             workers=workers,
             verify_hash=verify_hash,
             keep_source=keep_source,
+            max_retries=max_retries,
         )
         _render_migration_report(
             rt, report, console=console, job_id=job_id, keep_source=keep_source,
@@ -2771,6 +2783,7 @@ def migrate_cmd(
         db_path_guard=db_guard,
         keep_source=keep_source,
         include_caution=include_caution,
+        max_retries=max_retries,
     )
     _render_migration_report(
         rt, report, console=console, keep_source=keep_source,

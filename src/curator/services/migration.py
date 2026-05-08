@@ -82,6 +82,7 @@ from loguru import logger
 from curator.models.audit import AuditEntry
 from curator.models.file import FileEntity
 from curator.models.migration import MigrationJob, MigrationProgress
+from curator.services.migration_retry import retry_transient_errors
 from curator.services.safety import SafetyLevel, SafetyService
 from curator.storage.queries import FileQuery
 from curator.storage.repositories.audit_repo import AuditRepository
@@ -279,10 +280,31 @@ class MigrationService:
         self.audit = audit
         self.migration_jobs = migration_jobs
         self.pm = pm
+        # Phase 3 retry policy (DM-1, DM-2, DM-3). Read by
+        # `migration_retry.retry_transient_errors` decorator wrapping
+        # `_cross_source_transfer`. Set per-job via :meth:`set_max_retries`.
+        self._max_retries: int = 3
+        self._retry_backoff_cap: float = 60.0
         # Phase 2 worker-pool abort signaling: maps job_id -> Event
         # set when ``abort_job`` is called. Workers check between files.
         self._abort_events: dict[UUID, threading.Event] = {}
         self._abort_lock = threading.Lock()
+
+    def set_max_retries(self, n: int) -> None:
+        """Configure per-job retry budget for transient errors.
+
+        Sets ``self._max_retries`` clamped to ``[0, 10]``. Read by
+        :func:`migration_retry.retry_transient_errors` decorator wrapping
+        :meth:`_cross_source_transfer`. ``n=0`` disables retry entirely
+        (immediate FAILED on first transient error).
+
+        See ``docs/TRACER_PHASE_3_DESIGN.md`` v0.2 §3 DM-2.
+        """
+        if n < 0:
+            n = 0
+        if n > 10:
+            n = 10
+        self._max_retries = n
 
     # ------------------------------------------------------------------
     # Plan
@@ -463,6 +485,7 @@ class MigrationService:
         db_path_guard: Path | None = None,
         keep_source: bool = False,
         include_caution: bool = False,
+        max_retries: int = 3,
     ) -> MigrationReport:
         """Execute the plan with hash-verify-before-move per file.
 
@@ -499,6 +522,10 @@ class MigrationService:
             A :class:`MigrationReport` with one :class:`MigrationMove`
             per planned move (regardless of outcome).
         """
+        # Phase 3: configure retry budget for transient errors. Decorator
+        # on ``_cross_source_transfer`` reads ``self._max_retries``.
+        self.set_max_retries(max_retries)
+
         report = MigrationReport(plan=plan)
 
         for src_move in plan.moves:
@@ -944,6 +971,7 @@ class MigrationService:
             offset += len(chunk)
         return b"".join(chunks)
 
+    @retry_transient_errors
     def _cross_source_transfer(
         self,
         *,
@@ -1213,6 +1241,7 @@ class MigrationService:
         verify_hash: bool = True,
         keep_source: bool = False,
         on_progress: Callable[[MigrationProgress], None] | None = None,
+        max_retries: int = 3,
     ) -> MigrationReport:
         """Execute or resume a persisted job using a worker pool.
 
@@ -1268,6 +1297,19 @@ class MigrationService:
         job = self.migration_jobs.get_job(job_id)
         if job is None:
             raise ValueError(f"MigrationJob {job_id} not found")
+
+        # Phase 3: configure retry budget. Prefer the parameter (CLI may
+        # have passed --max-retries explicitly); fall back to the persisted
+        # ``options['max_retries']`` so a resumed job inherits its original
+        # retry policy without the user having to re-specify the flag.
+        effective_retries: int = max_retries
+        try:
+            persisted = job.options.get("max_retries")
+            if persisted is not None and max_retries == 3:  # 3 is the default
+                effective_retries = int(persisted)
+        except (AttributeError, TypeError, ValueError):
+            pass
+        self.set_max_retries(effective_retries)
 
         # Already-completed jobs are no-ops; return their report.
         if job.status == "completed":
