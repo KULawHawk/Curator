@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = ["files", "deduplication", "lineage", "metadata", "curation"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",
     "Operating System :: Microsoft :: Windows",
@@ -125,9 +125,10 @@ curator = "curator.cli.main:app"
 # example_plugin = "curatorplug.example:Plugin"
 
 [project.urls]
-Homepage = "https://github.com/jmlee/curator"
-Documentation = "https://github.com/jmlee/curator/blob/main/DESIGN.md"
-Issues = "https://github.com/jmlee/curator/issues"
+Homepage = "https://github.com/KULawHawk/Curator"
+Documentation = "https://github.com/KULawHawk/Curator/blob/main/DESIGN.md"
+Issues = "https://github.com/KULawHawk/Curator/issues"
+Changelog = "https://github.com/KULawHawk/Curator/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["src"]

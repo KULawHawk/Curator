@@ -2,13 +2,15 @@
 
 A content-aware artifact intelligence layer for files.
 
-**Status:** Phase Beta (gate #1 complete, gate #3 v0.17 shipped)
+**Status:** v1.1.0 stable (released 2026-05-08). v1.0.0rc1 was the stability anchor; v1.1.0 ships the Migration tool ("Tracer") with persistent resumable jobs, worker-pool concurrency, cross-source migration, and a PySide6 Migrate tab. See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
 
 Curator gives every file a stable identity, tracks relationships and lineage between files with confidence scores, knows where files belong, and makes every destructive operation reversible.
 
 ## Documentation
 
+- [`CHANGELOG.md`](CHANGELOG.md) — release history (v1.0.0rc1, v1.1.0a1, v1.1.0)
 - [`DESIGN.md`](DESIGN.md) — implementation specification (21 sections)
+- [`docs/TRACER_PHASE_2_DESIGN.md`](docs/TRACER_PHASE_2_DESIGN.md) — Migration tool (Tracer) Phase 2 design + implementation evidence
 - [`Github/CURATOR_RESEARCH_NOTES.md`](Github/CURATOR_RESEARCH_NOTES.md) — research findings, decision rationale, tracker items
 - [`Github/PROCUREMENT_INDEX.md`](Github/PROCUREMENT_INDEX.md) — repository catalog and adoption verdicts
 - [`BUILD_TRACKER.md`](BUILD_TRACKER.md) — implementation progress
@@ -42,7 +44,7 @@ Curator/
     └── corpus/                # synthetic test fixtures
 ```
 
-## Install (Phase Alpha — development)
+## Install
 
 ```powershell
 # From Curator/ project root
@@ -95,6 +97,45 @@ Under the hood:
 * `--apply` pipes each event through `ScanService.scan_paths(source_id, [path])` — same hash + classification + lineage pipeline as a full scan, but for one file at a time.
 
 A standalone runnable example lives at [`examples/watch_demo.py`](examples/watch_demo.py).
+
+## Migration (Tracer) — v1.1.0
+
+Tracer is Curator's brand for relocating files across paths with full
+hash-verify-before-move discipline, `curator_id` constancy (lineage
+edges and bundle memberships are preserved across moves), audit log
+integration, and persistent resumable jobs. Same-source
+local→local, cross-source local↔gdrive (and any future plugin pair via
+the `curator_source_write` hook), worker-pool concurrency, and a
+PySide6 "Migrate" tab in the GUI.
+
+```powershell
+# Plan a migration (no mutations)
+curator migrate local "C:/Music" "D:/Music"
+
+# Apply with parallel workers, persistent job, resumable
+curator migrate local "C:/Music" "D:/Music" --apply --workers 4
+
+# Filter by extension, glob include/exclude, path prefix
+curator migrate local "C:/Music" "D:/Music" --apply --include "**/*.flac" --exclude "**/draft/**"
+
+# Cross-source: local → Google Drive
+curator migrate local "C:/Music" /Music --apply --dst-source-id gdrive:jake@example.com
+
+# Job lifecycle
+curator migrate --list
+curator migrate --status <job_id>
+curator migrate --resume <job_id> --apply
+curator migrate --abort <job_id>
+
+# Keep source intact (creates a verified copy at dst, leaves src untouched)
+curator migrate local "C:/Music" "D:/Music" --apply --keep-source
+```
+
+The GUI's Migrate tab provides the same capabilities with right-click
+Abort/Resume on running jobs and live cross-thread progress signals
+from the worker pool to the GUI thread (no manual Refresh needed).
+See [`docs/TRACER_PHASE_2_DESIGN.md`](docs/TRACER_PHASE_2_DESIGN.md)
+for the full Phase 2 design + per-DM implementation evidence.
 
 ## Optional features
 
