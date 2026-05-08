@@ -25,7 +25,7 @@ Today (`curatorplug-atrium-safety` v0.2.0), the safety plugin's enforcement deci
 2. The propagated `ComplianceError` message landing in `MigrationMove.error` — but only for *refusals*. Successful approvals leave no trace.
 3. Side effects on the migration outcome — but those don't distinguish "migration succeeded because the plugin approved" from "migration succeeded because no enforcement plugin was installed".
 
-This means a user running `curator audit-log query --action migration.move` sees the migration events but has no way to query "which writes did the safety plugin approve?" or "which writes did it refuse, and on what grounds?". That visibility is exactly what `curatorplug-atrium-safety/DESIGN.md` v0.2 DM-3 ratified — "Use Curator's existing audit log via `actor='curatorplug.atrium_safety'`" — but the implementation can't actually do it because plugins don't have direct repo access.
+This means a user running `curator audit --action migration.move` sees the migration events but has no way to query "which writes did the safety plugin approve?" or "which writes did it refuse, and on what grounds?". That visibility is exactly what `curatorplug-atrium-safety/DESIGN.md` v0.2 DM-3 ratified — "Use Curator's existing audit log via `actor='curatorplug.atrium_safety'`" — but the implementation can't actually do it because plugins don't have direct repo access.
 
 ### 1.2 The general capability being added
 
@@ -42,7 +42,7 @@ All three need the same primitive: structured-event-emission-from-plugin. This d
 ### 1.3 What this is NOT
 
 - **Not** a new audit table or schema change. The existing `migration_audit` table (and its `actor`/`action`/`entity_type`/`entity_id`/`details_json` columns) is exactly what we need; this design just adds a write path that doesn't require runtime/repo access.
-- **Not** a way to *query* the audit log from a plugin. Read access via `curator audit-log` CLI / future GUI tab is unchanged. Plugins emit; they don't consume.
+- **Not** a way to *query* the audit log from a plugin. Read access via `curator audit` CLI / future GUI tab is unchanged. Plugins emit; they don't consume.
 - **Not** a synchronous-guarantee mechanism. Audit writes are best-effort per Curator's existing convention (`MigrationService._audit_move` already swallows insert failures with a warning log). Plugins must not assume their event was persisted.
 - **Not** coupled to PLUGIN_INIT. This hookspec is independent — plugins call it via `pm.hook.curator_audit_event(...)` from inside other hookimpls, exactly like the safety plugin already calls `pm.hook.curator_source_read_bytes(...)` for re-read verification (which DOES require PLUGIN_INIT). A plugin that uses this hookspec but not PLUGIN_INIT would need its own way to get the pm reference, e.g., via `curator_plugin_init` (recommended) or via the future `curator_audit_event` being callable through a different mechanism (out of scope; not designing that here).
 
@@ -171,7 +171,7 @@ def curator_audit_event(
     Args:
         actor: who emitted the event. Convention: dotted name like
             ``'curator.migrate'`` (core) or ``'curatorplug.atrium_safety'``
-            (plugin). Curator's audit-log query CLI filters by actor.
+            (plugin). Curator's `audit` CLI command filters by actor.
         action: what happened. Convention: dotted verb-phrase like
             ``'migration.move'``, ``'compliance.refused'``,
             ``'reversibility.checked'``. The CLI filters by action.
@@ -313,7 +313,7 @@ Three sessions, ~1.75h total:
 - ✅ Existing test suites pass.
 - ✅ No new dependencies; no schema change.
 
-**v0.2.0 (`curatorplug-atrium-safety`) → v0.3.0 is a minor bump** because the audit log gains new entries (`compliance.approved`, `compliance.refused`, `compliance.warned`) that didn't exist before. Users running `curator audit-log query` will see new rows; users grepping audit log by `actor='curatorplug.atrium_safety'` will find data where there was none. That's the intended observable change.
+**v0.2.0 (`curatorplug-atrium-safety`) → v0.3.0 is a minor bump** because the audit log gains new entries (`compliance.approved`, `compliance.refused`, `compliance.warned`) that didn't exist before. Users running `curator audit` will see new rows; users grepping audit log by `actor='curatorplug.atrium_safety'` will find data where there was none. That's the intended observable change.
 
 ---
 
@@ -335,5 +335,5 @@ Three sessions, ~1.75h total:
   * **P2 — plugin v0.3.0 (~45 min planned, ~45 min actual).** Commit 8910748, tag v0.3.0 pushed to GitHub. `AtriumSafetyPlugin._fire_audit_event` helper emits structured events with three-level graceful degradation: no-op if `self.pm is None` (Curator < 1.1.2), no-op if `pm.hook.curator_audit_event` missing (Curator 1.1.2), best-effort try/except around the actual hook call. Audit emission added at all 5 enforcement decision branches in `curator_source_write_post`: decide-refuse, decide-approved-no-rr, rr-refuse, rr-warn, both-ok. Refusals fire audit BEFORE raising, so events survive even when MigrationService converts to FAILED. 4 new integration tests in `tests/integration/test_curator_runtime.py::TestComplianceAuditEvents` verify events actually persist by querying `runtime.audit_repo.query(actor="curatorplug.atrium_safety")`. Plugin suite 71/71 → 75/75.
   * **P3 — regression sweep + doc stamps (~30 min planned, ~30 min actual).** This commit. `curatorplug-atrium-safety/DESIGN.md` v0.3 → v0.4 IMPLEMENTED with the audit-log integration capability flipped from "out of scope" to "shipped end-to-end". This doc v0.2 → v0.3 IMPLEMENTED with the v0.3 revision-log entry you are reading. Final regression: 357/357 Curator slice + 75/75 plugin suite + 0 failures.
   * **Backward compat invariants from §6 verified:** existing plugins (core + atrium-safety v0.1.0/v0.2.0) continue to work; `MigrationService`'s direct-to-repo audit path is unchanged (DM-3 invariant); the only behavior change visible to users is the new `compliance.*` audit entries that the safety plugin v0.3.0 emits, which is the intended headline value.
-  * **Constitutional grounding satisfied:** Atrium Constitution Principle 4 (No Silent Failures) is now constitutionally satisfied for atrium-safety's enforcement decisions. Every approve/refuse/warn decision lands as a queryable audit row. `curator audit-log query --actor curatorplug.atrium_safety` returns real data.
+  * **Constitutional grounding satisfied:** Atrium Constitution Principle 4 (No Silent Failures) is now constitutionally satisfied for atrium-safety's enforcement decisions. Every approve/refuse/warn decision lands as a queryable audit row. `curator audit --actor curatorplug.atrium_safety` returns real data.
   * **What's next (out of scope for this design):** All four DMs answered. The hookspec is general-purpose, so future plugins (e.g., `curatorplug-atrium-reversibility`, an audit-aggregator plugin streaming to a SIEM) consume it without further design work. DM-3's deferred question (should `MigrationService` migrate from direct-to-repo writes to firing `curator_audit_event` itself?) remains deferred; revisit if a real consumer use case emerges.
