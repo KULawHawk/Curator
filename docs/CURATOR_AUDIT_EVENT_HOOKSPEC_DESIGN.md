@@ -1,6 +1,6 @@
 # Curator — `curator_audit_event` Hookspec Design
 
-**Status:** v0.1 — DRAFT, awaiting Jake's ratification of DM-1 through DM-4. No implementation has begun. Once the DMs are ratified, this doc flips to v0.2 RATIFIED and the implementation work in §5 is cleared to start.
+**Status:** v0.2 — RATIFIED 2026-05-08. Jake ratified all 4 DMs as recommended ("continue" against the explicit `ratify`-default convention). Implementation cleared to begin. P1 lands as Curator v1.1.3; P2 lands as `curatorplug-atrium-safety` v0.3.0; P3 is regression sweep + doc updates.
 **Date:** 2026-05-08
 **Authority:** Curator-side design. Closes the audit-channel gap that `curatorplug-atrium-safety/DESIGN.md` v0.3 §9 explicitly named as "out of scope, requires a separate design+ratification cycle". Lets plugins write structured audit entries via Curator's `AuditRepository` instead of `loguru.warning` calls.
 **Companion documents:**
@@ -76,7 +76,7 @@ Rationale: Plugin authors can call the hook without importing `AuditEntry` (whic
 
 (b) is more "Pythonic" but creates a tighter coupling. (c) is unnecessary complexity for a hookspec we'll fire from at most a few call sites in the safety plugin.
 
-**RATIFICATION STATUS:** ⚠ AWAITING JAKE.
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. Hookspec is field-based: `curator_audit_event(actor, action, entity_type, entity_id, details)`. Plugins call without importing `AuditEntry`; Curator core constructs the entry from the field args.
 
 ### DM-2 — Where the core hookimpl lives + how it gets the audit repo
 
@@ -94,7 +94,7 @@ Rationale: Consistent with how all other core plugins are structured (each in it
 
 The implementation needs `register_core_plugins` to receive the audit repo — currently `register_core_plugins(pm)` takes only the pm. Either change the signature to `register_core_plugins(pm, audit_repo)` (small breaking change to internal API; only `_create_plugin_manager` calls it) OR have `_create_plugin_manager` register `AuditWriterPlugin` itself after `register_core_plugins` returns. The latter is cleaner.
 
-**RATIFICATION STATUS:** ⚠ AWAITING JAKE.
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. New core plugin file `src/curator/plugins/core/audit_writer.py` with `AuditWriterPlugin(audit_repo)`. Instantiated and registered by `build_runtime` after the audit repo is constructed; before `_create_plugin_manager` fires `curator_plugin_init`.
 
 ### DM-3 — MigrationService: keep direct-to-repo writes or migrate to hook?
 
@@ -112,7 +112,7 @@ Rationale: (b) is technically nicer (single write path) but adds a hop and a dep
 
 The cost of (a) is some semantic asymmetry: `MigrationService`'s audit events are NOT visible to plugins implementing `curator_audit_event` hookimpl, while plugin-emitted events ARE. For the headline use case (safety plugin emitting compliance events), this is fine — those events go through the hookspec like the design intends.
 
-**RATIFICATION STATUS:** ⚠ AWAITING JAKE.
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. Keep direct writes for v1.1.3. `MigrationService._audit_move` and `_audit_copy` continue using `audit_repo.insert` directly. The new hookspec is purely for plugin-driven events. Migration to the hookspec is a future-release decision.
 
 ### DM-4 — Failure handling in the core hookimpl
 
@@ -128,11 +128,11 @@ Options:
 
 Rationale: Consistent with Curator's existing audit-write semantics (MigrationService swallows). Audit visibility is best-effort; the originating action's correctness should not depend on the audit write succeeding. A user with a corrupted DB has bigger problems than a missing audit entry. (b) creates a foot-gun where audit failures cascade into business-logic failures. (c) is over-engineered for a single-user tool.
 
-**RATIFICATION STATUS:** ⚠ AWAITING JAKE.
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. Log + swallow. Matches existing `MigrationService._audit_move` semantics. Audit visibility is best-effort; the originating action's correctness must not depend on audit persistence.
 
 ---
 
-## 4. Hookspec specification (assuming DM-1 = a)
+## 4. Hookspec specification (DM-1 ratified = a)
 
 Added to `src/curator/plugins/hookspecs.py` under a new "Audit channel" section:
 
@@ -329,3 +329,4 @@ Three sessions, ~1.75h total:
 ## 8. Revision log
 
 - **2026-05-08 v0.1** — first issued. Captures: §1 scope (the gap atrium-safety v0.3 §9 named; what the hookspec enables; what it's NOT), §2 invariants (additive, parallel-not-replacement, best-effort, no schema change, no reentrancy), §3 four DMs (signature, location/wiring, MigrationService migration, failure handling) with recommendations awaiting Jake's ratification, §4 hookspec specification (assuming DM-1=a) with full contract docstring + AuditWriterPlugin sketch, §5 three-session implementation plan (~1.75h: P1 Curator v1.1.3, P2 plugin v0.3.0, P3 regression + docs), §6 backward compatibility (v1.1.2→v1.1.3 patch; v0.2.0→v0.3.0 minor), §7 cross-references. No code has been written; no commits have landed. Next step: Jake reviews DMs → ratifies → doc flips to v0.2 RATIFIED → P1 → P2 → P3 lands.
+- **2026-05-08 v0.2** — RATIFIED. Jake ratified all 4 DM recommendations (DM-1 through DM-4) as written without modification. Doc status flips from "design proposal" to "approved spec"; P1 implementation cleared to begin. No structural changes — only ratification-status flips on each DM, the §4 header (now reads "DM-1 ratified = a"), and this revision-log entry.

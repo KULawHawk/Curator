@@ -23,6 +23,7 @@ def register_core_plugins(pm: pluggy.PluginManager) -> None:
     aggregated).
     """
     from curator.plugins.core import (
+        audit_writer,
         classify_filetype,
         gdrive_source,
         lineage_filename,
@@ -38,6 +39,10 @@ def register_core_plugins(pm: pluggy.PluginManager) -> None:
         ("lineage_hash_dup", lineage_hash_dup.Plugin),
         ("lineage_filename", lineage_filename.Plugin),
         ("lineage_fuzzy_dup", lineage_fuzzy_dup.Plugin),
+        # v1.1.3: audit-event writer (placeholder pattern -- registered
+        # here without audit_repo; injected by build_runtime once repo
+        # is constructed). See ``audit_writer.py`` module docstring.
+        ("audit_writer", audit_writer.AuditWriterPlugin),
     ]
 
     for name, plugin_cls in plugins:

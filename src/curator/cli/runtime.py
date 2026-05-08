@@ -144,6 +144,17 @@ def build_runtime(
     cache_repo = HashCacheRepository(db)
     migration_job_repo = MigrationJobRepository(db)
 
+    # v1.1.3: inject audit_repo into the AuditWriterPlugin core plugin.
+    # AuditWriterPlugin is registered before us (in register_core_plugins)
+    # with audit_repo=None as a placeholder; we inject the real repo here
+    # so subsequent curator_audit_event firings persist correctly. Events
+    # fired before this injection (e.g., from a plugin's curator_plugin_init
+    # hookimpl) are logged-and-dropped per DM-4 best-effort semantics.
+    # See docs/CURATOR_AUDIT_EVENT_HOOKSPEC_DESIGN.md v0.2 §4.
+    audit_writer = pm.get_plugin("curator.core.audit_writer")
+    if audit_writer is not None:
+        audit_writer.set_audit_repo(audit_repo)
+
     # Services
     audit = AuditService(audit_repo)
     classification = ClassificationService(pm)

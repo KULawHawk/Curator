@@ -444,3 +444,64 @@ def curator_plugin_init(pm: "pluggy.PluginManager") -> None:
     v0.2.0+ for the canonical consumer (independent re-read
     verification of cross-source migration writes).
     """
+
+
+# ============================================================================
+# Audit channel (v1.1.3+)
+# ============================================================================
+
+@hookspec
+def curator_audit_event(
+    actor: str,
+    action: str,
+    entity_type: str | None,
+    entity_id: str | None,
+    details: dict[str, Any],
+) -> None:
+    """Plugin-initiated audit log event.
+
+    Plugins call ``pm.hook.curator_audit_event(...)`` to emit a
+    structured event. Curator core implements a hookimpl
+    (``AuditWriterPlugin`` in ``curator.plugins.core.audit_writer``)
+    that constructs an :class:`~curator.models.audit.AuditEntry` from
+    these fields and persists it via ``AuditRepository.insert``.
+
+    Other plugins MAY also implement this hookspec to receive events
+    (e.g., a future audit-aggregator plugin streaming to a SIEM).
+    Pluggy's default ``firstresult=False`` applies; all hookimpls fire.
+
+    Hook semantics:
+
+    * **Best-effort persistence:** the core hookimpl logs and swallows
+      ``AuditRepository.insert`` failures. Plugins MUST NOT depend on
+      persistence success (per DM-4 of
+      ``docs/CURATOR_AUDIT_EVENT_HOOKSPEC_DESIGN.md`` v0.2).
+    * **Strictly additive:** plugins that don't fire this hook are
+      unaffected; the existing audit_repo direct-write path used by
+      ``MigrationService`` is unchanged (per DM-3).
+    * **No reentrancy:** the core hookimpl does NOT itself fire the
+      hookspec. Plugins' hookimpls SHOULD NOT either — recursive
+      firing is undefined.
+
+    Args:
+        actor: who emitted the event. Convention: dotted name like
+            ``'curator.migrate'`` (core) or
+            ``'curatorplug.atrium_safety'`` (plugin). Curator's
+            audit-log query CLI filters by actor.
+        action: what happened. Convention: dotted verb-phrase like
+            ``'migration.move'``, ``'compliance.refused'``,
+            ``'reversibility.checked'``. The CLI filters by action.
+        entity_type: the type of entity this event is ABOUT (e.g.
+            ``'file'``, ``'migration_job'``). Nullable for events that
+            don't relate to a specific entity (e.g., startup events).
+        entity_id: the entity's identifier (typically a UUID string
+            for files, a string ID for migrations). Nullable for the
+            same reasons as ``entity_type``.
+        details: freeform action-specific data, JSON-serialized when
+            persisted. Conventionally includes things like hashes,
+            sizes, mode flags, and human-readable reason strings.
+
+    See ``docs/CURATOR_AUDIT_EVENT_HOOKSPEC_DESIGN.md`` v0.2 for the
+    design that motivated this hookspec, and
+    ``curatorplug-atrium-safety`` v0.3.0+ for the canonical consumer.
+    """

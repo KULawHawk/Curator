@@ -4,6 +4,42 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.1.3] — 2026-05-08 — `curator_audit_event` plugin hookspec (audit channel)
+
+**Headline:** v1.1.2 → v1.1.3 (patch bump). Adds the `curator_audit_event` plugin hookspec and a core `AuditWriterPlugin` that persists plugin-emitted events to `AuditRepository`. Closes the audit-channel gap that `curatorplug-atrium-safety/DESIGN.md` v0.3 §9 named as out-of-scope: plugins can now write structured audit entries instead of (or alongside) `loguru` logging. Strictly additive; existing plugins and `MigrationService`'s direct-to-repo path are unaffected.
+
+### Added
+
+- **`curator_audit_event(actor, action, entity_type, entity_id, details)` hookspec** in `src/curator/plugins/hookspecs.py` under a new "Audit channel (v1.1.3+)" section. Field-based signature (per DM-1 RATIFIED): plugins call without importing `AuditEntry` from `curator.models.audit`. Pluggy's default `firstresult=False` applies; all hookimpls fire.
+- **`AuditWriterPlugin`** in `src/curator/plugins/core/audit_writer.py` (NEW file). Implements `curator_audit_event` hookimpl: constructs an `AuditEntry` from the field args and inserts via `AuditRepository.insert`. Uses a placeholder pattern — registered by `register_core_plugins` with `audit_repo=None`, then `build_runtime` injects the real repo via `set_audit_repo` after construction. Events fired before injection (e.g., from a plugin's `curator_plugin_init` hookimpl) log at debug level and drop, consistent with DM-4's best-effort semantics.
+- **Wiring in `register_core_plugins`** (`src/curator/plugins/core/__init__.py`): registers `AuditWriterPlugin` as `curator.core.audit_writer` alongside the other six core plugins.
+- **Wiring in `build_runtime`** (`src/curator/cli/runtime.py`): after `audit_repo` construction, calls `pm.get_plugin("curator.core.audit_writer").set_audit_repo(audit_repo)` to enable persistence.
+
+### Tests (+9 new — 348 → 357 in regression slice)
+
+- **`tests/unit/test_audit_writer.py`** (NEW, 9 tests):
+  - `TestAuditWriterPluginDirect` (4): hookimpl persists valid entry to a real repo; hookimpl swallows DB errors when insert raises (DM-4 best-effort); hookimpl drops events with debug log when audit_repo is None (placeholder pattern); `set_audit_repo` enables persistence for subsequent events.
+  - `TestAuditEventHookspecAfterBuildRuntime` (3): hookspec is reachable via `pm.hook.curator_audit_event(...)` after `build_runtime`; the AuditWriterPlugin core plugin is registered AND has its repo injected; firing an event via `pm.hook` actually persists to `runtime.audit_repo`.
+  - `TestExistingDirectAuditWritesStillWork` (2): regression guard for DM-3 — `audit_repo.insert(entry)` (the path `MigrationService` uses) still works unchanged; both write paths (direct insert + via hookspec) write to the same table and are queryable together.
+
+### Changed
+
+- Version `1.1.2` → `1.1.3` (patch). Strictly additive; no behavior change for users who don't have plugins firing the hook.
+- `pyproject.toml` and `__init__.py` `__version__` reflect 1.1.3.
+
+### Backward compatibility
+
+- **Strictly additive.** Existing plugins (`local_source`, `gdrive_source`, `classify_filetype`, `lineage_*`, `curatorplug-atrium-safety` v0.1.0/v0.2.0) work unchanged. They don't fire `curator_audit_event` so the new path is invisible to them.
+- **MigrationService unchanged.** Per DM-3 RATIFIED, `MigrationService._audit_move` and `_audit_copy` continue using direct-to-repo writes. The new hookspec is purely for plugin-driven events. Migration to the hookspec is a future-release decision.
+- **Existing CLI invocations identical.** `curator audit-log query`, `curator scan`, etc. unchanged.
+- **No schema change.** Reuses existing `migration_audit` table; `actor` field already accepts arbitrary strings; `details_json` is freeform.
+
+### Cross-references
+
+- `docs/CURATOR_AUDIT_EVENT_HOOKSPEC_DESIGN.md` v0.2 RATIFIED (commit ed... after this lands, will become v0.3 IMPLEMENTED in P3).
+- `curatorplug-atrium-safety/DESIGN.md` v0.3 §9 — the design doc that explicitly named this gap as the natural follow-on.
+- `curatorplug-atrium-safety` v0.3.0 (pending P2 of this plan) — the canonical consumer; will replace `loguru.warning` calls with structured `compliance.approved` / `compliance.refused` / `compliance.warned` audit events.
+
 ## [1.1.2] — 2026-05-08 — `curator_plugin_init` hookspec (PLUGIN_INIT P1)
 
 **Headline:** Patch release adding the `curator_plugin_init(pm)`
