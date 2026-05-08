@@ -400,3 +400,47 @@ def curator_api_routers() -> list[Any]:
 
     Returns a list of ``fastapi.APIRouter`` instances. Phase Gamma.
     """
+
+
+# ============================================================================
+# Plugin lifecycle (v1.1.2+)
+# ============================================================================
+
+@hookspec
+def curator_plugin_init(pm: "pluggy.PluginManager") -> None:
+    """One-time initialization notification for plugins.
+
+    Fired exactly once per ``pm``, after ALL plugins (core +
+    entry-point-discovered) have been registered. Plugins that need to
+    call OTHER plugins' hooks from inside their own hookimpls implement
+    this hookspec to receive a reference to the plugin manager and save
+    it for later use.
+
+    Hook semantics:
+
+    * **One-shot:** fired once per pm at the end of
+      ``_create_plugin_manager``. Plugins registered dynamically after
+      startup do NOT receive this hook (per DM-4 of
+      ``docs/PLUGIN_INIT_HOOKSPEC_DESIGN.md`` v0.2).
+    * **Multi-plugin:** all plugins implementing this hookspec are
+      invoked. Pluggy's default ``firstresult=False`` applies; results
+      (typically ``None``) are not consumed.
+    * **Failure isolation:** a plugin's init hookimpl raising an
+      exception is caught and logged but does NOT abort startup or
+      de-register the plugin (per DM-3). Subsequent hookimpls of the
+      misbehaving plugin may behave oddly; that's the plugin author's
+      problem to surface.
+    * **Strictly additive:** plugins that don't implement this hookspec
+      are unaffected.
+
+    Args:
+        pm: the plugin manager that holds this plugin and all its
+            siblings. Plugins typically save it as ``self.pm`` and
+            use ``self.pm.hook.<other_hook>(...)`` from inside other
+            hookimpls.
+
+    See ``docs/PLUGIN_INIT_HOOKSPEC_DESIGN.md`` v0.2 for the design
+    that motivated this hookspec, and ``curatorplug-atrium-safety``
+    v0.2.0+ for the canonical consumer (independent re-read
+    verification of cross-source migration writes).
+    """

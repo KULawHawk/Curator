@@ -1,6 +1,6 @@
 # Curator — `curator_plugin_init` Hookspec Design
 
-**Status:** v0.1 — DRAFT, awaiting Jake's ratification of DM-1 through DM-4. No implementation has begun. Once the DMs are ratified, this doc flips to v0.2 RATIFIED and the implementation work in §5 is cleared to start.
+**Status:** v0.2 — RATIFIED 2026-05-08. Jake ratified all 4 DMs as recommended ("continue" against the explicit `ratify`-default convention). Implementation cleared to begin. P1 lands as Curator v1.1.2; P2 lands as `curatorplug-atrium-safety` v0.2.0; P3 is regression sweep + doc updates.
 **Date:** 2026-05-08
 **Authority:** Curator-side design. Provides the plumbing that lets `curatorplug-atrium-safety` (and future Curator plugins like `curatorplug-atrium-reversibility`) deliver headline value that requires a plugin to call OTHER plugins' hooks from inside its own hookimpls.
 **Companion documents:**
@@ -73,7 +73,7 @@ Rationale: Minimal surface area. The motivating use case is calling other plugin
 
 If a plugin needs runtime-level access (e.g., the safety plugin's DM-3 desire to write to the audit log), the right answer is a separate, narrowly-scoped hookspec like `curator_audit_event(actor, action, entity_id, details)` that Curator core implements. That's a different design doc; not blocked by this one.
 
-**RATIFICATION STATUS:** ⚠ AWAITING JAKE.
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. Hookspec is `curator_plugin_init(pm: pluggy.PluginManager) -> None`. Pm-only; minimal surface area; future runtime/repo access via separate narrow hookspecs.
 
 ### DM-2 — When the hook fires
 
@@ -91,7 +91,7 @@ Rationale: A plugin's init hookimpl might want to query the pm for what other pl
 
 The cost of (a) is one extra invariant: the init hook MUST be the LAST thing `_create_plugin_manager` does before returning. Easy to enforce.
 
-**RATIFICATION STATUS:** ⚠ AWAITING JAKE.
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. Fires AFTER all plugins (core + entry-point-discovered) are registered. Init hookimpls can see all siblings via `pm.list_name_plugin()`.
 
 ### DM-3 — Behavior when a plugin's init hookimpl raises
 
@@ -109,7 +109,7 @@ Rationale: This is consistent with how `_create_plugin_manager` already handles 
 
 The downside of (a) is that a plugin whose init failed might still try to do work in subsequent hookimpls and produce confusing errors. That's acceptable; the warning at startup signals the issue clearly.
 
-**RATIFICATION STATUS:** ⚠ AWAITING JAKE.
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. Log + continue. Misbehaving plugin remains registered (consistent with existing `load_setuptools_entrypoints` failure handling and Atrium Principle 1 Reversibility at the operational level).
 
 ### DM-4 — Re-fire on dynamic plugin registration
 
@@ -127,11 +127,11 @@ Rationale: Dynamic plugin registration is a niche pattern (mostly tests). The tw
 
 If a future use case emerges where dynamic registration needs init, we can revisit. (b) requires wrapping `pm.register`, which is a more invasive change to pluggy's interface. (c) is what (a) becomes naturally; just document it.
 
-**RATIFICATION STATUS:** ⚠ AWAITING JAKE.
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. No re-fire on dynamic registration in v1.1.2. Documented as a known gap; revisit if a real use case appears.
 
 ---
 
-## 4. Hookspec specification (assuming DM-1 = a)
+## 4. Hookspec specification (DM-1 ratified = a)
 
 Added to `src/curator/plugins/hookspecs.py`:
 
@@ -283,3 +283,4 @@ Three sessions, ~2.0h total:
 ## 8. Revision log
 
 - **2026-05-08 v0.1** — first issued. Captures: §1 scope (the problem of plugins not having pm access; the general capability being added; what this is NOT), §2 invariants (additive, failure-tolerant, init-after-all-registered, once-per-plugin, invisible-to-non-opt-in), §3 four DMs (signature, timing, failure handling, dynamic registration) with recommendations awaiting Jake's ratification, §4 hookspec specification (assuming DM-1=a), §5 three-session implementation plan (~2.0h total: P1 Curator v1.1.2, P2 plugin v0.2.0, P3 regression + docs), §6 backward compatibility analysis (v1.1.1→v1.1.2 = patch; v0.1.0→v0.2.0 = minor for the plugin's behavior change), §7 cross-references. No code has been written; no commits have landed. Next step: Jake reviews DMs → ratifies (or modifies) → doc flips to v0.2 RATIFIED → P1 (Curator-side hookspec addition) → P2 (plugin v0.2.0) → P3 (regression + docs) lands.
+- **2026-05-08 v0.2** — RATIFIED. Jake ratified all 4 DM recommendations (DM-1 through DM-4) as written without modification (replied "continue" against the explicit `ratify`-default convention). Doc status flips from "design proposal" to "approved spec"; P1 implementation cleared to begin. No structural changes to the design — only ratification-status flips on each DM and this revision-log entry.

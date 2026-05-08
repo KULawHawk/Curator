@@ -4,6 +4,88 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.1.2] — 2026-05-08 — `curator_plugin_init` hookspec (PLUGIN_INIT P1)
+
+**Headline:** Patch release adding the `curator_plugin_init(pm)`
+plugin lifecycle hookspec. Lets plugins receive a reference to the
+plugin manager once at startup, so they can call OTHER plugins' hooks
+from inside their own hookimpls. Strictly additive; existing plugins
+work unchanged.
+
+### Added
+
+- **New hookspec** `curator_plugin_init(pm: pluggy.PluginManager) -> None`
+  in `src/curator/plugins/hookspecs.py`. Fired exactly once per pm at
+  the end of `_create_plugin_manager`, after all plugins (core +
+  entry-point-discovered) are registered. Plugins typically save the
+  pm reference as `self.pm` and use `self.pm.hook.<other>(...)` from
+  inside subsequent hookimpls. See
+  `docs/PLUGIN_INIT_HOOKSPEC_DESIGN.md` v0.2 for the full design and
+  the four ratified DMs. The motivating consumer is
+  `curatorplug-atrium-safety` v0.2.0+ which uses the pm to perform
+  independent re-read verification of cross-source migration writes
+  via `curator_source_read_bytes`; future plugins (`curatorplug-
+  atrium-reversibility`, audit-aggregator, etc.) consume the same
+  primitive.
+- **Manager wiring** in `src/curator/plugins/manager.py`. The init
+  hook fires as the LAST step of `_create_plugin_manager` (per DM-2
+  so init hookimpls can see all sibling plugins). Wrapped in a
+  defensive try/except so a plugin's init raising is logged at warn
+  level but does NOT abort startup or de-register the misbehaving
+  plugin (per DM-3, consistent with the existing
+  `load_setuptools_entrypoints` failure handling and Atrium Principle
+  1 Reversibility at the operational level).
+
+### Tests (+6 new — 342 → 348 in the migration + GUI + plugin-manager slice)
+
+- `tests/unit/test_plugin_manager.py` (NEW, 6 tests):
+  - `TestPluginInitFiresOnce` (2): hook fires exactly once via
+    `_create_plugin_manager` for entry-point-discovered plugins;
+    plugins registered dynamically AFTER startup do NOT receive the
+    hook (regression-guards DM-4).
+  - `TestPluginInitTiming` (1): when the hook fires, the pm already
+    has all core plugins registered — init hookimpls can list
+    siblings and do setup work that depends on them (regression-
+    guards DM-2).
+  - `TestPluginInitFailureIsolation` (2): a plugin's init raising
+    does NOT crash `_create_plugin_manager`; the misbehaving plugin
+    remains registered AND other plugins' init hookimpls still fire
+    (regression-guards DM-3).
+  - `TestPluginInitNoOpForSilentPlugins` (1): existing core plugins
+    that don't implement the new hookspec are completely unaffected
+    (regression-guards the strictly-additive invariant from §2).
+
+### Backward compatibility
+
+- **Strictly additive.** Plugins that don't implement the new
+  hookspec are not invoked. Existing source plugins (`local`,
+  `gdrive`) and `curatorplug-atrium-safety` v0.1.0 work unchanged
+  (verified: 348/348 in the migration + GUI slice; 53/53 in the
+  atrium-safety plugin's full suite with auto-discovered registration
+  firing the new hook on each Curator startup).
+- **No new dependencies.** Uses pluggy's existing hook mechanism.
+- **Schema unchanged.** No new tables, no new columns.
+
+### Why a patch (1.1.1 → 1.1.2) and not a minor (1.1.1 → 1.2.0)
+
+User-facing functionality didn't change. The new hookspec is
+preparatory infrastructure for `curatorplug-atrium-safety` v0.2.0
+(which doesn't ship in this release). Plugin authors building against
+Curator can pin `>= 1.1.2` to require the hookspec; users who don't
+install such plugins see no difference.
+
+### Cross-references
+
+- `docs/PLUGIN_INIT_HOOKSPEC_DESIGN.md` v0.2 (RATIFIED 2026-05-08) —
+  the design doc this commit implements P1 of.
+- `curatorplug-atrium-safety/DESIGN.md` v0.2 §5 — the deferred
+  re-read verification capability whose plumbing this commit
+  unblocks. P2 (plugin v0.2.0) and P3 (regression sweep + docs) of
+  PLUGIN_INIT_HOOKSPEC_DESIGN's plan land separately.
+- `Atrium\CONSTITUTION.md` Principle 2 — the invariant whose
+  third-party-plugin enforcement gains a defense-in-depth layer once
+  P2 ships in plugin v0.2.0.
+
 ## [1.1.1] — 2026-05-08 — `curator_source_write_post` hookspec (Tracer P1)
 
 **Headline:** Patch release adding the `curator_source_write_post`

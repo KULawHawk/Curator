@@ -75,4 +75,24 @@ def _create_plugin_manager() -> pluggy.PluginManager:
         # log and continue with core plugins only.
         logger.warning("Entry-point plugin discovery failed: {err}", err=e)
 
+    # Plugin lifecycle: fire one-shot init hook so plugins that need
+    # pm access can save the reference (v1.1.2+).
+    # Per DM-2 of docs/PLUGIN_INIT_HOOKSPEC_DESIGN.md v0.2, this MUST
+    # be the LAST step in _create_plugin_manager so init hookimpls can
+    # see all sibling plugins via pm.list_name_plugin().
+    # Per DM-3, a plugin's init hookimpl raising is caught and logged
+    # but does NOT abort startup or de-register the plugin.
+    try:
+        pm.hook.curator_plugin_init(pm=pm)
+    except Exception as e:  # noqa: BLE001 -- defensive boundary
+        # Pluggy may aggregate per-plugin failures into a single
+        # exception; this catch is insurance. The per-plugin log lines
+        # written by pluggy itself give specifics.
+        logger.warning(
+            "curator_plugin_init: at least one plugin's init hookimpl "
+            "raised; check earlier log lines for the specific plugin. "
+            "Misbehaving plugin remains registered but may behave "
+            "oddly in subsequent hookimpls. Cause: {err}", err=e,
+        )
+
     return pm
