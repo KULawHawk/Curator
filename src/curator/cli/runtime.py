@@ -47,6 +47,7 @@ from curator.storage.repositories import (
     FileRepository,
     HashCacheRepository,
     LineageRepository,
+    MigrationJobRepository,
     ScanJobRepository,
     SourceRepository,
     TrashRepository,
@@ -79,6 +80,7 @@ class CuratorRuntime:
     source_repo: SourceRepository
     job_repo: ScanJobRepository
     cache_repo: HashCacheRepository
+    migration_job_repo: MigrationJobRepository
 
     # Services
     audit: AuditService
@@ -140,6 +142,7 @@ def build_runtime(
     source_repo = SourceRepository(db)
     job_repo = ScanJobRepository(db)
     cache_repo = HashCacheRepository(db)
+    migration_job_repo = MigrationJobRepository(db)
 
     # Services
     audit = AuditService(audit_repo)
@@ -188,6 +191,7 @@ def build_runtime(
         source_repo=source_repo,
         job_repo=job_repo,
         cache_repo=cache_repo,
+        migration_job_repo=migration_job_repo,
         audit=audit,
         classification=classification,
         hash_pipeline=hash_pipeline,

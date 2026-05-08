@@ -16,6 +16,12 @@ from curator.models.bundle import BundleEntity, BundleMembership
 from curator.models.file import FileEntity
 from curator.models.jobs import ScanJob
 from curator.models.lineage import LineageEdge, LineageKind
+from curator.models.migration import (
+    MigrationJob,
+    MigrationJobStatus,
+    MigrationProgress,
+    MigrationProgressStatus,
+)
 from curator.models.results import (
     BundleProposal,
     BundleProposalMember,
@@ -42,6 +48,10 @@ __all__ = [
     "AuditEntry",
     "SourceConfig",
     "ScanJob",
+    "MigrationJob",
+    "MigrationJobStatus",
+    "MigrationProgress",
+    "MigrationProgressStatus",
     # Source plugin types
     "FileInfo",
     "FileStat",

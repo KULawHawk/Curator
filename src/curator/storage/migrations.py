@@ -39,6 +39,71 @@ def migration_001_initial(conn: sqlite3.Connection) -> None:
     conn.executescript(sql)
 
 
+def migration_002_migration_jobs_and_progress(conn: sqlite3.Connection) -> None:
+    """Add ``migration_jobs`` and ``migration_progress`` tables for Tracer
+    Phase 2 (resumable, worker-pool-able, GUI-trackable migrations).
+
+    See ``docs/TRACER_PHASE_2_DESIGN.md`` §4 for the full schema rationale.
+
+    Phase 1 (v1.1.0a1) doesn't use these tables; it executes plans
+    in-memory and returns a transient :class:`MigrationReport`. Phase 2's
+    job-based path persists the plan as ``migration_jobs`` row + N
+    ``migration_progress`` rows so workers can pick them up, the user
+    can ``--resume`` after an interruption, and the GUI can show live
+    progress.
+
+    Both tables are empty after this migration; rows are populated
+    only when ``MigrationService.create_job`` is called by Phase 2 code.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE migration_jobs (
+            job_id TEXT PRIMARY KEY,
+            src_source_id TEXT NOT NULL,
+            src_root TEXT NOT NULL,
+            dst_source_id TEXT NOT NULL,
+            dst_root TEXT NOT NULL,
+            status TEXT NOT NULL,
+            options_json TEXT NOT NULL DEFAULT '{}',
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            files_total INTEGER NOT NULL DEFAULT 0,
+            files_copied INTEGER NOT NULL DEFAULT 0,
+            files_skipped INTEGER NOT NULL DEFAULT 0,
+            files_failed INTEGER NOT NULL DEFAULT 0,
+            bytes_copied INTEGER NOT NULL DEFAULT 0,
+            error TEXT
+        );
+
+        CREATE INDEX idx_migration_jobs_status
+            ON migration_jobs(status);
+        CREATE INDEX idx_migration_jobs_started_at
+            ON migration_jobs(started_at DESC);
+
+        CREATE TABLE migration_progress (
+            job_id TEXT NOT NULL
+                REFERENCES migration_jobs(job_id) ON DELETE CASCADE,
+            curator_id TEXT NOT NULL,
+            src_path TEXT NOT NULL,
+            dst_path TEXT NOT NULL,
+            src_xxhash TEXT,
+            verified_xxhash TEXT,
+            size INTEGER NOT NULL DEFAULT 0,
+            safety_level TEXT NOT NULL,
+            status TEXT NOT NULL,
+            outcome TEXT,
+            error TEXT,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            PRIMARY KEY (job_id, curator_id)
+        );
+
+        CREATE INDEX idx_migration_progress_status
+            ON migration_progress(job_id, status);
+        """
+    )
+
+
 # ---------------------------------------------------------------------------
 # Migration registry
 # ---------------------------------------------------------------------------
@@ -47,6 +112,7 @@ def migration_001_initial(conn: sqlite3.Connection) -> None:
 
 MIGRATIONS: list[tuple[str, MigrationFunc]] = [
     ("001_initial", migration_001_initial),
+    ("002_migration_jobs_and_progress", migration_002_migration_jobs_and_progress),
 ]
 
 

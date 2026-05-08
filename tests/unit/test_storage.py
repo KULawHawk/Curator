@@ -333,3 +333,353 @@ class TestFileQuery:
             ))
         mid = repos.files.query(FileQuery(min_size=20, max_size=100))
         assert len(mid) == 1
+
+
+# ---------------------------------------------------------------------------
+# Migration jobs (Tracer Phase 2 -- v1.1.0a2)
+# ---------------------------------------------------------------------------
+
+from curator.models import MigrationJob, MigrationProgress
+from uuid import uuid4 as _uuid4
+
+
+def _make_progress(job_id, *, src_path="/src/a.mp3", dst_path="/dst/a.mp3",
+                   safety_level="safe", status="pending", **kw):
+    """Helper: construct a MigrationProgress with sensible defaults."""
+    return MigrationProgress(
+        job_id=job_id,
+        curator_id=_uuid4(),
+        src_path=src_path,
+        dst_path=dst_path,
+        size=kw.pop("size", 100),
+        safety_level=safety_level,
+        status=status,
+        **kw,
+    )
+
+
+class TestMigrationJobRepository:
+    def test_insert_job_then_get_round_trips(self, repos):
+        job = MigrationJob(
+            src_source_id="local", src_root="/src",
+            dst_source_id="local", dst_root="/dst",
+            status="queued",
+            options={"workers": 4, "verify_hash": True, "keep_source": False},
+        )
+        repos.migration_jobs.insert_job(job)
+        loaded = repos.migration_jobs.get_job(job.job_id)
+        assert loaded is not None
+        assert loaded.src_source_id == "local"
+        assert loaded.src_root == "/src"
+        assert loaded.status == "queued"
+        assert loaded.options == {"workers": 4, "verify_hash": True, "keep_source": False}
+        assert loaded.files_total == 0  # default
+
+    def test_get_job_missing_returns_none(self, repos):
+        assert repos.migration_jobs.get_job(_uuid4()) is None
+
+    def test_update_job_status_running_populates_started_at(self, repos):
+        job = MigrationJob(
+            src_source_id="local", src_root="/s",
+            dst_source_id="local", dst_root="/d",
+            status="queued",
+        )
+        repos.migration_jobs.insert_job(job)
+        repos.migration_jobs.update_job_status(job.job_id, "running")
+        loaded = repos.migration_jobs.get_job(job.job_id)
+        assert loaded.status == "running"
+        assert loaded.started_at is not None
+        assert loaded.completed_at is None
+
+    def test_update_job_status_terminal_populates_completed_at(self, repos):
+        job = MigrationJob(
+            src_source_id="local", src_root="/s",
+            dst_source_id="local", dst_root="/d",
+            status="running",
+        )
+        repos.migration_jobs.insert_job(job)
+        repos.migration_jobs.update_job_status(
+            job.job_id, "completed",
+        )
+        loaded = repos.migration_jobs.get_job(job.job_id)
+        assert loaded.status == "completed"
+        assert loaded.completed_at is not None
+
+    def test_update_job_status_with_error(self, repos):
+        job = MigrationJob(
+            src_source_id="local", src_root="/s",
+            dst_source_id="local", dst_root="/d", status="running",
+        )
+        repos.migration_jobs.insert_job(job)
+        repos.migration_jobs.update_job_status(
+            job.job_id, "failed", error="write hook missing",
+        )
+        loaded = repos.migration_jobs.get_job(job.job_id)
+        assert loaded.status == "failed"
+        assert loaded.error == "write hook missing"
+
+    def test_increment_job_counts_accumulates(self, repos):
+        job = MigrationJob(
+            src_source_id="local", src_root="/s",
+            dst_source_id="local", dst_root="/d", status="running",
+        )
+        repos.migration_jobs.insert_job(job)
+        repos.migration_jobs.increment_job_counts(
+            job.job_id, copied=3, bytes_copied=900,
+        )
+        repos.migration_jobs.increment_job_counts(
+            job.job_id, copied=2, skipped=1, bytes_copied=600,
+        )
+        loaded = repos.migration_jobs.get_job(job.job_id)
+        assert loaded.files_copied == 5
+        assert loaded.files_skipped == 1
+        assert loaded.files_failed == 0
+        assert loaded.bytes_copied == 1500
+
+    def test_set_files_total(self, repos):
+        job = MigrationJob(
+            src_source_id="local", src_root="/s",
+            dst_source_id="local", dst_root="/d", status="queued",
+        )
+        repos.migration_jobs.insert_job(job)
+        repos.migration_jobs.set_files_total(job.job_id, 187)
+        loaded = repos.migration_jobs.get_job(job.job_id)
+        assert loaded.files_total == 187
+
+    def test_list_jobs_most_recent_first_with_limit(self, repos):
+        # Insert 3 jobs with explicit started_at to force ordering
+        jobs = []
+        for i in range(3):
+            j = MigrationJob(
+                src_source_id="local", src_root=f"/s{i}",
+                dst_source_id="local", dst_root=f"/d{i}",
+                status="completed",
+                started_at=datetime(2026, 5, 1 + i, 12, 0),
+            )
+            repos.migration_jobs.insert_job(j)
+            jobs.append(j)
+        listed = repos.migration_jobs.list_jobs(limit=2)
+        assert len(listed) == 2
+        # Most recent first: started_at 2026-05-03 then 2026-05-02
+        assert listed[0].src_root == "/s2"
+        assert listed[1].src_root == "/s1"
+
+    def test_list_jobs_status_filter(self, repos):
+        for status in ("queued", "running", "completed", "failed"):
+            repos.migration_jobs.insert_job(MigrationJob(
+                src_source_id="local", src_root=f"/s_{status}",
+                dst_source_id="local", dst_root=f"/d_{status}",
+                status=status,
+            ))
+        running = repos.migration_jobs.list_jobs(status="running")
+        assert len(running) == 1
+        assert running[0].status == "running"
+
+    def test_seed_progress_rows_bulk_insert(self, repos):
+        job = MigrationJob(
+            src_source_id="local", src_root="/s",
+            dst_source_id="local", dst_root="/d", status="queued",
+        )
+        repos.migration_jobs.insert_job(job)
+        rows = [
+            _make_progress(job.job_id, src_path=f"/src/{i}", dst_path=f"/dst/{i}")
+            for i in range(5)
+        ]
+        repos.migration_jobs.seed_progress_rows(job.job_id, rows)
+        all_progress = repos.migration_jobs.query_progress(job.job_id)
+        assert len(all_progress) == 5
+        assert all(p.status == "pending" for p in all_progress)
+
+    def test_seed_progress_rows_empty_list_is_noop(self, repos):
+        job = MigrationJob(
+            src_source_id="local", src_root="/s",
+            dst_source_id="local", dst_root="/d", status="queued",
+        )
+        repos.migration_jobs.insert_job(job)
+        repos.migration_jobs.seed_progress_rows(job.job_id, [])
+        assert repos.migration_jobs.query_progress(job.job_id) == []
+
+    def test_next_pending_progress_claims_one_row(self, repos):
+        job = MigrationJob(
+            src_source_id="local", src_root="/s",
+            dst_source_id="local", dst_root="/d", status="running",
+        )
+        repos.migration_jobs.insert_job(job)
+        rows = [
+            _make_progress(job.job_id, src_path=f"/src/{i}.mp3")
+            for i in range(3)
+        ]
+        repos.migration_jobs.seed_progress_rows(job.job_id, rows)
+
+        claimed = repos.migration_jobs.next_pending_progress(job.job_id)
+        assert claimed is not None
+        assert claimed.status == "in_progress"
+        assert claimed.started_at is not None
+        # Persisted update reflects the claim
+        re_loaded = repos.migration_jobs.get_progress(
+            job.job_id, claimed.curator_id,
+        )
+        assert re_loaded.status == "in_progress"
+
+    def test_next_pending_progress_returns_none_when_empty(self, repos):
+        job = MigrationJob(
+            src_source_id="local", src_root="/s",
+            dst_source_id="local", dst_root="/d", status="running",
+        )
+        repos.migration_jobs.insert_job(job)
+        # No progress rows seeded
+        assert repos.migration_jobs.next_pending_progress(job.job_id) is None
+
+    def test_next_pending_progress_orders_by_src_path(self, repos):
+        """Workers should claim rows in deterministic alphabetical order
+        by src_path -- gives reproducible test runs and makes audit logs
+        easier to reason about."""
+        job = MigrationJob(
+            src_source_id="local", src_root="/s",
+            dst_source_id="local", dst_root="/d", status="running",
+        )
+        repos.migration_jobs.insert_job(job)
+        # Seed in non-alphabetical insert order
+        rows = [
+            _make_progress(job.job_id, src_path="/src/zebra.mp3"),
+            _make_progress(job.job_id, src_path="/src/apple.mp3"),
+            _make_progress(job.job_id, src_path="/src/mango.mp3"),
+        ]
+        repos.migration_jobs.seed_progress_rows(job.job_id, rows)
+        first = repos.migration_jobs.next_pending_progress(job.job_id)
+        assert first.src_path == "/src/apple.mp3"
+
+    def test_update_progress_terminal_populates_completed_at(self, repos):
+        job = MigrationJob(
+            src_source_id="local", src_root="/s",
+            dst_source_id="local", dst_root="/d", status="running",
+        )
+        repos.migration_jobs.insert_job(job)
+        row = _make_progress(job.job_id)
+        repos.migration_jobs.seed_progress_rows(job.job_id, [row])
+        repos.migration_jobs.update_progress(
+            job.job_id, row.curator_id,
+            status="completed", outcome="moved",
+            verified_xxhash="abc123",
+        )
+        loaded = repos.migration_jobs.get_progress(job.job_id, row.curator_id)
+        assert loaded.status == "completed"
+        assert loaded.outcome == "moved"
+        assert loaded.verified_xxhash == "abc123"
+        assert loaded.completed_at is not None
+
+    def test_update_progress_failed_with_error(self, repos):
+        job = MigrationJob(
+            src_source_id="local", src_root="/s",
+            dst_source_id="local", dst_root="/d", status="running",
+        )
+        repos.migration_jobs.insert_job(job)
+        row = _make_progress(job.job_id)
+        repos.migration_jobs.seed_progress_rows(job.job_id, [row])
+        repos.migration_jobs.update_progress(
+            job.job_id, row.curator_id,
+            status="failed", outcome="hash_mismatch",
+            error="hash mismatch: src=abc dst=def",
+        )
+        loaded = repos.migration_jobs.get_progress(job.job_id, row.curator_id)
+        assert loaded.status == "failed"
+        assert loaded.outcome == "hash_mismatch"
+        assert "hash mismatch" in loaded.error
+
+    def test_reset_in_progress_to_pending(self, repos):
+        """Resume helper: rows left as 'in_progress' from a dead worker
+        return to 'pending' so a fresh worker can pick them up."""
+        job = MigrationJob(
+            src_source_id="local", src_root="/s",
+            dst_source_id="local", dst_root="/d", status="running",
+        )
+        repos.migration_jobs.insert_job(job)
+        rows = [
+            _make_progress(job.job_id, src_path=f"/src/{i}.mp3")
+            for i in range(3)
+        ]
+        repos.migration_jobs.seed_progress_rows(job.job_id, rows)
+
+        # Claim two rows (simulate two workers that died)
+        c1 = repos.migration_jobs.next_pending_progress(job.job_id)
+        c2 = repos.migration_jobs.next_pending_progress(job.job_id)
+        assert c1 is not None and c2 is not None
+
+        # Reset and verify the third (untouched) row is still pending
+        # while the two claimed rows return to pending
+        reset_count = repos.migration_jobs.reset_in_progress_to_pending(job.job_id)
+        assert reset_count == 2
+
+        pending = repos.migration_jobs.query_progress(job.job_id, status="pending")
+        assert len(pending) == 3
+
+    def test_query_progress_status_filter(self, repos):
+        job = MigrationJob(
+            src_source_id="local", src_root="/s",
+            dst_source_id="local", dst_root="/d", status="running",
+        )
+        repos.migration_jobs.insert_job(job)
+        rows = [
+            _make_progress(job.job_id, src_path=f"/src/{i}.mp3",
+                           status="pending" if i < 2 else "completed")
+            for i in range(4)
+        ]
+        repos.migration_jobs.seed_progress_rows(job.job_id, rows)
+        completed = repos.migration_jobs.query_progress(
+            job.job_id, status="completed",
+        )
+        assert len(completed) == 2
+        assert all(p.status == "completed" for p in completed)
+
+    def test_count_progress_by_status_histogram(self, repos):
+        job = MigrationJob(
+            src_source_id="local", src_root="/s",
+            dst_source_id="local", dst_root="/d", status="running",
+        )
+        repos.migration_jobs.insert_job(job)
+        rows = []
+        for i in range(5):
+            rows.append(_make_progress(
+                job.job_id, src_path=f"/src/{i}.mp3",
+                status="completed" if i < 3 else ("failed" if i == 3 else "pending"),
+            ))
+        repos.migration_jobs.seed_progress_rows(job.job_id, rows)
+        hist = repos.migration_jobs.count_progress_by_status(job.job_id)
+        assert hist == {"completed": 3, "failed": 1, "pending": 1}
+
+    def test_delete_job_cascades_progress_rows(self, repos):
+        """FK ON DELETE CASCADE removes progress rows when the job is deleted."""
+        job = MigrationJob(
+            src_source_id="local", src_root="/s",
+            dst_source_id="local", dst_root="/d", status="completed",
+        )
+        repos.migration_jobs.insert_job(job)
+        rows = [_make_progress(job.job_id, src_path=f"/src/{i}") for i in range(3)]
+        repos.migration_jobs.seed_progress_rows(job.job_id, rows)
+        assert len(repos.migration_jobs.query_progress(job.job_id)) == 3
+
+        repos.migration_jobs.delete_job(job.job_id)
+        assert repos.migration_jobs.get_job(job.job_id) is None
+        assert repos.migration_jobs.query_progress(job.job_id) == []
+
+    def test_options_json_round_trips_complex_dict(self, repos):
+        """options_json is the forward-compat escape hatch -- it must
+        round-trip arbitrary JSON-able payloads."""
+        job = MigrationJob(
+            src_source_id="local", src_root="/s",
+            dst_source_id="local", dst_root="/d", status="queued",
+            options={
+                "workers": 4,
+                "verify_hash": True,
+                "keep_source": False,
+                "include_caution": False,
+                "includes": ["**/*.mp3", "**/*.flac"],
+                "excludes": ["**/draft/**"],
+                "path_prefix": "Pink Floyd",
+            },
+        )
+        repos.migration_jobs.insert_job(job)
+        loaded = repos.migration_jobs.get_job(job.job_id)
+        assert loaded.options["includes"] == ["**/*.mp3", "**/*.flac"]
+        assert loaded.options["path_prefix"] == "Pink Floyd"
+        assert loaded.options["workers"] == 4

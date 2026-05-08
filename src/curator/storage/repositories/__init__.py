@@ -19,6 +19,7 @@ from curator.storage.repositories.file_repo import FileRepository
 from curator.storage.repositories.hash_cache_repo import CachedHash, HashCacheRepository
 from curator.storage.repositories.job_repo import ScanJobRepository
 from curator.storage.repositories.lineage_repo import LineageRepository
+from curator.storage.repositories.migration_job_repo import MigrationJobRepository
 from curator.storage.repositories.source_repo import SourceRepository
 from curator.storage.repositories.trash_repo import TrashRepository
 
@@ -29,6 +30,7 @@ __all__ = [
     "FileRepository",
     "HashCacheRepository",
     "LineageRepository",
+    "MigrationJobRepository",
     "ScanJobRepository",
     "SourceRepository",
     "TrashRepository",

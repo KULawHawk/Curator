@@ -49,6 +49,7 @@ from curator.storage.repositories import (
     FileRepository,
     HashCacheRepository,
     LineageRepository,
+    MigrationJobRepository,
     ScanJobRepository,
     SourceRepository,
     TrashRepository,
@@ -61,7 +62,7 @@ from curator.storage.repositories import (
 
 @dataclasses.dataclass
 class Repos:
-    """Bundle of all 8 repositories so tests can pass one fixture around."""
+    """Bundle of all 9 repositories so tests can pass one fixture around."""
 
     files: FileRepository
     bundles: BundleRepository
@@ -71,6 +72,7 @@ class Repos:
     sources: SourceRepository
     jobs: ScanJobRepository
     cache: HashCacheRepository
+    migration_jobs: MigrationJobRepository
 
 
 @dataclasses.dataclass
@@ -154,7 +156,7 @@ def db(db_path: Path) -> Iterator[CuratorDB]:
 
 @pytest.fixture
 def repos(db: CuratorDB) -> Repos:
-    """All 8 repositories wired to the test DB."""
+    """All 9 repositories wired to the test DB."""
     return Repos(
         files=FileRepository(db),
         bundles=BundleRepository(db),
@@ -164,6 +166,7 @@ def repos(db: CuratorDB) -> Repos:
         sources=SourceRepository(db),
         jobs=ScanJobRepository(db),
         cache=HashCacheRepository(db),
+        migration_jobs=MigrationJobRepository(db),
     )
 
 
