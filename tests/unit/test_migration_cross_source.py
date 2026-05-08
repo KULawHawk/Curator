@@ -748,3 +748,175 @@ class TestCuratorSourceWritePostHook:
 
         assert report.moves[0].outcome == MigrationOutcome.FAILED
         assert "simulated refusal" in (report.moves[0].error or "")
+
+
+# ===========================================================================
+# Phase 4 P3 — end-to-end cross-source conflict resolution
+# ===========================================================================
+
+class TestPhase4CrossSourceConflictResolution:
+    """End-to-end Phase 4 tests using REAL LocalPlugin (no mocks).
+
+    Exercises the full ``apply()`` → ``_execute_one_cross_source`` →
+    Phase 4 dispatch → ``curator_source_rename`` chain against actual
+    files on disk via the ``local`` + ``local:vault`` two-source-ID
+    pattern. Complements ``test_migration_phase4_cross_source_conflict.py``
+    (which tests dispatch logic in isolation with mocked transfer +
+    rename helpers).
+
+    Per docs/TRACER_PHASE_4_DESIGN.md v0.3 IMPLEMENTED §12 — closes the
+    "end-to-end coverage of the apply() flow lives at the next coverage
+    pass" gap noted in the P2 test file's module docstring.
+    """
+
+    def test_cross_source_overwrite_with_backup_renames_existing_then_writes(
+        self, cross_source_runtime, tmp_path,
+    ):
+        """overwrite-with-backup end-to-end: pre-seed dst, run apply, verify backup exists.
+
+        Setup: src has `foo.txt` with content `b'src bytes'`; dst already has
+        `foo.txt` with content `b'old bytes'` (NOT in the index, just on disk).
+        Action: apply with --on-conflict=overwrite-with-backup.
+        Expected: existing dst gets renamed to `foo.curator-backup-<UTC>.txt`
+        with the OLD bytes preserved; new dst at `foo.txt` has the SRC bytes;
+        outcome is MOVED_OVERWROTE_WITH_BACKUP; audit emits cross_source: True
+        with backup_name field; src is trashed (file no longer at src path).
+        """
+        rt = cross_source_runtime
+        src_root = tmp_path / "src_owb"
+        dst_root = tmp_path / "dst_owb"
+        # Seed src under "local" with a known content + index entry
+        src_content = b"src bytes for overwrite-with-backup"
+        _seed_real_file(rt, "local", src_root / "foo.txt", content=src_content)
+        # Pre-seed dst on disk WITHOUT indexing (the colliding existing file)
+        dst_root.mkdir(parents=True, exist_ok=True)
+        old_content = b"old dst bytes that should land in backup"
+        (dst_root / "foo.txt").write_bytes(old_content)
+
+        rt.migration.set_on_conflict_mode("overwrite-with-backup")
+
+        plan = rt.migration.plan(
+            src_source_id="local", src_root=str(src_root),
+            dst_source_id="local:vault", dst_root=str(dst_root),
+        )
+        # Pass on_conflict directly to apply() because apply() resets the
+        # mode at entry to whatever its default kwarg says.
+        report = rt.migration.apply(plan, on_conflict="overwrite-with-backup")
+
+        # 1 move only
+        assert len(report.moves) == 1
+        move = report.moves[0]
+
+        # Outcome MUST be the variant, not plain MOVED
+        assert move.outcome == MigrationOutcome.MOVED_OVERWROTE_WITH_BACKUP, (
+            f"expected MOVED_OVERWROTE_WITH_BACKUP, got {move.outcome}"
+        )
+
+        # New dst has the SRC content
+        assert (dst_root / "foo.txt").read_bytes() == src_content
+
+        # Backup file exists with .curator-backup-<UTC> in the name AND has OLD content
+        backups = list(dst_root.glob("foo.curator-backup-*.txt"))
+        assert len(backups) == 1, (
+            f"expected exactly 1 backup file, found {[b.name for b in backups]}"
+        )
+        assert backups[0].read_bytes() == old_content, (
+            "backup file should contain the ORIGINAL pre-rename dst bytes"
+        )
+
+        # Src was trashed (file no longer at src path)
+        assert not (src_root / "foo.txt").exists(), (
+            "src should have been trashed/deleted after successful overwrite-with-backup"
+        )
+
+        # Audit verification is covered by the dispatch unit tests in
+        # tests/unit/test_migration_phase4_cross_source_conflict.py via
+        # mocks; this e2e test focuses on real-disk state + outcome enum
+        # to validate the full apply() -> dispatch chain end-to-end.
+
+    def test_cross_source_rename_with_suffix_lands_at_curator_1(
+        self, cross_source_runtime, tmp_path,
+    ):
+        """rename-with-suffix end-to-end: dst occupied; src lands at .curator-1.
+
+        Setup: src has `bar.dat`; dst has `bar.dat` (occupying the slot).
+        Action: apply with --on-conflict=rename-with-suffix.
+        Expected: src bytes land at `bar.curator-1.dat`; outcome is
+        MOVED_RENAMED_WITH_SUFFIX; audit captures suffix_n=1 + cross_source: True.
+        Original dst file at `bar.dat` is UNCHANGED (we route around it,
+        we don't overwrite it).
+        """
+        rt = cross_source_runtime
+        src_root = tmp_path / "src_rws"
+        dst_root = tmp_path / "dst_rws"
+        src_content = b"src content for rename-with-suffix"
+        _seed_real_file(rt, "local", src_root / "bar.dat", content=src_content)
+        dst_root.mkdir(parents=True, exist_ok=True)
+        existing_dst_content = b"existing untouched dst content"
+        (dst_root / "bar.dat").write_bytes(existing_dst_content)
+
+        rt.migration.set_on_conflict_mode("rename-with-suffix")
+
+        plan = rt.migration.plan(
+            src_source_id="local", src_root=str(src_root),
+            dst_source_id="local:vault", dst_root=str(dst_root),
+        )
+        report = rt.migration.apply(plan, on_conflict="rename-with-suffix")
+
+        move = report.moves[0]
+        assert move.outcome == MigrationOutcome.MOVED_RENAMED_WITH_SUFFIX
+
+        # The suffix variant has src bytes
+        suffix_dst = dst_root / "bar.curator-1.dat"
+        assert suffix_dst.exists(), f"expected {suffix_dst} to exist"
+        assert suffix_dst.read_bytes() == src_content
+
+        # The original dst slot is UNTOUCHED (rename-with-suffix routes around)
+        assert (dst_root / "bar.dat").read_bytes() == existing_dst_content
+
+        # Src was trashed
+        assert not (src_root / "bar.dat").exists()
+
+        # Audit details verified in unit test pass (mock-based).
+
+    def test_cross_source_rename_with_suffix_finds_next_free_when_curator_1_taken(
+        self, cross_source_runtime, tmp_path,
+    ):
+        """rename-with-suffix retry loop: .curator-1 taken too, lands at .curator-2.
+
+        Setup: src has `baz.bin`; dst has `baz.bin` AND `baz.curator-1.bin`
+        (both occupying slots). Action: apply with --on-conflict=rename-with-suffix.
+        Expected: src bytes land at `baz.curator-2.bin`; suffix_n=2 in audit;
+        FileExistsError retry-write loop iterated past suffix=1.
+        """
+        rt = cross_source_runtime
+        src_root = tmp_path / "src_rws2"
+        dst_root = tmp_path / "dst_rws2"
+        src_content = b"src content third in line"
+        _seed_real_file(rt, "local", src_root / "baz.bin", content=src_content)
+        dst_root.mkdir(parents=True, exist_ok=True)
+        # Both `baz.bin` AND `baz.curator-1.bin` are occupied
+        (dst_root / "baz.bin").write_bytes(b"slot 0 occupied")
+        (dst_root / "baz.curator-1.bin").write_bytes(b"slot 1 occupied")
+
+        rt.migration.set_on_conflict_mode("rename-with-suffix")
+
+        plan = rt.migration.plan(
+            src_source_id="local", src_root=str(src_root),
+            dst_source_id="local:vault", dst_root=str(dst_root),
+        )
+        report = rt.migration.apply(plan, on_conflict="rename-with-suffix")
+
+        move = report.moves[0]
+        assert move.outcome == MigrationOutcome.MOVED_RENAMED_WITH_SUFFIX
+
+        # Lands at curator-2
+        suffix_dst = dst_root / "baz.curator-2.bin"
+        assert suffix_dst.exists()
+        assert suffix_dst.read_bytes() == src_content
+
+        # Both prior slots untouched
+        assert (dst_root / "baz.bin").read_bytes() == b"slot 0 occupied"
+        assert (dst_root / "baz.curator-1.bin").read_bytes() == b"slot 1 occupied"
+
+        # Audit details (suffix_n=2 etc.) verified in unit test pass.
