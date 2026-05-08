@@ -818,12 +818,16 @@ class MigrationService:
         keep_source: bool = False,
         src_source_id: str, dst_source_id: str,
     ) -> None:
-        """Cross-source per-file discipline (Session B).
+        """Cross-source per-file discipline (Session B; Phase 4 P2 cross-source conflict resolution).
 
-        Uses :meth:`_cross_source_transfer` for the bytes phase, then
-        updates the FileEntity's ``source_id`` AND ``source_path`` (both
-        change for cross-source moves -- the file lives in a different
-        source now). Trashes the src via ``curator_source_delete``.
+        Uses :meth:`_cross_source_transfer` for the bytes phase. Phase 4
+        P2 (v1.4.0+) replaces v1.3.0's degrade-to-skip for cross-source
+        ``overwrite-with-backup`` and ``rename-with-suffix`` with full
+        implementations using the new :func:`curator_source_rename` hook
+        (overwrite path) and the FileExistsError retry-write pattern
+        (suffix path). Plugins that don't implement
+        ``curator_source_rename`` continue to see the v1.3.0 degrade-to-
+        skip behavior (strictly additive backward compat per design DM-4).
         """
         try:
             outcome, actual_dst_file_id, verified_hash = (
@@ -849,21 +853,27 @@ class MigrationService:
                 f"hash mismatch: src={move.src_xxhash} dst={verified_hash}"
             )
             return
+
+        # Phase 4 P2: cross-source collision dispatch.
+        # On SKIPPED_COLLISION, dispatch on self._on_conflict_mode:
+        #   skip (default)        -> keep SKIPPED_COLLISION outcome (v1.2.0 behavior)
+        #   fail                  -> mark FAILED_DUE_TO_CONFLICT (apply() raises)
+        #   overwrite-with-backup -> resolve existing dst file_id, rename it,
+        #                            re-attempt transfer, finalize as
+        #                            MOVED_OVERWROTE_WITH_BACKUP. Plugin-fallback:
+        #                            degrade to v1.3.0 skip-with-warning if the
+        #                            plugin doesn't implement curator_source_rename
+        #                            or rename can't find/rename the existing file.
+        #   rename-with-suffix    -> retry-write loop with .curator-N suffix names
+        #                            until success or n=9999 cap. Finalize as
+        #                            MOVED_RENAMED_WITH_SUFFIX. 9999 exhaustion
+        #                            degrades to skip.
+        final_outcome = MigrationOutcome.MOVED
         if outcome == MigrationOutcome.SKIPPED_COLLISION:
-            # Phase 3 P2: cross-source collision detected at write-time
-            # (plugin's curator_source_write raised FileExistsError).
-            # Apply --on-conflict policy:
-            #   skip   -> keep the SKIPPED_COLLISION outcome (current behavior)
-            #   fail   -> mark FAILED_DUE_TO_CONFLICT; apply() raises
-            #             MigrationConflictError after the move is
-            #             appended to the report.
-            #   overwrite-with-backup, rename-with-suffix -> degrade to
-            #             skip with a warning + audit. The plugin contract
-            #             lacks an atomic-rename / exists-probe hook, so
-            #             a clean implementation isn't yet possible for
-            #             cloud sources. Documented P2 simplification;
-            #             revisit in Phase 4.
             mode = self._on_conflict_mode
+            if mode == "skip":
+                move.outcome = outcome
+                return
             if mode == "fail":
                 move.outcome = MigrationOutcome.FAILED_DUE_TO_CONFLICT
                 move.error = (
@@ -872,29 +882,35 @@ class MigrationService:
                 )
                 self._audit_conflict(move, mode="fail",
                                      details_extra={"cross_source": True})
-                # apply() will raise MigrationConflictError after appending
-                # the move to the report (so the failed move is recorded).
                 return
-            if mode in ("overwrite-with-backup", "rename-with-suffix"):
-                logger.warning(
-                    "MigrationService: cross-source --on-conflict={m} "
-                    "degraded to skip for {p} (plugin contract lacks "
-                    "atomic-rename hook)",
-                    m=mode, p=move.src_path,
+            if mode == "overwrite-with-backup":
+                retry_result = self._cross_source_overwrite_with_backup(
+                    move, verify_hash=verify_hash,
+                    src_source_id=src_source_id,
+                    dst_source_id=dst_source_id,
                 )
-                self._audit_conflict(
-                    move,
-                    mode=f"{mode}-degraded-cross-source",
-                    details_extra={
-                        "cross_source": True,
-                        "reason": "plugin contract lacks atomic-rename hook",
-                        "fallback": "skipped",
-                    },
+                if retry_result is None:
+                    return  # degraded; move.outcome already set
+                outcome, actual_dst_file_id, verified_hash = retry_result
+                move.verified_xxhash = verified_hash
+                final_outcome = MigrationOutcome.MOVED_OVERWROTE_WITH_BACKUP
+            elif mode == "rename-with-suffix":
+                retry_result = self._cross_source_rename_with_suffix(
+                    move, verify_hash=verify_hash,
+                    src_source_id=src_source_id,
+                    dst_source_id=dst_source_id,
                 )
-            move.outcome = outcome
-            return
+                if retry_result is None:
+                    return  # degraded; move.outcome already set
+                outcome, actual_dst_file_id, verified_hash = retry_result
+                move.verified_xxhash = verified_hash
+                final_outcome = MigrationOutcome.MOVED_RENAMED_WITH_SUFFIX
+            else:
+                # Unreachable given set_on_conflict_mode validation, but defensive.
+                move.outcome = outcome
+                return
 
-        # Bytes successfully transferred + verified.
+        # Bytes successfully transferred + verified (initial OR retry).
         # Update dst_path to whatever the dst plugin actually produced
         # (e.g., for local: same path; for gdrive: a Drive file ID).
         move.dst_path = actual_dst_file_id
@@ -942,8 +958,228 @@ class MigrationService:
                 f" [trash failed: {type(e).__name__}: {e}]"
             ).strip()
 
-        move.outcome = MigrationOutcome.MOVED
+        move.outcome = final_outcome
         self._audit_move(move)
+
+    def _cross_source_overwrite_with_backup(
+        self,
+        move: MigrationMove,
+        *,
+        verify_hash: bool,
+        src_source_id: str,
+        dst_source_id: str,
+    ) -> tuple[MigrationOutcome, str, str | None] | None:
+        """Cross-source ``overwrite-with-backup`` retry flow (Phase 4 P2).
+
+        Steps:
+          1. Resolve existing dst's file_id via
+             :meth:`_find_existing_dst_file_id_for_overwrite`. None means
+             we can't proceed (no stat or enumerate match).
+          2. Compute backup_name from :meth:`_compute_backup_path`.
+          3. Call ``curator_source_rename(dst_source_id, file_id, backup_name)``
+             via :meth:`_attempt_cross_source_backup_rename`. Failure
+             means plugin doesn't implement OR rename failed.
+          4. Re-attempt :meth:`_cross_source_transfer`. Failure leaves
+             the renamed backup in place per design DM-5 (best-effort
+             rollback would double the failure paths and may itself fail
+             racy).
+
+        On any failure, mutates ``move`` to the v1.3.0 degrade-to-skip
+        shape (outcome=SKIPPED_COLLISION, audit captures the reason)
+        and returns ``None`` to signal the caller. On success, returns
+        ``(MigrationOutcome.MOVED, actual_dst_file_id, verified_hash)``.
+        """
+        # Step 1: resolve existing dst's file_id
+        existing_file_id = self._find_existing_dst_file_id_for_overwrite(
+            dst_source_id, move.dst_path,
+        )
+        if existing_file_id is None:
+            logger.warning(
+                "MigrationService: cross-source overwrite-with-backup "
+                "degraded to skip for {p} (could not resolve existing dst file_id)",
+                p=move.src_path,
+            )
+            self._audit_conflict(
+                move,
+                mode="overwrite-with-backup-degraded-cross-source",
+                details_extra={
+                    "cross_source": True,
+                    "reason": "could not resolve existing dst file_id",
+                    "fallback": "skipped",
+                },
+            )
+            move.outcome = MigrationOutcome.SKIPPED_COLLISION
+            return None
+
+        # Step 2: compute backup_name
+        backup_name = self._compute_backup_path(Path(move.dst_path)).name
+
+        # Step 3: call rename hook
+        success, error = self._attempt_cross_source_backup_rename(
+            dst_source_id, existing_file_id, backup_name,
+        )
+        if not success:
+            logger.warning(
+                "MigrationService: cross-source overwrite-with-backup "
+                "degraded to skip for {p} ({err})",
+                p=move.src_path, err=error or "rename hook unavailable",
+            )
+            self._audit_conflict(
+                move,
+                mode="overwrite-with-backup-degraded-cross-source",
+                details_extra={
+                    "cross_source": True,
+                    "reason": error or "rename hook unavailable",
+                    "fallback": "skipped",
+                },
+            )
+            move.outcome = MigrationOutcome.SKIPPED_COLLISION
+            return None
+
+        # Audit the successful rename BEFORE the retry so audit reflects
+        # exactly what happened even if the retry fails (DM-5).
+        self._audit_conflict(
+            move,
+            mode="overwrite-with-backup",
+            details_extra={
+                "cross_source": True,
+                "backup_name": backup_name,
+                "existing_file_id": existing_file_id,
+            },
+        )
+
+        # Step 4: re-attempt cross-source transfer
+        try:
+            retry_outcome, retry_dst_file_id, retry_verified_hash = (
+                self._cross_source_transfer(
+                    src_source_id=src_source_id,
+                    src_file_id=move.src_path,
+                    src_xxhash=move.src_xxhash,
+                    dst_source_id=dst_source_id,
+                    dst_path=move.dst_path,
+                    verify_hash=verify_hash,
+                )
+            )
+        except Exception as e:  # noqa: BLE001
+            move.outcome = MigrationOutcome.FAILED
+            move.error = (
+                f"{type(e).__name__}: {e} "
+                f"[backup at {backup_name} preserved per DM-5]"
+            )
+            return None
+
+        if retry_outcome == MigrationOutcome.HASH_MISMATCH:
+            move.outcome = retry_outcome
+            move.error = (
+                f"hash mismatch: src={move.src_xxhash} dst={retry_verified_hash} "
+                f"[backup at {backup_name} preserved per DM-5]"
+            )
+            move.verified_xxhash = retry_verified_hash
+            return None
+
+        if retry_outcome == MigrationOutcome.SKIPPED_COLLISION:
+            # Extremely rare: dst slot still busy after backup rename
+            # (concurrent write race). Backup is preserved per DM-5.
+            move.outcome = MigrationOutcome.SKIPPED_COLLISION
+            move.error = (
+                f"cross-source overwrite-with-backup retry collision "
+                f"[backup at {backup_name} preserved per DM-5]"
+            )
+            return None
+
+        return (retry_outcome, retry_dst_file_id, retry_verified_hash)
+
+    def _cross_source_rename_with_suffix(
+        self,
+        move: MigrationMove,
+        *,
+        verify_hash: bool,
+        src_source_id: str,
+        dst_source_id: str,
+    ) -> tuple[MigrationOutcome, str, str | None] | None:
+        """Cross-source ``rename-with-suffix`` retry-write loop (Phase 4 P2).
+
+        Loops n=1..9999, computing ``<name>.curator-<n><ext>`` via
+        :meth:`_compute_suffix_name` and calling
+        :meth:`_cross_source_transfer` until one of:
+
+        * Success: returns
+          ``(MigrationOutcome.MOVED, actual_dst_file_id, verified_hash)``.
+          Audit captures suffix_n + original_dst + renamed_dst.
+          ``move.dst_path`` is updated to the suffix variant.
+        * HASH_MISMATCH on a particular suffix attempt: returns None;
+          ``move.outcome`` set to HASH_MISMATCH. (Retry would just hit
+          the same hash mismatch.)
+        * Transfer exception: returns None; ``move.outcome`` set to FAILED.
+        * 9999 exhausted: returns None; ``move.outcome`` set to
+          SKIPPED_COLLISION; audit captures fallback reason.
+
+        Per DM-3, no exists-probe hookspec is needed because
+        ``curator_source_write(overwrite=False)`` already raises
+        FileExistsError (which surfaces here as SKIPPED_COLLISION from
+        :meth:`_cross_source_transfer`).
+        """
+        original_dst = move.dst_path
+        for n in range(1, 10_000):
+            candidate_dst_path = str(
+                self._compute_suffix_name(Path(original_dst), n)
+            )
+            try:
+                outcome2, actual_dst_file_id, verified_hash2 = (
+                    self._cross_source_transfer(
+                        src_source_id=src_source_id,
+                        src_file_id=move.src_path,
+                        src_xxhash=move.src_xxhash,
+                        dst_source_id=dst_source_id,
+                        dst_path=candidate_dst_path,
+                        verify_hash=verify_hash,
+                    )
+                )
+            except Exception as e:  # noqa: BLE001
+                move.outcome = MigrationOutcome.FAILED
+                move.error = f"{type(e).__name__}: {e}"
+                return None
+
+            if outcome2 == MigrationOutcome.SKIPPED_COLLISION:
+                continue  # try next suffix
+            if outcome2 == MigrationOutcome.HASH_MISMATCH:
+                move.outcome = outcome2
+                move.error = (
+                    f"hash mismatch: src={move.src_xxhash} dst={verified_hash2}"
+                )
+                move.verified_xxhash = verified_hash2
+                return None
+
+            # Success at suffix n
+            self._audit_conflict(
+                move,
+                mode="rename-with-suffix",
+                details_extra={
+                    "cross_source": True,
+                    "original_dst": original_dst,
+                    "renamed_dst": candidate_dst_path,
+                    "suffix_n": n,
+                },
+            )
+            return (outcome2, actual_dst_file_id, verified_hash2)
+
+        # 9999 exhausted
+        logger.warning(
+            "MigrationService: cross-source rename-with-suffix exhausted "
+            "9999 candidates for {p}; degrading to skip",
+            p=move.src_path,
+        )
+        self._audit_conflict(
+            move,
+            mode="rename-with-suffix-degraded-cross-source",
+            details_extra={
+                "cross_source": True,
+                "reason": "9999 suffixes exhausted",
+                "fallback": "skipped",
+            },
+        )
+        move.outcome = MigrationOutcome.SKIPPED_COLLISION
+        return None
 
     def _update_index(self, move: MigrationMove) -> None:
         """Re-point the FileEntity at the new path. Best-effort.
@@ -1019,6 +1255,331 @@ class MigrationService:
         raise RuntimeError(
             f"no available .curator-N{ext} suffix in [1, 9999] for {dst_p}"
         )
+
+    @staticmethod
+    def _compute_suffix_name(dst_p: Path, n: int) -> Path:
+        """Compute ``<name>.curator-<n><ext>`` for a given n (Phase 4 P2 helper).
+
+        Sister of :meth:`_find_available_suffix` for the cross-source
+        retry-write loop where existence is probed implicitly via
+        ``curator_source_write(overwrite=False)`` raising
+        ``FileExistsError`` (DM-3 in TRACER_PHASE_4_DESIGN.md v0.2).
+        Caller increments n on each FileExistsError until success or
+        exhaustion at n=9999.
+
+        Example: ``C:/music/foo.mp3``, ``n=3`` -> ``C:/music/foo.curator-3.mp3``.
+        """
+        stem = dst_p.stem
+        ext = dst_p.suffix
+        return dst_p.with_name(f"{stem}.curator-{n}{ext}")
+
+    def _find_existing_dst_file_id_for_overwrite(
+        self, dst_source_id: str, dst_path: str,
+    ) -> str | None:
+        """Resolve dst_path to an existing file's file_id (Phase 4 P2 helper).
+
+        Used by cross-source ``overwrite-with-backup`` to find the file
+        that's blocking the write so we can call
+        ``curator_source_rename(dst_source_id, file_id, backup_name)``
+        on it.
+
+        Two-strategy resolution:
+
+        1. **Stat-as-file_id** (works for local-style sources where
+           ``file_id == path``): try
+           ``curator_source_stat(dst_source_id, dst_path)``. A non-None
+           FileStat means dst_path IS a valid file_id.
+        2. **Enumerate-and-match** (works for cloud sources where
+           ``file_id`` is distinct from the display path): call
+           ``curator_source_enumerate(dst_source_id, parent_id, {})``
+           and find the FileInfo whose display name matches the target.
+
+        Returns the resolved file_id, or ``None`` if neither strategy
+        finds a match (caller degrades to v1.3.0 skip-with-warning).
+        """
+        # Strategy 1: stat with dst_path as file_id (local-style).
+        try:
+            stat_result = self._hook_first_result(
+                "curator_source_stat",
+                source_id=dst_source_id, file_id=dst_path,
+            )
+        except Exception:  # noqa: BLE001 -- defensive
+            stat_result = None
+        if stat_result is not None:
+            return dst_path
+
+        # Strategy 2: enumerate parent and match by display name.
+        dst_p = Path(dst_path)
+        parent_id = str(dst_p.parent)
+        target_name = dst_p.name
+        try:
+            iter_or_none = self._hook_first_result(
+                "curator_source_enumerate",
+                source_id=dst_source_id, root=parent_id, options={},
+            )
+        except Exception:  # noqa: BLE001 -- defensive
+            return None
+        if iter_or_none is None:
+            return None
+        try:
+            for info in iter_or_none:
+                # FileInfo.path is display name for cloud, full path for
+                # local. Match either equality OR basename equality so
+                # both shapes work without hardcoding source-type.
+                info_basename = Path(info.path).name
+                if info.path == target_name or info_basename == target_name:
+                    return info.file_id
+        except Exception as e:  # noqa: BLE001 -- defensive on iterator
+            logger.warning(
+                "MigrationService: enumerate iteration failed for {sid}/{p}: {e}",
+                sid=dst_source_id, p=parent_id, e=e,
+            )
+            return None
+        return None
+
+    def _attempt_cross_source_backup_rename(
+        self,
+        dst_source_id: str,
+        existing_file_id: str,
+        backup_name: str,
+    ) -> tuple[bool, str | None]:
+        """Call ``curator_source_rename`` to move existing dst out of the way (Phase 4 P2).
+
+        Returns ``(success, error_message_or_None)``. ``success=False``
+        means the rename hook either returned None (plugin doesn't
+        implement) or raised; caller degrades to v1.3.0 skip-with-
+        warning. ``success=True`` means the existing dst is renamed
+        and the caller can re-attempt the cross-source transfer with
+        the original dst_path.
+        """
+        if self.pm is None:
+            return (False, "no plugin manager available")
+        try:
+            hook = getattr(self.pm.hook, "curator_source_rename")
+        except AttributeError:
+            return (False, "curator_source_rename hookspec not registered")
+        try:
+            results = hook(
+                source_id=dst_source_id,
+                file_id=existing_file_id,
+                new_name=backup_name,
+                overwrite=False,
+            )
+        except FileExistsError as e:
+            # Concurrent backup at the same name (extremely rare). Audit
+            # + degrade per design DM-3 / DM-4.
+            return (False, f"backup name collision: {e}")
+        except Exception as e:  # noqa: BLE001
+            return (False, f"{type(e).__name__}: {e}")
+        # Pluggy returns a list; first non-None is the owning plugin's result.
+        if not isinstance(results, list):
+            results = [results]
+        renamed = next((r for r in results if r is not None), None)
+        if renamed is None:
+            return (False, "plugin does not implement curator_source_rename")
+        return (True, None)
+
+    def _emit_progress_audit_conflict(
+        self,
+        progress: "MigrationProgress",
+        *,
+        mode: str,
+        details_extra: dict[str, Any] | None = None,
+    ) -> None:
+        """Persistent-path sister of :meth:`_audit_conflict`.
+
+        Emits ``migration.conflict_resolved`` with ``job_id`` in the
+        details dict for cross-reference with the migration_jobs row.
+        Best-effort; emission failures never propagate. Used by
+        :meth:`_cross_source_overwrite_with_backup_for_progress` and
+        :meth:`_cross_source_rename_with_suffix_for_progress`.
+        """
+        if self.audit is None:
+            return
+        details: dict[str, Any] = {
+            "src_path": progress.src_path,
+            "dst_path": progress.dst_path,
+            "mode": mode,
+            "size": progress.size,
+            "job_id": str(progress.job_id),
+        }
+        if details_extra:
+            details.update(details_extra)
+        try:
+            self.audit.log(
+                actor="curator.migrate",
+                action="migration.conflict_resolved",
+                entity_type="file",
+                entity_id=str(progress.curator_id),
+                details=details,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "MigrationService: conflict audit failed for {cid}: {e}",
+                cid=progress.curator_id, e=e,
+            )
+
+    def _cross_source_overwrite_with_backup_for_progress(
+        self,
+        progress: "MigrationProgress",
+        *,
+        verify_hash: bool,
+        src_source_id: str,
+        dst_source_id: str,
+    ) -> tuple[MigrationOutcome, str, str | None] | None:
+        """Persistent-path sister of :meth:`_cross_source_overwrite_with_backup`.
+
+        Same algorithm; emits audit with ``job_id`` via
+        :meth:`_emit_progress_audit_conflict`. Returns
+        ``(MigrationOutcome.MOVED, actual_dst_file_id, verified_hash)``
+        on success; returns ``None`` on degrade-to-skip (caller returns
+        ``(SKIPPED_COLLISION, None)``).
+        """
+        existing_file_id = self._find_existing_dst_file_id_for_overwrite(
+            dst_source_id, progress.dst_path,
+        )
+        if existing_file_id is None:
+            logger.warning(
+                "MigrationService: cross-source overwrite-with-backup "
+                "degraded to skip for {p} (could not resolve existing dst file_id)",
+                p=progress.src_path,
+            )
+            self._emit_progress_audit_conflict(
+                progress,
+                mode="overwrite-with-backup-degraded-cross-source",
+                details_extra={
+                    "cross_source": True,
+                    "reason": "could not resolve existing dst file_id",
+                    "fallback": "skipped",
+                },
+            )
+            return None
+
+        backup_name = self._compute_backup_path(Path(progress.dst_path)).name
+        success, error = self._attempt_cross_source_backup_rename(
+            dst_source_id, existing_file_id, backup_name,
+        )
+        if not success:
+            logger.warning(
+                "MigrationService: cross-source overwrite-with-backup "
+                "degraded to skip for {p} ({err})",
+                p=progress.src_path, err=error or "rename hook unavailable",
+            )
+            self._emit_progress_audit_conflict(
+                progress,
+                mode="overwrite-with-backup-degraded-cross-source",
+                details_extra={
+                    "cross_source": True,
+                    "reason": error or "rename hook unavailable",
+                    "fallback": "skipped",
+                },
+            )
+            return None
+
+        # Audit the rename BEFORE the retry so audit reflects exactly
+        # what happened even if the retry fails (DM-5).
+        self._emit_progress_audit_conflict(
+            progress,
+            mode="overwrite-with-backup",
+            details_extra={
+                "cross_source": True,
+                "backup_name": backup_name,
+                "existing_file_id": existing_file_id,
+            },
+        )
+
+        # Re-attempt the cross-source transfer.
+        # On retry exception OR retry-time HASH_MISMATCH OR retry-time
+        # SKIPPED_COLLISION (extremely rare race), we let the caller
+        # surface FAILED / HASH_MISMATCH / SKIPPED_COLLISION and the
+        # backup is preserved per DM-5. We re-raise so the worker loop's
+        # exception boundary records the right outcome.
+        retry_outcome, retry_dst_file_id, retry_verified_hash = (
+            self._cross_source_transfer(
+                src_source_id=src_source_id,
+                src_file_id=progress.src_path,
+                src_xxhash=progress.src_xxhash,
+                dst_source_id=dst_source_id,
+                dst_path=progress.dst_path,
+                verify_hash=verify_hash,
+            )
+        )
+        if retry_outcome != MigrationOutcome.MOVED:
+            # HASH_MISMATCH or unexpected SKIPPED_COLLISION on retry
+            # surfaces back to the caller; the worker maps it appropriately.
+            return (retry_outcome, retry_dst_file_id, retry_verified_hash)
+        return (MigrationOutcome.MOVED, retry_dst_file_id, retry_verified_hash)
+
+    def _cross_source_rename_with_suffix_for_progress(
+        self,
+        progress: "MigrationProgress",
+        *,
+        verify_hash: bool,
+        src_source_id: str,
+        dst_source_id: str,
+    ) -> tuple[MigrationOutcome, str, str | None] | None:
+        """Persistent-path sister of :meth:`_cross_source_rename_with_suffix`.
+
+        Same algorithm; emits audit with ``job_id`` via
+        :meth:`_emit_progress_audit_conflict`. Returns
+        ``(MigrationOutcome.MOVED, actual_dst_file_id, verified_hash)``
+        on success (caller MUST update progress.dst_path to the
+        suffix variant); returns ``None`` on 9999 exhaustion or
+        retry-time HASH_MISMATCH.
+        """
+        original_dst = progress.dst_path
+        for n in range(1, 10_000):
+            candidate_dst_path = str(
+                self._compute_suffix_name(Path(original_dst), n)
+            )
+            outcome2, actual_dst_file_id, verified_hash2 = (
+                self._cross_source_transfer(
+                    src_source_id=src_source_id,
+                    src_file_id=progress.src_path,
+                    src_xxhash=progress.src_xxhash,
+                    dst_source_id=dst_source_id,
+                    dst_path=candidate_dst_path,
+                    verify_hash=verify_hash,
+                )
+            )
+            if outcome2 == MigrationOutcome.SKIPPED_COLLISION:
+                continue  # try next suffix
+            if outcome2 == MigrationOutcome.HASH_MISMATCH:
+                # Surface the hash mismatch; suffix retries would just
+                # hit the same mismatch (same src bytes -> same hash).
+                return (outcome2, actual_dst_file_id, verified_hash2)
+            # Success at suffix n.
+            self._emit_progress_audit_conflict(
+                progress,
+                mode="rename-with-suffix",
+                details_extra={
+                    "cross_source": True,
+                    "original_dst": original_dst,
+                    "renamed_dst": candidate_dst_path,
+                    "suffix_n": n,
+                },
+            )
+            # Caller must update progress.dst_path = actual_dst_file_id
+            # (or candidate_dst_path) so the entity update + audit_move
+            # use the correct path.
+            return (outcome2, actual_dst_file_id, verified_hash2)
+
+        # 9999 exhausted
+        logger.warning(
+            "MigrationService: cross-source rename-with-suffix exhausted "
+            "9999 candidates for {p}; degrading to skip",
+            p=progress.src_path,
+        )
+        self._emit_progress_audit_conflict(
+            progress,
+            mode="rename-with-suffix-degraded-cross-source",
+            details_extra={
+                "cross_source": True,
+                "reason": "9999 suffixes exhausted",
+                "fallback": "skipped",
+            },
+        )
+        return None
 
     def _audit_conflict(
         self,
@@ -2224,11 +2785,24 @@ class MigrationService:
 
         if outcome == MigrationOutcome.HASH_MISMATCH:
             return (outcome, verified_hash)
+        # Phase 4 P2: cross-source collision dispatch (mirrors
+        # _execute_one_cross_source's apply-time path).
+        # On SKIPPED_COLLISION, dispatch on self._on_conflict_mode:
+        #   skip                  -> return SKIPPED_COLLISION (v1.2.0 behavior)
+        #   fail                  -> raise MigrationConflictError (worker maps to FAILED_DUE_TO_CONFLICT)
+        #   overwrite-with-backup -> _cross_source_overwrite_with_backup_for_progress;
+        #                            on success, finalize as MOVED_OVERWROTE_WITH_BACKUP
+        #   rename-with-suffix    -> _cross_source_rename_with_suffix_for_progress;
+        #                            on success, mutate progress.dst_path + finalize as
+        #                            MOVED_RENAMED_WITH_SUFFIX
+        # Plugins that don't implement curator_source_rename or 9999
+        # exhaustion degrade to v1.3.0 skip-with-warning behavior
+        # (helpers emit audit + return None).
+        final_outcome = MigrationOutcome.MOVED
         if outcome == MigrationOutcome.SKIPPED_COLLISION:
-            # Phase 3 P2: same cross-source collision dispatch as the
-            # in-memory path. Worker maps MigrationConflictError to
-            # FAILED_DUE_TO_CONFLICT outcome.
             mode = self._on_conflict_mode
+            if mode == "skip":
+                return (outcome, None)
             if mode == "fail":
                 if self.audit is not None:
                     try:
@@ -2254,37 +2828,43 @@ class MigrationService:
                 raise MigrationConflictError(
                     progress.dst_path, src_path=progress.src_path,
                 )
-            if mode in ("overwrite-with-backup", "rename-with-suffix"):
-                logger.warning(
-                    "MigrationService: cross-source --on-conflict={m} "
-                    "degraded to skip for {p} (plugin contract lacks "
-                    "atomic-rename hook)",
-                    m=mode, p=progress.src_path,
+            if mode == "overwrite-with-backup":
+                retry_result = (
+                    self._cross_source_overwrite_with_backup_for_progress(
+                        progress, verify_hash=verify_hash,
+                        src_source_id=src_source_id,
+                        dst_source_id=dst_source_id,
+                    )
                 )
-                if self.audit is not None:
-                    try:
-                        self.audit.log(
-                            actor="curator.migrate",
-                            action="migration.conflict_resolved",
-                            entity_type="file",
-                            entity_id=str(progress.curator_id),
-                            details={
-                                "src_path": progress.src_path,
-                                "dst_path": progress.dst_path,
-                                "mode": f"{mode}-degraded-cross-source",
-                                "size": progress.size,
-                                "job_id": str(progress.job_id),
-                                "cross_source": True,
-                                "reason": "plugin contract lacks atomic-rename hook",
-                                "fallback": "skipped",
-                            },
-                        )
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning(
-                            "MigrationService: conflict audit failed for {cid}: {e}",
-                            cid=progress.curator_id, e=e,
-                        )
-            return (outcome, None)
+                if retry_result is None:
+                    return (MigrationOutcome.SKIPPED_COLLISION, None)
+                retry_outcome2, actual_dst_file_id, verified_hash = retry_result
+                if retry_outcome2 != MigrationOutcome.MOVED:
+                    # HASH_MISMATCH or unexpected SKIPPED_COLLISION on retry.
+                    return (retry_outcome2, verified_hash)
+                final_outcome = MigrationOutcome.MOVED_OVERWROTE_WITH_BACKUP
+            elif mode == "rename-with-suffix":
+                retry_result = (
+                    self._cross_source_rename_with_suffix_for_progress(
+                        progress, verify_hash=verify_hash,
+                        src_source_id=src_source_id,
+                        dst_source_id=dst_source_id,
+                    )
+                )
+                if retry_result is None:
+                    return (MigrationOutcome.SKIPPED_COLLISION, None)
+                retry_outcome2, actual_dst_file_id, verified_hash = retry_result
+                if retry_outcome2 != MigrationOutcome.MOVED:
+                    return (retry_outcome2, verified_hash)
+                final_outcome = MigrationOutcome.MOVED_RENAMED_WITH_SUFFIX
+                # Update progress.dst_path so post-transfer audit + entity
+                # update use the suffix variant. The DB row's dst_path is
+                # not persisted-update here; the audit + entity reflect
+                # the actual final dst.
+                progress.dst_path = actual_dst_file_id
+            else:
+                # Unreachable given set_on_conflict_mode validation, defensive.
+                return (outcome, None)
 
         # Bytes successfully transferred + verified.
         if keep_source:
@@ -2365,7 +2945,7 @@ class MigrationService:
                     cid=progress.curator_id, e=e,
                 )
 
-        return (MigrationOutcome.MOVED, verified_hash)
+        return (final_outcome, verified_hash)
 
     def _build_report_from_persisted(self, job: MigrationJob) -> MigrationReport:
         """Reconstruct a :class:`MigrationReport` from the persisted job.
