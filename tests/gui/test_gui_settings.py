@@ -254,9 +254,11 @@ class TestWiring:
         rt, _ = runtime_with_toml_config
         window = CuratorMainWindow(rt)
         try:
-            # Settings is at index 5; v0.41 added Lineage Graph at 6 making count 7.
-            assert window._tabs.count() == 7
-            assert window._tabs.tabText(5) == "Settings"
+            # v1.1.0: tab count is 8 (Migrate added between Trash and Audit Log);
+            # Settings shifted from index 5 to index 6. Test name preserved
+            # for git history continuity (it was a misnomer even pre-v1.1.0).
+            assert window._tabs.count() == 8
+            assert window._tabs.tabText(6) == "Settings"
         finally:
             window.deleteLater()
 

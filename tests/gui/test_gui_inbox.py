@@ -395,7 +395,8 @@ class TestWiring:
         rt, _ = runtime_with_inbox_data
         window = CuratorMainWindow(rt)
         try:
-            assert window._tabs.count() == 7
+            # v1.1.0: tab count is 8 (Migrate added between Trash and Audit Log).
+            assert window._tabs.count() == 8
             assert window._tabs.tabText(0) == "Inbox"
         finally:
             window.deleteLater()

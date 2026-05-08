@@ -288,9 +288,10 @@ class TestWiring:
         rt, _ = runtime_with_audit_entries
         window = CuratorMainWindow(rt)
         try:
-            assert window._tabs.count() >= 5
-            # Audit Log moved to index 4 in v0.39 (Inbox added at 0).
-            assert window._tabs.tabText(4) == "Audit Log"
+            assert window._tabs.count() >= 6
+            # Audit Log was at index 4 in v0.39, shifted to index 5 in
+            # v1.1.0 when the Migrate tab was inserted between Trash and Audit Log.
+            assert window._tabs.tabText(5) == "Audit Log"
         finally:
             window.deleteLater()
 

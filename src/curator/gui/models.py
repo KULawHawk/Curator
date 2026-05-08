@@ -29,17 +29,21 @@ from PySide6.QtCore import (
     Qt,
 )
 
+from uuid import UUID
+
 from curator.models.file import FileEntity
 from curator.models.bundle import BundleEntity
 from curator.models.audit import AuditEntry
 from curator.models.jobs import ScanJob
 from curator.models.lineage import LineageEdge
+from curator.models.migration import MigrationJob, MigrationProgress
 from curator.storage.queries import FileQuery
 from curator.storage.repositories.audit_repo import AuditRepository
 from curator.storage.repositories.bundle_repo import BundleRepository
 from curator.storage.repositories.file_repo import FileRepository
 from curator.storage.repositories.job_repo import ScanJobRepository
 from curator.storage.repositories.lineage_repo import LineageRepository
+from curator.storage.repositories.migration_job_repo import MigrationJobRepository
 from curator.storage.repositories.trash_repo import TrashRepository
 
 # Type-only import for Config (avoid hard-importing in headless tests).
@@ -909,6 +913,286 @@ class PendingReviewTableModel(QAbstractTableModel):
         return label
 
 
+# ---------------------------------------------------------------------------
+# MigrationJobTableModel — Migrate tab (v1.1.0 Tracer Phase 2 Session C1)
+# ---------------------------------------------------------------------------
+
+
+def _format_duration(seconds: float | None) -> str:
+    """Compact duration string: '4.2s' / '1m 23s' / '2h 5m'."""
+    if seconds is None:
+        return ""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    if seconds < 3600:
+        m, s = divmod(int(seconds), 60)
+        return f"{m}m {s:02d}s"
+    h, rem = divmod(int(seconds), 3600)
+    m, _ = divmod(rem, 60)
+    return f"{h}h {m:02d}m"
+
+
+class MigrationJobTableModel(QAbstractTableModel):
+    """Table model over recent migration jobs.
+
+    Wraps :meth:`MigrationJobRepository.list_jobs` (most-recent first).
+
+    Columns: Status / Src → Dst / Files / Copied / Failed / Bytes /
+    Started / Duration
+
+    Used by the v1.1.0 Migrate tab. Read-only in this iteration
+    (Tracer Phase 2 Session C1); job lifecycle actions (Abort, Resume)
+    are wired in Session C2.
+    """
+
+    DEFAULT_LIMIT: int = 50
+
+    COLUMNS: tuple[str, ...] = (
+        "Status", "Src → Dst", "Files", "Copied", "Failed",
+        "Bytes", "Started", "Duration",
+    )
+
+    def __init__(
+        self,
+        migration_job_repo: MigrationJobRepository,
+        *,
+        limit: int | None = None,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._repo = migration_job_repo
+        self._limit = limit if limit is not None else self.DEFAULT_LIMIT
+        self._rows: list[MigrationJob] = []
+        self.refresh()
+
+    # -- public API -----------------------------------------------------
+
+    def refresh(self) -> None:
+        self.beginResetModel()
+        try:
+            self._rows = self._repo.list_jobs(limit=self._limit)
+        except Exception:
+            self._rows = []
+        self.endResetModel()
+
+    def job_at(self, row: int) -> MigrationJob | None:
+        if 0 <= row < len(self._rows):
+            return self._rows[row]
+        return None
+
+    # -- Qt protocol ----------------------------------------------------
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: B008
+        if parent.isValid():
+            return 0
+        return len(self._rows)
+
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: B008
+        if parent.isValid():
+            return 0
+        return len(self.COLUMNS)
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if role != Qt.DisplayRole:
+            return None
+        if orientation == Qt.Orientation.Horizontal and 0 <= section < len(self.COLUMNS):
+            return self.COLUMNS[section]
+        return None
+
+    def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:
+        if not index.isValid():
+            return None
+        row = index.row()
+        if not (0 <= row < len(self._rows)):
+            return None
+        j = self._rows[row]
+        col = index.column()
+        if role == Qt.ToolTipRole:
+            # Tooltip on Src → Dst shows the full src_root + dst_root paths.
+            if col == 1:
+                return f"{j.src_source_id}: {j.src_root}\n→ {j.dst_source_id}: {j.dst_root}"
+            # Tooltip on Status shows the error if the job failed.
+            if col == 0 and j.error:
+                return j.error
+            return None
+        if role != Qt.DisplayRole:
+            return None
+        if col == 0:
+            return j.status
+        if col == 1:
+            # Compact: src_id → dst_id; full paths in tooltip
+            return f"{j.src_source_id} → {j.dst_source_id}"
+        if col == 2:
+            return j.files_total
+        if col == 3:
+            return j.files_copied
+        if col == 4:
+            return j.files_failed
+        if col == 5:
+            return _format_size(j.bytes_copied)
+        if col == 6:
+            return _format_dt(j.started_at)
+        if col == 7:
+            return _format_duration(j.duration_seconds)
+        return None
+
+    def sort(self, column, order=Qt.AscendingOrder):
+        reverse = order == Qt.SortOrder.DescendingOrder
+
+        def key(j: MigrationJob) -> Any:
+            if column == 0:
+                return j.status or ""
+            if column == 1:
+                return f"{j.src_source_id} → {j.dst_source_id}"
+            if column == 2:
+                return j.files_total
+            if column == 3:
+                return j.files_copied
+            if column == 4:
+                return j.files_failed
+            if column == 5:
+                return j.bytes_copied
+            if column == 6:
+                return j.started_at or datetime.min
+            if column == 7:
+                return j.duration_seconds or 0.0
+            return j.started_at or datetime.min
+
+        self.layoutAboutToBeChanged.emit()
+        self._rows.sort(key=key, reverse=reverse)
+        self.layoutChanged.emit()
+
+
+# ---------------------------------------------------------------------------
+# MigrationProgressTableModel — Migrate tab detail pane
+# ---------------------------------------------------------------------------
+
+
+class MigrationProgressTableModel(QAbstractTableModel):
+    """Table model over per-file rows for a single migration job.
+
+    Wraps :meth:`MigrationJobRepository.query_progress(job_id)`.
+    Job ID is settable via :meth:`set_job_id`; on the initial state
+    (no job selected) the model is empty. Used as the detail pane in
+    the v1.1.0 Migrate tab's master/detail layout.
+
+    Columns: Status / Outcome / Src Path / Size / Verified Hash
+    """
+
+    COLUMNS: tuple[str, ...] = (
+        "Status", "Outcome", "Src Path", "Size", "Verified Hash",
+    )
+
+    def __init__(
+        self,
+        migration_job_repo: MigrationJobRepository,
+        *,
+        job_id: UUID | None = None,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._repo = migration_job_repo
+        self._job_id: UUID | None = job_id
+        self._rows: list[MigrationProgress] = []
+        self.refresh()
+
+    # -- public API -----------------------------------------------------
+
+    def set_job_id(self, job_id: UUID | None) -> None:
+        """Re-point at a different job (or clear via None) and refresh."""
+        self._job_id = job_id
+        self.refresh()
+
+    @property
+    def job_id(self) -> UUID | None:
+        return self._job_id
+
+    def refresh(self) -> None:
+        self.beginResetModel()
+        try:
+            if self._job_id is None:
+                self._rows = []
+            else:
+                self._rows = self._repo.query_progress(self._job_id)
+        except Exception:
+            self._rows = []
+        self.endResetModel()
+
+    def progress_at(self, row: int) -> MigrationProgress | None:
+        if 0 <= row < len(self._rows):
+            return self._rows[row]
+        return None
+
+    # -- Qt protocol ----------------------------------------------------
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: B008
+        if parent.isValid():
+            return 0
+        return len(self._rows)
+
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: B008
+        if parent.isValid():
+            return 0
+        return len(self.COLUMNS)
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if role != Qt.DisplayRole:
+            return None
+        if orientation == Qt.Orientation.Horizontal and 0 <= section < len(self.COLUMNS):
+            return self.COLUMNS[section]
+        return None
+
+    def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:
+        if not index.isValid():
+            return None
+        row = index.row()
+        if not (0 <= row < len(self._rows)):
+            return None
+        p = self._rows[row]
+        col = index.column()
+        if role == Qt.ToolTipRole:
+            if col == 2:
+                # Full src_path AND dst_path on tooltip (cell shows just src)
+                return f"src: {p.src_path}\ndst: {p.dst_path}"
+            if col == 1 and p.error:
+                return p.error
+            return None
+        if role != Qt.DisplayRole:
+            return None
+        if col == 0:
+            return p.status
+        if col == 1:
+            return p.outcome or ""
+        if col == 2:
+            return p.src_path
+        if col == 3:
+            return _format_size(p.size)
+        if col == 4:
+            h = p.verified_xxhash
+            return (h[:12] + "…") if h and len(h) > 12 else (h or "")
+        return None
+
+    def sort(self, column, order=Qt.AscendingOrder):
+        reverse = order == Qt.SortOrder.DescendingOrder
+
+        def key(p: MigrationProgress) -> Any:
+            if column == 0:
+                return p.status or ""
+            if column == 1:
+                return p.outcome or ""
+            if column == 2:
+                return p.src_path or ""
+            if column == 3:
+                return p.size
+            if column == 4:
+                return p.verified_xxhash or ""
+            return p.src_path or ""
+
+        self.layoutAboutToBeChanged.emit()
+        self._rows.sort(key=key, reverse=reverse)
+        self.layoutChanged.emit()
+
+
 __all__ = [
     "FileTableModel",
     "BundleTableModel",
@@ -917,4 +1201,6 @@ __all__ = [
     "ConfigTableModel",
     "ScanJobTableModel",
     "PendingReviewTableModel",
+    "MigrationJobTableModel",
+    "MigrationProgressTableModel",
 ]

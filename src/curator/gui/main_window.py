@@ -49,6 +49,8 @@ from curator.gui.models import (
     BundleTableModel,
     ConfigTableModel,
     FileTableModel,
+    MigrationJobTableModel,
+    MigrationProgressTableModel,
     PendingReviewTableModel,
     ScanJobTableModel,
     TrashTableModel,
@@ -86,6 +88,7 @@ class CuratorMainWindow(QMainWindow):
         tabs.addTab(self._build_browser_tab(), "Browser")
         tabs.addTab(self._build_bundles_tab(), "Bundles")
         tabs.addTab(self._build_trash_tab(), "Trash")
+        tabs.addTab(self._build_migrate_tab(), "Migrate")
         tabs.addTab(self._build_audit_tab(), "Audit Log")
         tabs.addTab(self._build_settings_tab(), "Settings")
         tabs.addTab(self._build_lineage_tab(), "Lineage Graph")
@@ -251,6 +254,138 @@ class CuratorMainWindow(QMainWindow):
             self._show_trash_context_menu,
         )
         return self._wrap_table(self._trash_view)
+
+    def _build_migrate_tab(self) -> QWidget:
+        """v1.1.0 Tracer Phase 2 Session C1: read-only Migrate tab.
+
+        Master/detail layout via :class:`QSplitter`:
+
+          * **Top:** list of recent migration jobs (most-recent first),
+            via :class:`MigrationJobTableModel`.
+          * **Bottom:** per-file progress for the currently-selected
+            job, via :class:`MigrationProgressTableModel`.
+
+        Selecting a job row populates the progress table; the label
+        above the progress table shows the short job_id + file count
+        + status. A Refresh button at the bottom re-queries both
+        models without losing the current selection.
+
+        Read-only in Session C1; mutations (Abort, Resume) and live
+        progress signal wiring during ``run_job`` come in Session C2.
+        For now, refresh is manual via the button or File > Refresh / F5.
+        """
+        from PySide6.QtWidgets import QSplitter
+
+        # Models.
+        self._migrate_jobs_model = MigrationJobTableModel(
+            self.runtime.migration_job_repo,
+        )
+        self._migrate_progress_model = MigrationProgressTableModel(
+            self.runtime.migration_job_repo,
+        )
+
+        # Views.
+        self._migrate_jobs_view = self._make_table_view(self._migrate_jobs_model)
+        self._migrate_progress_view = self._make_table_view(
+            self._migrate_progress_model,
+        )
+
+        # Wire selection: clicking a job row populates the progress table.
+        self._migrate_jobs_view.selectionModel().selectionChanged.connect(
+            self._slot_migrate_job_selected,
+        )
+
+        # Top half: jobs label + jobs view.
+        jobs_wrapper = QWidget()
+        jobs_layout = QVBoxLayout(jobs_wrapper)
+        jobs_layout.setContentsMargins(0, 0, 0, 0)
+        jobs_layout.addWidget(QLabel("<b>Migration jobs</b> (most recent first)"))
+        jobs_layout.addWidget(self._migrate_jobs_view)
+
+        # Bottom half: progress label + progress view.
+        progress_wrapper = QWidget()
+        progress_layout = QVBoxLayout(progress_wrapper)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+        self._migrate_progress_label = QLabel(
+            "<b>Per-file progress</b> \u2014 select a job above"
+        )
+        progress_layout.addWidget(self._migrate_progress_label)
+        progress_layout.addWidget(self._migrate_progress_view)
+
+        # Master/detail via QSplitter.
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(jobs_wrapper)
+        splitter.addWidget(progress_wrapper)
+        splitter.setSizes([200, 400])  # progress gets the larger pane
+        self._migrate_splitter = splitter
+
+        # Refresh button row.
+        self._migrate_refresh_btn = QPushButton("Refresh")
+        self._migrate_refresh_btn.setToolTip(
+            "Re-query both job and progress tables. Useful after a CLI "
+            "`curator migrate --apply` run completes in another shell."
+        )
+        self._migrate_refresh_btn.clicked.connect(self._slot_migrate_refresh)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        btn_row.addWidget(self._migrate_refresh_btn)
+
+        # Compose tab.
+        wrapper = QWidget()
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.addWidget(splitter)
+        layout.addLayout(btn_row)
+        return wrapper
+
+    def _slot_migrate_job_selected(self, *args, **kwargs) -> None:
+        """Master\u2192detail wire-up: populate progress for the selected job.
+
+        Called whenever the jobs view's selection changes. If nothing
+        is selected (e.g. after a refresh that cleared rows), clears
+        the progress table back to the empty state.
+        """
+        indexes = self._migrate_jobs_view.selectionModel().selectedRows()
+        if not indexes:
+            self._migrate_progress_model.set_job_id(None)
+            self._migrate_progress_label.setText(
+                "<b>Per-file progress</b> \u2014 select a job above"
+            )
+            return
+        row = indexes[0].row()
+        job = self._migrate_jobs_model.job_at(row)
+        if job is None:
+            return
+        self._migrate_progress_model.set_job_id(job.job_id)
+        short_id = str(job.job_id)[:8]
+        self._migrate_progress_label.setText(
+            f"<b>Per-file progress</b> \u2014 job <code>{short_id}\u2026</code> "
+            f"({job.files_total} files; status: {job.status})"
+        )
+
+    def _slot_migrate_refresh(self) -> None:
+        """Refresh both Migrate-tab models, preserving the current
+        job selection if the same job_id is still present after
+        re-querying the jobs list."""
+        # Remember current selection so we can re-apply it post-refresh.
+        current_job_id = None
+        indexes = self._migrate_jobs_view.selectionModel().selectedRows()
+        if indexes:
+            j = self._migrate_jobs_model.job_at(indexes[0].row())
+            if j is not None:
+                current_job_id = j.job_id
+
+        self._migrate_jobs_model.refresh()
+        # Try to restore selection on the same job_id.
+        if current_job_id is not None:
+            for r in range(self._migrate_jobs_model.rowCount()):
+                j = self._migrate_jobs_model.job_at(r)
+                if j is not None and j.job_id == current_job_id:
+                    self._migrate_jobs_view.selectRow(r)
+                    return  # selectionChanged slot already refreshed progress
+        # No prior selection (or job vanished) -> just refresh progress
+        # for whatever the model currently shows.
+        self._migrate_progress_model.refresh()
 
     def _build_audit_tab(self) -> QWidget:
         """v0.37: audit log view. Read-only, no context menu.
@@ -442,6 +577,9 @@ class CuratorMainWindow(QMainWindow):
         # v0.41: Lineage graph view (refresh re-queries the builder).
         if hasattr(self, "_lineage_view") and self._lineage_view is not None:
             self._lineage_view.refresh()
+        # v1.1.0 (Tracer Phase 2 Session C1): Migrate tab.
+        if hasattr(self, "_migrate_jobs_model"):
+            self._slot_migrate_refresh()
         # Settings model points at the runtime config; nothing to re-query
         # there — the explicit Reload button is the path for that.
         self._refresh_status_bar()
