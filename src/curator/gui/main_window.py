@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from curator.gui.migrate_signals import MigrationProgressBridge
 from curator.gui.models import (
     AuditLogTableModel,
     BundleTableModel,
@@ -308,6 +309,17 @@ class CuratorMainWindow(QMainWindow):
         # the GUI's Refresh can prefer fresh state over stale cache.
         self._migrate_resume_threads: list[threading.Thread] = []
 
+        # v1.1.0 Tracer Phase 2 Session C2b: cross-thread bridge for live
+        # progress updates. Worker threads inside MigrationService.run_job
+        # call ``bridge.progress_updated.emit(progress)`` per file; Qt
+        # delivers the signal across thread boundaries via QueuedConnection,
+        # so the connected slot fires on the GUI thread (where touching
+        # Qt models is safe).
+        self._migrate_progress_bridge = MigrationProgressBridge(parent=self)
+        self._migrate_progress_bridge.progress_updated.connect(
+            self._slot_migrate_apply_progress_update,
+        )
+
         # Top half: jobs label + jobs view.
         jobs_wrapper = QWidget()
         jobs_layout = QVBoxLayout(jobs_wrapper)
@@ -568,7 +580,11 @@ class CuratorMainWindow(QMainWindow):
 
         def _runner() -> None:
             try:
-                self.runtime.migration.run_job(job_id, workers=workers)
+                self.runtime.migration.run_job(
+                    job_id,
+                    workers=workers,
+                    on_progress=self._migrate_progress_bridge.progress_updated.emit,
+                )
             except Exception as e:  # noqa: BLE001 -- non-Qt thread boundary
                 # The failure surfaces in the GUI on next Refresh via
                 # the job's status field. Log here so it's not silent.
@@ -594,6 +610,52 @@ class CuratorMainWindow(QMainWindow):
             f"Job {str(job_id)[:8]}\u2026 will run with {workers} "
             "workers. Click Refresh to see progress."
         )
+
+    def _slot_migrate_apply_progress_update(self, progress) -> None:
+        """Slot for ``MigrationProgressBridge.progress_updated``.
+
+        Runs on the GUI thread (Qt routes the cross-thread emission via
+        ``QueuedConnection``). Refreshes the affected models so the user
+        sees live progress without clicking Refresh.
+
+        Strategy: full ``refresh()`` of the jobs model (cheap; <=50 rows)
+        plus full refresh of the progress model IF the in-flight job is
+        the one currently displayed. Per-row update would be more
+        efficient for thousand-file jobs, but full refresh is simpler
+        and correct for the typical job size (dozens to low hundreds of
+        files).
+
+        Defensive: if the model attributes don't exist (window torn down,
+        Migrate tab not built yet), this is a silent no-op.
+        """
+        # Defensive: window may be in tear-down
+        if not hasattr(self, "_migrate_jobs_model"):
+            return
+        if not hasattr(self, "_migrate_progress_model"):
+            return
+
+        # Always refresh the jobs model so rollup counters
+        # (files_copied, files_failed, bytes_copied, status) update.
+        try:
+            self._migrate_jobs_model.refresh()
+        except Exception:  # noqa: BLE001 -- defensive
+            return
+
+        # Refresh the progress model only if it's pointed at the
+        # job that just produced this update. Avoids re-querying for
+        # unrelated jobs the user may be viewing instead.
+        try:
+            current_job_id = self._migrate_progress_model.job_id
+        except Exception:  # noqa: BLE001
+            return
+        progress_job_id = getattr(progress, "job_id", None)
+        if (current_job_id is not None
+                and progress_job_id is not None
+                and current_job_id == progress_job_id):
+            try:
+                self._migrate_progress_model.refresh()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _build_audit_tab(self) -> QWidget:
         """v0.37: audit log view. Read-only, no context menu.

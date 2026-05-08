@@ -629,8 +629,13 @@ class TestPerformMigrateResume:
                 assert last_thread.daemon is True
                 last_thread.join(timeout=5.0)
                 assert not last_thread.is_alive()
-            # The mock was called from inside the thread
-            mock_run.assert_called_once_with(queued.job_id, workers=2)
+            # The mock was called from inside the thread, with on_progress
+            # plumbed through (as of C2b -- the bridge.emit method).
+            mock_run.assert_called_once()
+            call_args, call_kwargs = mock_run.call_args
+            assert call_args == (queued.job_id,)
+            assert call_kwargs["workers"] == 2
+            assert callable(call_kwargs["on_progress"])
         finally:
             window.deleteLater()
 
@@ -718,6 +723,283 @@ class TestMigrateContextMenuEnabling:
             assert (
                 window._migrate_jobs_view.contextMenuPolicy()
                 == Qt.ContextMenuPolicy.CustomContextMenu
+            )
+        finally:
+            window.deleteLater()
+
+
+# ===========================================================================
+# v1.1.0 Tracer Phase 2 Session C2b: live progress signal bridge
+# (worker thread -> Qt signal -> GUI thread slot)
+# ===========================================================================
+
+
+class TestMigrationProgressBridge:
+    """Unit tests for the cross-thread :class:`MigrationProgressBridge`.
+
+    The bridge's reason to exist: workers in MigrationService.run_job
+    run inside a ThreadPoolExecutor (non-Qt threads). Qt models can ONLY
+    be touched on the GUI thread. The bridge converts thread-safe
+    ``Signal.emit`` calls into queued slot invocations on the GUI thread.
+    """
+
+    def test_bridge_is_qobject_with_signal(self, qapp):
+        from curator.gui.migrate_signals import MigrationProgressBridge
+        from PySide6.QtCore import QObject
+        bridge = MigrationProgressBridge()
+        assert isinstance(bridge, QObject)
+        # The signal exists and is connectable
+        received: list = []
+        bridge.progress_updated.connect(lambda p: received.append(p))
+        bridge.progress_updated.emit({"hello": "world"})
+        # Same-thread emission delivers synchronously (DirectConnection)
+        assert received == [{"hello": "world"}]
+
+    def test_signal_delivers_across_thread_boundary(self, qapp):
+        """The headline test: emit from a non-Qt thread, slot fires on
+        the GUI thread (after processing pending events).
+
+        Without the bridge -> with QueuedConnection auto-routing, this
+        would either crash on segfault (Qt model touched off-thread)
+        or silently drop the update.
+        """
+        import threading
+
+        from curator.gui.migrate_signals import MigrationProgressBridge
+
+        bridge = MigrationProgressBridge()
+        received: list = []
+        bridge.progress_updated.connect(lambda p: received.append(p))
+
+        def emit_from_worker():
+            # This runs on a non-Qt thread
+            bridge.progress_updated.emit("from-worker-thread")
+
+        worker = threading.Thread(target=emit_from_worker)
+        worker.start()
+        worker.join(timeout=5.0)
+        # Cross-thread emission queues the slot invocation. Drain it.
+        qapp.processEvents()
+        assert received == ["from-worker-thread"]
+
+    def test_multiple_concurrent_emits_all_delivered(self, qapp):
+        """Several worker threads all emit; the slot fires once per emit
+        on the GUI thread (Qt serializes queued connections)."""
+        import threading
+
+        from curator.gui.migrate_signals import MigrationProgressBridge
+
+        bridge = MigrationProgressBridge()
+        received: list = []
+        bridge.progress_updated.connect(lambda p: received.append(p))
+
+        N_WORKERS = 5
+
+        def emit(idx):
+            bridge.progress_updated.emit(idx)
+
+        threads = [
+            threading.Thread(target=emit, args=(i,)) for i in range(N_WORKERS)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5.0)
+        qapp.processEvents()
+        assert sorted(received) == list(range(N_WORKERS))
+
+
+class TestMigrateApplyProgressUpdateSlot:
+    """Tests for ``_slot_migrate_apply_progress_update`` -- the GUI-thread
+    slot that refreshes models on each per-file update from a worker."""
+
+    def test_slot_refreshes_jobs_model(self, qapp, runtime_with_migrations):
+        """Every progress update refreshes the jobs model so the
+        rollup counters update visibly."""
+        rt, _ = runtime_with_migrations
+        window = CuratorMainWindow(rt)
+        try:
+            # Build a fake progress object pointing at a real job
+            from curator.models.migration import MigrationProgress
+            from uuid import uuid4 as _uuid4
+            fake_progress = MigrationProgress(
+                job_id=_uuid4(),
+                curator_id=_uuid4(),
+                src_path="/x", dst_path="/y",
+                size=0, safety_level="safe", status="completed",
+                outcome="moved",
+            )
+            # Spy on the jobs model's refresh
+            with patch.object(
+                window._migrate_jobs_model, "refresh",
+                wraps=window._migrate_jobs_model.refresh,
+            ) as spy:
+                window._slot_migrate_apply_progress_update(fake_progress)
+                spy.assert_called_once()
+        finally:
+            window.deleteLater()
+
+    def test_slot_refreshes_progress_model_only_for_displayed_job(
+        self, qapp, runtime_with_migrations,
+    ):
+        """Progress for the displayed job triggers a progress refresh;
+        progress for OTHER jobs does not (avoids redundant DB reads)."""
+        rt, jobs = runtime_with_migrations
+        window = CuratorMainWindow(rt)
+        try:
+            displayed_id = jobs[1].job_id  # the running job (has progress rows)
+            other_id = jobs[0].job_id
+            window._migrate_progress_model.set_job_id(displayed_id)
+
+            from curator.models.migration import MigrationProgress
+            from uuid import uuid4 as _uuid4
+
+            # Update for the DISPLAYED job -> progress model refreshes
+            with patch.object(
+                window._migrate_progress_model, "refresh",
+                wraps=window._migrate_progress_model.refresh,
+            ) as spy_displayed:
+                p_displayed = MigrationProgress(
+                    job_id=displayed_id, curator_id=_uuid4(),
+                    src_path="/x", dst_path="/y", size=0,
+                    safety_level="safe", status="completed", outcome="moved",
+                )
+                window._slot_migrate_apply_progress_update(p_displayed)
+                spy_displayed.assert_called_once()
+
+            # Update for a DIFFERENT job -> progress model NOT refreshed
+            with patch.object(
+                window._migrate_progress_model, "refresh",
+                wraps=window._migrate_progress_model.refresh,
+            ) as spy_other:
+                p_other = MigrationProgress(
+                    job_id=other_id, curator_id=_uuid4(),
+                    src_path="/x", dst_path="/y", size=0,
+                    safety_level="safe", status="completed", outcome="moved",
+                )
+                window._slot_migrate_apply_progress_update(p_other)
+                spy_other.assert_not_called()
+        finally:
+            window.deleteLater()
+
+    def test_slot_is_silent_no_op_when_no_job_selected(
+        self, qapp, runtime_with_migrations,
+    ):
+        """With no job selected (progress model job_id is None), the
+        progress model isn't refreshed -- but jobs model still is."""
+        rt, _ = runtime_with_migrations
+        window = CuratorMainWindow(rt)
+        try:
+            assert window._migrate_progress_model.job_id is None
+            from curator.models.migration import MigrationProgress
+            from uuid import uuid4 as _uuid4
+            fake = MigrationProgress(
+                job_id=_uuid4(), curator_id=_uuid4(),
+                src_path="/x", dst_path="/y", size=0,
+                safety_level="safe", status="completed", outcome="moved",
+            )
+            with patch.object(
+                window._migrate_progress_model, "refresh",
+            ) as spy_progress, patch.object(
+                window._migrate_jobs_model, "refresh",
+            ) as spy_jobs:
+                window._slot_migrate_apply_progress_update(fake)
+                spy_jobs.assert_called_once()
+                spy_progress.assert_not_called()
+        finally:
+            window.deleteLater()
+
+
+class TestMigrateBridgeIntegration:
+    """End-to-end: ``_perform_migrate_resume`` plumbs the bridge's
+    ``emit`` through to ``run_job`` as ``on_progress``. Workers calling
+    on_progress trigger model refreshes on the GUI thread."""
+
+    def test_resume_passes_bridge_emit_as_on_progress(
+        self, qapp, runtime_with_migrations,
+    ):
+        """The on_progress callback handed to run_job is exactly the
+        bridge's emit method, so any worker invocation routes through
+        the cross-thread signal pathway."""
+        rt, _ = runtime_with_migrations
+        window = CuratorMainWindow(rt)
+        try:
+            from curator.models.migration import MigrationJob
+            queued = MigrationJob(
+                src_source_id="local", src_root="/q",
+                dst_source_id="local", dst_root="/r",
+                status="queued", files_total=1,
+            )
+            rt.migration_job_repo.insert_job(queued)
+
+            captured: dict = {}
+
+            def fake_run_job(job_id, *, workers, on_progress=None):
+                captured["job_id"] = job_id
+                captured["workers"] = workers
+                captured["on_progress"] = on_progress
+                return None
+
+            with patch.object(rt.migration, "run_job", side_effect=fake_run_job):
+                ok, _ = window._perform_migrate_resume(queued.job_id)
+                assert ok is True
+                last_thread = window._migrate_resume_threads[-1]
+                last_thread.join(timeout=5.0)
+                assert not last_thread.is_alive()
+
+            # The on_progress hand-off must be functionally bound to
+            # the bridge's signal -- calling it should fire the bridge's
+            # ``progress_updated`` signal. Note: ``SignalInstance.emit``
+            # returns a fresh bound-method on each attribute access, so
+            # ``is``-comparing it to itself fails (PySide6 quirk). The
+            # functional check is the real invariant.
+            received: list = []
+            window._migrate_progress_bridge.progress_updated.connect(
+                lambda p: received.append(p),
+            )
+            captured["on_progress"]("probe-payload")
+            qapp.processEvents()
+            assert received == ["probe-payload"]
+        finally:
+            window.deleteLater()
+
+    def test_worker_emit_triggers_gui_slot_via_queued_connection(
+        self, qapp, runtime_with_migrations,
+    ):
+        """Full pipe: spawn a thread that calls ``bridge.emit``; the
+        slot fires on the GUI thread (after ``processEvents``) and
+        the jobs model's ``refresh`` is invoked."""
+        import threading
+
+        rt, jobs = runtime_with_migrations
+        window = CuratorMainWindow(rt)
+        try:
+            from curator.models.migration import MigrationProgress
+            from uuid import uuid4 as _uuid4
+            fake = MigrationProgress(
+                job_id=_uuid4(), curator_id=_uuid4(),
+                src_path="/x", dst_path="/y", size=0,
+                safety_level="safe", status="completed", outcome="moved",
+            )
+            refresh_calls = []
+            original_refresh = window._migrate_jobs_model.refresh
+
+            def tracking_refresh():
+                refresh_calls.append(True)
+                return original_refresh()
+
+            window._migrate_jobs_model.refresh = tracking_refresh
+
+            def worker():
+                window._migrate_progress_bridge.progress_updated.emit(fake)
+
+            t = threading.Thread(target=worker)
+            t.start()
+            t.join(timeout=5.0)
+            # Drain the queued slot invocation onto the GUI thread
+            qapp.processEvents()
+            assert refresh_calls, (
+                "Slot did not fire -- cross-thread signal delivery broke"
             )
         finally:
             window.deleteLater()
