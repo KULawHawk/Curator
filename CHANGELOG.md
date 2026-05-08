@@ -4,6 +4,328 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.1.0] — 2026-05-08 — Migration tool Phase 2 (stable)
+
+**Headline:** Tracer (the Curator brand for migration capabilities)
+Phase 2 ships stable. Every item the v1.1.0a1 entry listed under "Phase 2
+deferred" is now done: persistent + resumable jobs, worker-pool concurrency,
+cross-source migration via the ``curator_source_write`` plugin hook,
+full CLI flag surface (``--list``, ``--status``, ``--abort``, ``--resume``,
+``--workers``, ``--include``, ``--exclude``, ``--path-prefix``,
+``--dst-source-id``, ``--keep-source``, ``--include-caution``), and a
+PySide6 "Migrate" tab with read-only job/progress views, right-click
+Abort/Resume mutations, and live cross-thread progress signals from the
+worker pool to the GUI thread. Seven implementation sessions
+(A1+A2+A3+B+C1+C2+C2b) shipped over a single day's work, plus
+~130 net new tests on top of the v1.1.0a1 baseline.
+
+### Added — storage + models (Session A1)
+
+- **Schema migration_002** (``src/curator/storage/migrations.py``):
+  introduces ``migration_jobs`` (one row per CLI invocation; tracks
+  src/dst routing + rollup counters + status + options blob) and
+  ``migration_progress`` (one row per planned file move; tracks
+  per-file outcome + verified hash + size + safety_level). Both keyed
+  by ``job_id`` UUID. Foreign key from progress -> jobs with cascade
+  delete; indexed on ``(job_id, status)`` for the worker claim path.
+- **Domain models** (``src/curator/models/migration.py``):
+  :class:`MigrationJob` (Pydantic) with ``is_terminal`` /
+  ``duration_seconds`` properties; :class:`MigrationProgress` mirroring
+  the per-file row; status literal types pinned
+  (``Literal['queued', 'running', 'completed', 'partial', 'failed', 'cancelled']``
+  for jobs, ``Literal['pending', 'in_progress', 'completed', 'failed', 'skipped']``
+  for progress).
+- **Repository** (``src/curator/storage/repositories/migration_job_repo.py``
+  ~360 LOC): :class:`MigrationJobRepository` with the full job + progress
+  lifecycle: ``insert_job``, ``update_job_status``,
+  ``increment_job_counts``, ``set_files_total``, ``delete_job``,
+  ``get_job``, ``list_jobs(status=None, limit=50)``,
+  ``seed_progress_rows`` (bulk insert for plan-time fan-out),
+  **``next_pending_progress`` (atomic claim via SQLite
+  ``BEGIN IMMEDIATE`` + ``UPDATE … RETURNING``)** — the worker pool's
+  central ordering primitive, ``update_progress``,
+  ``reset_in_progress_to_pending`` (resume safety net),
+  ``get_progress``, ``query_progress``, ``count_progress_by_status``.
+
+### Added — service layer (Session A2)
+
+- **MigrationService Phase 2 API** (``src/curator/services/migration.py``):
+  - ``create_job(plan, *, options=None, db_path_guard=None,
+    include_caution=False)`` — persists a Phase-1 plan as a
+    ``migration_jobs`` row + N ``migration_progress`` rows. Pre-skips
+    REFUSE / DB-guarded files at seed time; CAUTION rows are pre-skipped
+    UNLESS ``include_caution=True``.
+  - ``run_job(job_id, *, workers=4, verify_hash=True, keep_source=False,
+    on_progress=None)`` — ThreadPoolExecutor with N workers (clamped to
+    >=1). Workers loop on ``next_pending_progress`` until empty or
+    ``abort_event.is_set()``. Final job status determined from terminal
+    histogram: ``cancelled`` if aborted, ``partial`` if any failed,
+    ``completed`` otherwise.
+  - ``abort_job(job_id)`` — sets a per-job ``threading.Event`` (instant;
+    no I/O). Workers finish the current file (per-file atomicity is
+    preserved — no mid-file abort) and exit on the next loop iteration.
+  - ``list_jobs(*, status=None, limit=50)`` and
+    ``get_job_status(job_id)`` — read-only enumeration / detail.
+- **Resume semantics:** rows left as ``status='in_progress'`` from a
+  previous interrupted run are reset to ``'pending'`` before workers
+  start. Safe per design — progress rows transition to ``'completed'``
+  AFTER the FileEntity index update but BEFORE the trash step, so an
+  ``in_progress`` row never has the index-update side effect.
+- **Worker discipline:** every per-file move still follows the Atrium
+  Constitution Principle 2 (Hash-Verify-Before-Move) protocol.
+  Persistent path additionally records each per-file outcome to
+  ``migration_progress`` and bumps the job-level rollup counters
+  atomically.
+- **Runtime wiring:** ``CuratorRuntime`` constructs ``MigrationService``
+  with ``migration_jobs=migration_job_repo`` and ``pm=pm`` (the latter
+  is used by Session B's cross-source dispatch).
+
+### Added — CLI extensions (Session A3)
+
+- **Filter flags:** ``--include <glob>`` / ``--exclude <glob>``
+  (repeatable; matched against path-relative-to-src_root with
+  forward-slash normalization for cross-platform glob portability),
+  ``--path-prefix <subpath>`` (narrows selection without changing
+  src_root semantics).
+- **Routing flags:** ``--dst-source-id <id>`` (required for Session B's
+  cross-source case; defaults to ``src_source_id`` for same-source).
+- **Worker / parallelism flags:** ``--workers N`` / ``-w N``
+  (default 1 for backwards compat; ``> 1`` automatically routes through
+  the Phase 2 persistent path).
+- **Source-action flags:** ``--keep-source`` (creates dst, leaves src,
+  index NOT updated; outcome is :class:`MigrationOutcome.COPIED`,
+  audit action ``migration.copy`` distinct from ``migration.move``)
+  vs ``--trash-source`` (Phase 1 default semantics).
+- **Safety opt-in:** ``--include-caution`` (eligible CAUTION-level
+  files migrate alongside SAFE; REFUSE is always skipped regardless).
+- **Job lifecycle flags:** ``--list`` (recent jobs, optional ``--status``
+  filter), ``--status <job_id>`` (rich detail for one job),
+  ``--abort <job_id>`` (signals the running pool to stop),
+  ``--resume <job_id>`` (re-runs ``run_job`` on an interrupted
+  cancelled/partial/failed job).
+- **Auto-routing:** the CLI inspects ``--workers`` and routes to
+  Phase 2 (persistent + parallel) when ``> 1``, Phase 1 (in-memory +
+  serial) otherwise. Single transparent surface.
+- **New outcome:** :class:`MigrationOutcome.COPIED` for keep-source
+  semantics. ``apply()`` and ``run_job()`` both honor it.
+- **``_audit_copy`` helper:** distinct audit action ``migration.copy``
+  for keep-source moves so audit log queries can differentiate from
+  ``migration.move``.
+
+### Added — cross-source migration (Session B)
+
+- **Cross-source dispatcher** in ``MigrationService._execute_one``:
+  routes to ``_execute_one_same_source`` (the Phase 1 ``shutil.copy2``
+  fast path) or ``_execute_one_cross_source`` (hook-mediated bytes
+  transfer) based on ``src_source_id != dst_source_id``. Same
+  dispatcher applied to both in-memory ``apply()`` and persistent
+  ``run_job()`` paths.
+- **5 cross-source helpers:** ``_is_cross_source``, ``_can_write_to_source``
+  (reads ``SourcePluginInfo.supports_write`` from
+  ``curator_source_register``), ``_hook_first_result`` (collapses
+  pluggy result lists; preserves ``FileExistsError`` for collision
+  signaling), ``_read_bytes_via_hook`` (chunks 64KB through
+  ``curator_source_read_bytes``), ``_cross_source_transfer``
+  (read src → write dst via hook → re-read dst via hook → verify hash
+  → return outcome+verified_hash).
+- **Pre-existing plugin hook leveraged:** ``curator_source_write``
+  (whole-file in-memory bytes API:
+  ``(source_id, parent_id, name, data, *, mtime=None, overwrite=False) → FileInfo | None``)
+  was already specced in ``hookspecs.py`` and implemented production-grade
+  by both source plugins — ``LocalSourcePlugin`` (atomic via
+  ``tempfile`` + ``os.replace``) and ``GoogleDriveSourcePlugin`` (PyDrive2
+  ``CreateFile`` + ``BytesIO`` + ``Upload``). No new plugin work was
+  required to enable cross-source migration; the service layer just
+  wired itself to the hook surface that already existed.
+- **Cross-source per-file discipline:** identical Hash-Verify-Before-Move
+  protocol — read src bytes, optionally compute src hash, write dst
+  via hook, re-read dst via hook, recompute and verify hash. On mismatch:
+  delete dst via ``curator_source_delete(to_trash=False)``, mark
+  HASH_MISMATCH, src untouched. On success: update FileEntity's
+  **both** ``source_id`` AND ``source_path`` (cross-source moves
+  legitimately transit a source-id boundary), then trash src via
+  ``curator_source_delete(to_trash=True)``.
+- **CLI capability check:** the CLI now invokes
+  ``rt.migration._can_write_to_source(dst_source_id)`` and refuses with
+  a clear error if the destination plugin does not advertise
+  ``supports_write``. Replaces the v1.0.0rc1 "cross-source not yet
+  supported" hard-coded refusal.
+- **Persistent audit entries** for cross-source moves include
+  ``src_source_id``, ``dst_source_id``, and a ``cross_source: True``
+  marker so audit-log queries can partition cross-source from
+  same-source operations.
+- **Streaming chunked transfer is NOT in this release.** Per the v0.40
+  hookspec, ``curator_source_write`` is whole-file-in-memory only;
+  streaming is "Phase γ+" future work. For typical music / document
+  / spreadsheet corpora, RAM is not the bottleneck.
+
+### Added — PySide6 Migrate tab (Sessions C1, C2, C2b)
+
+- **New tab in ``CuratorMainWindow``** (``src/curator/gui/main_window.py``):
+  Migrate tab inserted at index 4, between Trash and Audit Log. Final
+  tab order: Inbox(0) / Browser(1) / Bundles(2) / Trash(3) /
+  **Migrate(4)** / Audit Log(5) / Settings(6) / Lineage Graph(7).
+- **Master/detail layout** (Session C1, ``QSplitter``): jobs table on
+  top (status / src→dst / files / copied / failed / bytes / started /
+  duration), per-job progress table below (status / outcome / src path /
+  size / verified hash, hash truncated to 12 chars + ellipsis).
+  Selection-driven: clicking a job populates the progress table.
+  ``selectionChanged`` slot preserves the selected ``job_id`` across
+  refreshes.
+- **Two new Qt models** (``src/curator/gui/models.py``, ~290 LOC):
+  :class:`MigrationJobTableModel` wrapping ``MigrationJobRepository.list_jobs()``;
+  :class:`MigrationProgressTableModel` with settable ``job_id`` via
+  ``set_job_id()``. ``_format_duration`` helper handles the
+  ``"H:MM:SS"`` / ``"MM:SS"`` / ``"—"`` cases consistently.
+- **Right-click context menu on jobs** (Session C2):
+  - **Abort job…** — enabled only for ``running``. Synchronous
+    (``abort_job`` is fast; just sets a thread Event).
+  - **Resume job (background)…** — enabled for
+    ``{queued, cancelled, partial, failed}`` (excluded:
+    ``running`` and ``completed``). Spawns a daemon
+    ``threading.Thread`` running ``run_job`` so the GUI stays
+    responsive; the perform method returns immediately.
+  Each action has a tooltip explaining what it does, modal
+  confirmation dialog before, and a result dialog after. Class
+  constant ``_MIGRATE_RESUMABLE_STATUSES = frozenset(...)`` codifies
+  the resume eligibility rule.
+- **Live progress signals** (Session C2b,
+  ``src/curator/gui/migrate_signals.py`` ~50 LOC):
+  :class:`MigrationProgressBridge(QObject)` exposes a single
+  ``progress_updated = Signal(object)``. The window constructs one
+  bridge per Migrate tab and passes
+  ``bridge.progress_updated.emit`` as the ``on_progress`` callback to
+  ``run_job``. ThreadPoolExecutor workers calling on_progress per file
+  fire the signal; Qt routes the cross-thread emission via
+  ``Qt::QueuedConnection`` so the connected slot
+  (``_slot_migrate_apply_progress_update``) runs on the GUI thread
+  — the only safe place to touch ``QAbstractTableModel`` — and
+  refreshes the affected models. The user sees progress tick up live
+  with no manual Refresh.
+- **Refresh strategy:** jobs model refreshes on every progress signal
+  (cheap; <=50 rows). Progress model refreshes only when the
+  in-flight job_id matches the displayed one (avoids redundant DB
+  reads for unrelated jobs the user may be viewing instead).
+  ``hasattr`` guards make the slot a silent no-op during window
+  tear-down.
+- **Tab-index regression fixes** in 4 prior GUI test files
+  (``test_gui_audit``, ``test_gui_inbox``, ``test_gui_lineage``,
+  ``test_gui_settings``) for the new tab ordering.
+
+### Tests (~130 net new since v1.1.0a1)
+
+- ``tests/unit/test_migration_phase2.py`` (~95 tests, Sessions A2 + A3):
+  worker-pool semantics (``next_pending_progress`` atomicity, abort
+  signaling latency, partial vs completed final-status logic, resume
+  recovery from in_progress, keep_source COPIED outcome,
+  include_caution gating).
+- ``tests/unit/test_migration_cross_source.py`` (17 tests, Session B):
+  uses a TWO-local-source-IDs strategy (``local`` and ``local:vault``,
+  both owned by ``LocalPlugin`` via ``_owns()`` prefix matching) to
+  exercise the cross-source code path hermetically without needing a
+  real GDrive auth. Covers: capability check (refusal when dst plugin
+  lacks ``supports_write``), full local→local-vault transfer with
+  hash verification, dst-side collision (``FileExistsError`` from
+  ``curator_source_write`` → SKIPPED_COLLISION), hash mismatch
+  re-read fallback, lineage edge survival across
+  ``source_id`` change (one-line ``get_edges_for(...)`` fix during
+  test build to align with the actual repo method name).
+- ``tests/integration/test_cli_migrate.py`` (+5 cross-source CLI
+  tests via ``cross_source_seeded_db`` fixture, Session B).
+- ``tests/gui/test_gui_migrate.py`` (NEW — 50 tests across 7 test
+  classes, Sessions C1+C2+C2b):
+  - C1: ``TestFormatDuration`` (9 parametrized),
+    ``TestMigrationJobTableModel`` (10),
+    ``TestMigrationProgressTableModel`` (7),
+    ``TestMigrateTabWiring`` (6).
+  - C2: ``TestPerformMigrateAbort`` (2),
+    ``TestPerformMigrateResume`` (5 — includes a threading test that
+    mocks ``run_job``, joins the spawned thread with a 5s timeout,
+    asserts mock invocation from the background thread),
+    ``TestMigrateContextMenuEnabling`` (3).
+  - C2b: ``TestMigrationProgressBridge`` (3 — includes the headline
+    cross-thread test: emit from a ``threading.Thread``,
+    ``qapp.processEvents()``, slot fires on GUI thread),
+    ``TestMigrateApplyProgressUpdateSlot`` (3),
+    ``TestMigrateBridgeIntegration`` (2 — full pipe
+    thread→emit→slot→refresh).
+- **Final test count in the migration + GUI slice: 1150 passing,
+  0 failures, 47s wall-clock.**
+
+### Schema
+
+- migration_002 adds ``migration_jobs`` + ``migration_progress``.
+  No changes to existing tables (additive only). No data migration
+  required — existing v1.1.0a1 / v1.0.0rc1 databases pick up the new
+  tables on first run.
+
+### Backward compatibility
+
+- **Phase 1 in-memory API preserved.** ``MigrationService.plan()`` /
+  ``apply()`` continue to work exactly as in v1.1.0a1 for users who
+  prefer the simple one-shot path. ``apply()`` even gained
+  ``keep_source`` and ``include_caution`` parameters that mirror the
+  Phase 2 flags, so callers can opt into those semantics without
+  routing through ``create_job`` + ``run_job``.
+- **Phase 1 CLI surface preserved.** ``curator migrate <src> <root> <dst>``
+  with no flags or only Phase 1 flags (``--ext``, ``--verify-hash``,
+  ``--apply``, ``--json``) behaves identically. Users only opt into
+  Phase 2 by passing one of the new flags (``--workers > 1``,
+  ``--list``, ``--status``, ``--abort``, ``--resume``, etc.).
+- **No new dependencies.** PySide6, pluggy, xxhash, loguru, send2trash,
+  PyDrive2 — all already required.
+
+### Atrium constitutional compliance
+
+- **Principle 2 (Hash-Verify-Before-Move):** preserved per file in
+  ALL paths — same-source in-memory, same-source persistent,
+  cross-source in-memory, cross-source persistent. Verify happens via
+  filesystem re-read for same-source and via hook re-read for
+  cross-source, but the discipline (hash src, write dst, re-hash
+  dst, compare, only THEN trash src) is identical in all four.
+- **Audit log action distinction:** ``migration.move`` (index
+  re-pointed, src trashed) vs ``migration.copy`` (keep-source: dst
+  created, src + index untouched). Audit-log queries can partition
+  on this. Cross-source entries also include
+  ``src_source_id`` + ``dst_source_id`` + ``cross_source: True``.
+
+### What's NOT in this release
+
+- **Streaming chunked transfer for cross-source** — whole-file
+  in-memory only; "Phase γ+" future work. Not a blocker for typical
+  corpora.
+- **Per-row progress updates in the GUI** — full-refresh on each file
+  is fine for typical job sizes (dozens to low hundreds of files).
+  Future polish if perf becomes an issue with thousand-file jobs.
+- **Selection preservation across progress refreshes** — the user's
+  row selection in the progress table is reset on each ``beginResetModel``.
+  ~10 LOC of stash + restore-by-curator_id; deferred polish.
+- **Live progress bar widget** — status text + counters only. Nothing
+  prevents adding a ``QProgressBar`` next to the progress label in a
+  future point release.
+- **Real-world local→gdrive demo log** — the cross-source code path is
+  fully tested via the two-local-source-IDs strategy in
+  ``test_migration_cross_source.py``, but a curated end-to-end demo
+  document analogous to v1.1.0a1's ``v100a1_migration_demo.txt`` is
+  pending Jake's hands-on session against his real gdrive auth.
+
+### Manual release steps remaining (Jake)
+
+At the time of this commit, the v1.1.0 tag exists locally but has
+not been pushed anywhere — Curator's git remote is not yet
+configured. To complete the release:
+
+1. ``git remote add origin <github-url>``
+2. ``git push -u origin main``
+3. ``git push origin v1.1.0``
+4. (Optional) Publish a GitHub Release pointing at the tag and pasting
+   this changelog entry as the release body.
+
+Until step 1–3 happen, the entire ``v1.0.0rc1…v1.1.0`` work surface
+(13 commits, ~2700 LOC of production code + ~1900 LOC of tests +
+~130 new tests) lives on a single disk. Atrium GATE-PM-013 (git/backup
+risk) remains the highest-leverage available action.
+
 ## [1.1.0a1] — 2026-05-08 — Migration tool Phase 1 (alpha)
 
 **Headline:** Feature M (Migration tool) Phase 1 ships. Same-source
