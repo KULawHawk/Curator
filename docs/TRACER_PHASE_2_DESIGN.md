@@ -1,6 +1,6 @@
 # Tracer Phase 2 Design
 
-**Status:** v0.2 — RATIFIED 2026-05-08; Phase 2 implementation cleared to begin. Original v0.1 was a design proposal; Jake ratified all 5 DM recommendations as written on 2026-05-08.
+**Status:** v0.3 — **IMPLEMENTED** 2026-05-08. All 5 DMs are closed; v1.1.0 stable was tagged at commit `391d234` after Sessions A1+A2+A3+B+C1+C2+C2b shipped. Phase 2 is functionally complete on disk. See per-DM `IMPLEMENTATION STATUS` lines in §3 and the `Actual effort` subsection of §10 for closure evidence. Earlier states preserved: v0.2 RATIFIED 2026-05-08 (DMs cleared); v0.1 was the original design proposal.
 **Date:** 2026-05-08
 **Authority:** Subordinate to Atrium `CONSTITUTION.md`. Implements `DESIGN_PHASE_DELTA.md` §2 (Feature M) Phase 2.
 **Companion documents:**
@@ -74,6 +74,8 @@ The `--keep-source` flag interacts with the index update: in keep mode, do we st
 
 **RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. Implementation cleared.
 
+**IMPLEMENTATION STATUS:** ✅ SHIPPED in Session A3 (commit `fbe72e3`). `--keep-source` / `--trash-source` flags both wired through `MigrationService.apply()` and `run_job()`. New `MigrationOutcome.COPIED` enum value distinguishes keep-source results from `MOVED`. New `_audit_copy()` helper emits `migration.copy` audit action distinct from `migration.move` so audit-log queries can partition keep-source from move-source operations. In keep mode, `FileEntity.source_path` is intentionally left pointing at src, exactly as ratified — the next `curator scan` picks up the dst as a new file and existing duplicate-detection plugins handle the lineage. `--delete-source` and `prompt-each-time` deliberately not implemented per ratification. Verified by ~10 tests in `tests/unit/test_migration_phase2.py` covering keep_source semantics.
+
 ### DM-2 — Hash-verify default
 
 **Question.** Should hash-verify-after-copy run by default?
@@ -83,6 +85,8 @@ The `--keep-source` flag interacts with the index update: in keep mode, do we st
 **Phase 2 recommendation.** No change. Default ON is mandated by Constitution Principle 2 (Hash-Verify-Before-Move). The opt-out exists for trusted fast paths and tests but it should never be the default. The cost (re-hashing the destination after copy) is small relative to the I/O cost, and it catches real corruption (silent disk errors, cloud-side rounding bugs, partial writes from interrupted copies that somehow look "complete" to the OS).
 
 **RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. Locked — `verify_hash=True` is permanent default; not to be revisited in future phases.
+
+**IMPLEMENTATION STATUS:** ✅ PRESERVED in Sessions A2 (commit `c3222c3`) and B (commit `4e51893`). `verify_hash=True` is the default keyword argument in both `MigrationService.apply()` and `MigrationService.run_job()`. The cross-source path in `_cross_source_transfer` re-reads bytes from the destination via the `curator_source_read_bytes` hook and recomputes the xxhash3_128 to verify against the source hash, so cross-source migrations get the same Constitutional discipline as same-source `shutil.copy2` + filesystem re-read. Hash-mismatch tests cover the mismatch → dst-cleanup → src-untouched path in both `tests/unit/test_migration.py` (Phase 1 paths) and `tests/unit/test_migration_cross_source.py` (Session B path).
 
 ### DM-3 — Concurrent workers
 
@@ -106,6 +110,8 @@ The simpler alternative — different defaults per migration type — adds compl
 
 **RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. Default `--workers 4`. Documentation must call out gdrive users may want `--workers 2` to avoid quota errors.
 
+**IMPLEMENTATION STATUS:** ✅ SHIPPED in Sessions A2 (commit `c3222c3`) and A3 (commit `fbe72e3`). `MigrationService.run_job()` uses `concurrent.futures.ThreadPoolExecutor(max_workers=worker_count)` with `worker_count = max(1, workers)`; the keyword default is 4. The CLI added `--workers N` / `-w N` with auto-routing: `> 1` automatically uses the Phase 2 persistent path, `1` (or absent) stays on the Phase 1 in-memory path. Per-worker discipline preserved via the atomic claim primitive in `MigrationJobRepository.next_pending_progress()` (SQLite `BEGIN IMMEDIATE` + `UPDATE … RETURNING` so two workers never claim the same row). Abort signaling via per-job `threading.Event` stored in `_abort_events: dict[UUID, threading.Event]`; workers check between files. Worker exception isolation: `pool.submit(...)` + `f.result()` propagates the FIRST worker exception, the rest finish their current file before unwinding. No global ordering guarantee — confirmed by tests asserting only that all rows reach a terminal state, not the order in which they do so.
+
 ### DM-4 — Filter syntax
 
 **Question.** What expressiveness should the filter language support? Options: extensions only, glob patterns, full FileQuery.
@@ -125,6 +131,8 @@ Globs use the standard `fnmatch` Windows-aware semantics from `pathlib.PurePath.
 
 **RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. Implementation cleared.
 
+**IMPLEMENTATION STATUS:** ✅ SHIPPED in Session A3 (commit `fbe72e3`). `--include <glob>` and `--exclude <glob>` are both repeatable Typer options. `--path-prefix <subpath>` narrows selection within `src_root` without changing the recorded src_root semantics. Globs use `fnmatch.fnmatch` against the path-relative-to-src_root with forward-slash normalization (`rel.replace("\\\\", "/")`) so the same `"**/draft/**"` pattern works identically on Windows and POSIX. Composition rule preserved: a file must match AT LEAST ONE include if any are specified, and MUST NOT match any exclude. Phase 1's `--ext .mp3,.flac` continues to work as before; the four filter axes (ext, include, exclude, path-prefix) compose freely. Full FileQuery deliberately NOT exposed to the CLI per ratification; remains a Python-API affordance.
+
 ### DM-5 — `SourceConfig` row after migration
 
 **Question.** When a cross-source migration moves all files from source A to source B, what happens to source A's row in the `sources` table?
@@ -136,6 +144,8 @@ Globs use the standard `fnmatch` Windows-aware semantics from `pathlib.PurePath.
 **Future enhancement (NOT Phase 2):** a `curator sources prune --empty` command that lists sources with zero active files and offers to remove them. This is useful but not blocking; defer to v1.2.0.
 
 **RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. SourceConfig rows persist after migration; cleanup is a separate user-driven action.
+
+**IMPLEMENTATION STATUS:** ✅ PRESERVED BY ABSENCE in Session B (commit `4e51893`). The cross-source dispatcher (`_execute_one_cross_source`) updates only the FileEntity's `source_id` and `source_path`; the `sources` table is never touched during migration. After a full `gdrive:old@…` → `local` migration, the `gdrive:old@…` SourceConfig row remains exactly as it was. The future `curator sources prune --empty` enhancement (v1.2.0+ candidate) is the deliberate, separate, user-driven path for cleanup. Verified indirectly by Session B's lineage-edge survival test (`test_lineage_edges_survive_cross_source_move` in `tests/unit/test_migration_cross_source.py`), which asserts the SourceRepo state across a cross-source move — source rows untouched.
 
 ---
 
@@ -618,6 +628,29 @@ This is **not** single-turn work. It splits cleanly into 3 sessions:
 
 Each session ends with a clean commit. The `1.1.0a1` alpha tag remains the anchor; no intermediate alphas needed (a1 → 1.1.0 final is fine for a feature work cycle).
 
+### Actual effort (added in v0.3, post-ship)
+
+The original 3-session / ~8.75h estimate held at the SCOPE level — every item in the original plan shipped — but the SHAPE was different. Actual delivery:
+
+| Session | Commit | Maps to plan | Notes |
+|---------|--------|--------------|-------|
+| A1 | `e1afcaa` | (split out from §4 + Session A) | Schema + models + `MigrationJobRepository`. ~360 LOC repo (vs ~250 estimated; atomic claim primitive's edge cases). |
+| A2 | `c3222c3` | §5.1–5.4 (Session A core) | Persistent jobs + worker pool. |
+| A3 | `fbe72e3` | §6 (Session A CLI) | Full CLI flag surface. |
+| B  | `4e51893` | Session B | Cross-source migration. Discovered the `curator_source_write` hook was already specced + production-grade-implemented in both source plugins; no new plugin work needed, only service-layer wiring. |
+| C1 | `32c7c31` | §7 (Session C, read-only portion) | Read-only Migrate tab. ~290 LOC of new Qt models + ~200 LOC of `_build_migrate_tab` + 32 GUI tests (vs the originally-estimated "1 smoke test"). |
+| C2 | `ace804f` | §7 (Session C, mutation portion) | Right-click Abort/Resume context menus + background-thread resume. +10 GUI tests. |
+| C2b | `f862e3d` | §7 (Session C, polish) | Live cross-thread progress signals via `MigrationProgressBridge` `QObject`. The trickiest threading work in the whole ship; needed its own session. +8 GUI tests. |
+| Release | `391d234` | §10 closure (Session C ceremony, local portion) | Version bump 1.1.0a1 → 1.1.0, CHANGELOG entry, annotated `v1.1.0` tag, wheel + sdist built. Manual `git push origin main` + `git push origin v1.1.0` deferred to Jake (no remote yet). |
+
+Variance summary:
+
+- **Sessions:** planned 3, delivered 7. Finer split was the right call — each commit was small enough to verify in one regression pass without losing context.
+- **LOC:** planned ~1650, delivered ~2700 production + ~1900 tests. The GUI piece exceeded the original "1 smoke test" estimate by an order of magnitude because we built it properly (full read-only models + right-click mutations + cross-thread live signals + 50 GUI tests) instead of as a smoke. The repo edge cases on the atomic claim primitive added ~110 LOC over estimate.
+- **Tests:** planned ~1062 total, delivered ~1150 in the slice (~130 net new vs the ~50 estimated). GUI test count drove most of the delta.
+- **Wall-clock:** all 7 sessions plus the release ceremony shipped in a single day's work. The estimate of ~8.75h was approximately right at the rough order-of-magnitude level even though the per-session shape changed.
+- **What this means for future planning:** GUI estimates that say "~500 LOC + 1 smoke" are systematic underestimates whenever the GUI feature has a threading boundary or a nontrivial interaction surface. Adjust upward by ~2x next time.
+
 ---
 
 ## 11. Open questions and Phase 3+ deferrals
@@ -647,3 +680,4 @@ Each session ends with a clean commit. The `1.1.0a1` alpha tag remains the ancho
 
 - **2026-05-08 v0.1** — first issued. Captures: (1) explicit scope and Phase 3 deferrals, (2) Phase 1 invariants that must be preserved, (3) DM-1 through DM-5 resolutions awaiting Jake's ratification, (4) full schema + repository design, (5) service architecture for cross-source + resume + workers, (6) complete CLI flag matrix, (7) GUI Migrate tab wireframe, (8) test strategy targeting ~1062 total tests, (9) schema migration plan, (10) honest ~8.75h effort estimate split across 3 sessions.
 - **2026-05-08 v0.2** — RATIFIED. Jake ratified all 5 DM recommendations (DM-1 through DM-5) as written without modification. Doc status flips from "design proposal" to "approved spec"; Phase 2 Session A implementation cleared to begin. No structural changes to the design — only ratification-status flips on each DM and this revision-log entry.
+- **2026-05-08 v0.3** — IMPLEMENTED. All 5 DMs closed; Phase 2 functionally complete on disk. Sessions A1+A2+A3+B+C1+C2+C2b shipped as 7 sequential commits (`e1afcaa`..`f862e3d`); v1.1.0 tagged at release commit `391d234`. Each DM section gained an `IMPLEMENTATION STATUS` line under its `RATIFICATION STATUS` line, naming the closing session/commit. §10 gained an `Actual effort` subsection comparing planned vs delivered (3 sessions / ~8.75h / ~1650 LOC / ~50 tests planned; 7 sessions / ~1 day / ~2700 LOC + ~1900 test LOC / ~130 net new tests delivered). The doc remains the authoritative spec for future Tracer maintenance; Phase 3+ deferrals in §11 are unchanged. Manual GitHub push + Session B real-world local→gdrive demo remain pending Jake's hands-on involvement; both are tracked on the live wishlist, not blockers for the v1.1.0 ship.
