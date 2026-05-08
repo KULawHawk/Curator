@@ -2570,6 +2570,18 @@ def migrate_cmd(
              "(same-source local-FS errors are mostly permanent and "
              "don't benefit from retry). Phase 3.",
     ),
+    on_conflict: str = typer.Option(
+        "skip", "--on-conflict",
+        help="Destination-collision policy. 'skip' (default) preserves "
+             "v1.2.0 behavior. 'fail' aborts the migration on the first "
+             "collision. 'overwrite-with-backup' renames existing dst "
+             "to <name>.curator-backup-<UTC-iso8601><ext> then proceeds. "
+             "'rename-with-suffix' migrates to <name>.curator-N<ext> "
+             "(N in [1, 9999]) instead. Cross-source collisions support "
+             "skip+fail; overwrite/rename modes degrade to skip with a "
+             "warning (no atomic-rename hook in the source plugin "
+             "contract yet). Phase 3 P2.",
+    ),
     keep_source: bool = typer.Option(
         False, "--keep-source/--trash-source",
         help="--keep-source: dst created+verified, src untouched, index "
@@ -2751,6 +2763,7 @@ def migrate_cmd(
             "ext": ext_list, "includes": include_list, "excludes": exclude_list,
             "path_prefix": path_prefix,
             "max_retries": max_retries,
+            "on_conflict": on_conflict,
         }
         job_id = rt.migration.create_job(
             plan, options=options,
@@ -2768,6 +2781,7 @@ def migrate_cmd(
             verify_hash=verify_hash,
             keep_source=keep_source,
             max_retries=max_retries,
+            on_conflict=on_conflict,
         )
         _render_migration_report(
             rt, report, console=console, job_id=job_id, keep_source=keep_source,
@@ -2777,14 +2791,34 @@ def migrate_cmd(
         return
 
     # Phase 1: apply()
-    report = rt.migration.apply(
-        plan,
-        verify_hash=verify_hash,
-        db_path_guard=db_guard,
-        keep_source=keep_source,
-        include_caution=include_caution,
-        max_retries=max_retries,
-    )
+    try:
+        report = rt.migration.apply(
+            plan,
+            verify_hash=verify_hash,
+            db_path_guard=db_guard,
+            keep_source=keep_source,
+            include_caution=include_caution,
+            max_retries=max_retries,
+            on_conflict=on_conflict,
+        )
+    except ValueError as e:
+        # set_on_conflict_mode raised on an unknown mode
+        err.print(f"[red]{e}[/]")
+        raise typer.Exit(code=2) from e
+    except Exception as e:
+        # Phase 3 P2: --on-conflict=fail aborts via MigrationConflictError.
+        # Import inside the except to avoid a cycle if migration.py is
+        # not yet importable (e.g. service-init failure).
+        from curator.services.migration import MigrationConflictError
+        if isinstance(e, MigrationConflictError):
+            err.print(
+                f"[red]Migration aborted: destination already exists "
+                f"with --on-conflict=fail[/]\n"
+                f"  dst: [yellow]{e.dst_path}[/]\n"
+                f"  src: [yellow]{e.src_path}[/]"
+            )
+            raise typer.Exit(code=1) from e
+        raise
     _render_migration_report(
         rt, report, console=console, keep_source=keep_source,
     )

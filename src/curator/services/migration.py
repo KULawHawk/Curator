@@ -72,7 +72,7 @@ from datetime import datetime
 from enum import Enum
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 from uuid import UUID, uuid4
 
 import pluggy
@@ -101,10 +101,34 @@ class MigrationOutcome(str, Enum):
     MOVED = "moved"
     COPIED = "copied"  # keep_source=True: dst created+verified, src untouched, index NOT updated
     SKIPPED_NOT_SAFE = "skipped_not_safe"  # CAUTION or REFUSE per SafetyService
-    SKIPPED_COLLISION = "skipped_collision"  # destination exists
+    SKIPPED_COLLISION = "skipped_collision"  # destination exists; --on-conflict=skip (default)
     SKIPPED_DB_GUARD = "skipped_db_guard"  # source IS the curator.db file
     HASH_MISMATCH = "hash_mismatch"  # verify failed; src untouched, dst removed
     FAILED = "failed"  # generic IO / OS exception during copy
+    # Phase 3 P2: --on-conflict resolution outcomes per design v0.2 §4.6
+    MOVED_OVERWROTE_WITH_BACKUP = "moved_overwrote_with_backup"  # dst renamed to <name>.curator-backup-<ts><ext>, then move proceeded
+    MOVED_RENAMED_WITH_SUFFIX = "moved_renamed_with_suffix"  # move went to <name>.curator-<n><ext> instead
+    FAILED_DUE_TO_CONFLICT = "failed_due_to_conflict"  # --on-conflict=fail or backup/rename setup raised
+
+
+class MigrationConflictError(RuntimeError):
+    """Raised when --on-conflict=fail and a destination collision is encountered.
+
+    Carries enough context for the caller (apply() or run_job()) to surface
+    a clean error to the CLI and abort the job. Cross-source paths raise
+    this from inside :meth:`MigrationService._cross_source_transfer` when
+    the plugin's ``curator_source_write`` raises ``FileExistsError``
+    under fail mode.
+
+    See ``docs/TRACER_PHASE_3_DESIGN.md`` v0.2 §4.6 (DM-4).
+    """
+
+    def __init__(self, dst_path: str, *, src_path: str | None = None) -> None:
+        self.dst_path = dst_path
+        self.src_path = src_path
+        super().__init__(
+            f"destination already exists with --on-conflict=fail: {dst_path}"
+        )
 
 
 @dataclass
@@ -163,12 +187,26 @@ class MigrationReport:
     started_at: datetime = field(default_factory=datetime.utcnow)
     completed_at: datetime | None = None
 
+    # Phase 3 P2: counts now span the new conflict-resolution outcome
+    # variants. moved_count picks up MOVED_OVERWROTE_WITH_BACKUP +
+    # MOVED_RENAMED_WITH_SUFFIX so the user-facing 'moved' figure
+    # reflects the actual transfer count. failed_count picks up
+    # FAILED_DUE_TO_CONFLICT alongside FAILED + HASH_MISMATCH.
+    _MOVED_VARIANTS: ClassVar[tuple["MigrationOutcome", ...]] = (
+        MigrationOutcome.MOVED,
+        MigrationOutcome.COPIED,
+        MigrationOutcome.MOVED_OVERWROTE_WITH_BACKUP,
+        MigrationOutcome.MOVED_RENAMED_WITH_SUFFIX,
+    )
+    _FAILED_VARIANTS: ClassVar[tuple["MigrationOutcome", ...]] = (
+        MigrationOutcome.FAILED,
+        MigrationOutcome.HASH_MISMATCH,
+        MigrationOutcome.FAILED_DUE_TO_CONFLICT,
+    )
+
     @property
     def moved_count(self) -> int:
-        return sum(
-            1 for m in self.moves
-            if m.outcome in (MigrationOutcome.MOVED, MigrationOutcome.COPIED)
-        )
+        return sum(1 for m in self.moves if m.outcome in self._MOVED_VARIANTS)
 
     @property
     def skipped_count(self) -> int:
@@ -179,17 +217,11 @@ class MigrationReport:
 
     @property
     def failed_count(self) -> int:
-        return sum(
-            1 for m in self.moves
-            if m.outcome in (MigrationOutcome.FAILED, MigrationOutcome.HASH_MISMATCH)
-        )
+        return sum(1 for m in self.moves if m.outcome in self._FAILED_VARIANTS)
 
     @property
     def bytes_moved(self) -> int:
-        return sum(
-            m.size for m in self.moves
-            if m.outcome in (MigrationOutcome.MOVED, MigrationOutcome.COPIED)
-        )
+        return sum(m.size for m in self.moves if m.outcome in self._MOVED_VARIANTS)
 
     @property
     def duration_seconds(self) -> float | None:
@@ -285,6 +317,14 @@ class MigrationService:
         # `_cross_source_transfer`. Set per-job via :meth:`set_max_retries`.
         self._max_retries: int = 3
         self._retry_backoff_cap: float = 60.0
+        # Phase 3 P2 conflict-resolution policy (DM-4). Read by
+        # collision-handling logic in :meth:`apply` Gate 3, in
+        # :meth:`_execute_one_persistent_same_source`, and in
+        # :meth:`_cross_source_transfer`'s FileExistsError catch.
+        # Valid: 'skip' (default; preserves v1.2.0 behavior),
+        # 'fail', 'overwrite-with-backup', 'rename-with-suffix'.
+        # Set per-job via :meth:`set_on_conflict_mode`.
+        self._on_conflict_mode: str = "skip"
         # Phase 2 worker-pool abort signaling: maps job_id -> Event
         # set when ``abort_job`` is called. Workers check between files.
         self._abort_events: dict[UUID, threading.Event] = {}
@@ -305,6 +345,45 @@ class MigrationService:
         if n > 10:
             n = 10
         self._max_retries = n
+
+    _VALID_CONFLICT_MODES: ClassVar[frozenset[str]] = frozenset({
+        "skip", "fail", "overwrite-with-backup", "rename-with-suffix",
+    })
+
+    def set_on_conflict_mode(self, mode: str) -> None:
+        """Configure per-job destination-collision policy (Phase 3 P2 DM-4).
+
+        Valid values:
+
+        * ``'skip'`` (default) -- existing dst leaves the file untouched;
+          outcome is :attr:`MigrationOutcome.SKIPPED_COLLISION`. Preserves
+          v1.2.0 behavior exactly.
+        * ``'fail'`` -- raise :class:`MigrationConflictError` on the first
+          collision; per-file outcome is
+          :attr:`MigrationOutcome.FAILED_DUE_TO_CONFLICT`. The CLI
+          surfaces this as exit code 1.
+        * ``'overwrite-with-backup'`` -- rename existing dst to
+          ``<name>.curator-backup-<UTC-iso8601><ext>`` (atomic on the
+          same filesystem), then proceed with the move. Per-file outcome
+          is :attr:`MigrationOutcome.MOVED_OVERWROTE_WITH_BACKUP`. Cross-
+          source paths degrade to ``skip`` with a warning (no atomic-
+          rename hook in the source plugin contract yet).
+        * ``'rename-with-suffix'`` -- migrate to ``<name>.curator-<n><ext>``
+          where ``n`` is the lowest available integer in [1, 9999]. Per-
+          file outcome is :attr:`MigrationOutcome.MOVED_RENAMED_WITH_SUFFIX`.
+          Cross-source paths degrade to ``skip`` with a warning.
+
+        Unknown modes raise :class:`ValueError` so the CLI can surface
+        a clean error before the migration starts.
+
+        See ``docs/TRACER_PHASE_3_DESIGN.md`` v0.2 §4.6 (DM-4).
+        """
+        if mode not in self._VALID_CONFLICT_MODES:
+            raise ValueError(
+                f"unknown on_conflict mode: {mode!r}. "
+                f"Valid: {sorted(self._VALID_CONFLICT_MODES)}"
+            )
+        self._on_conflict_mode = mode
 
     # ------------------------------------------------------------------
     # Plan
@@ -486,6 +565,7 @@ class MigrationService:
         keep_source: bool = False,
         include_caution: bool = False,
         max_retries: int = 3,
+        on_conflict: str = "skip",
     ) -> MigrationReport:
         """Execute the plan with hash-verify-before-move per file.
 
@@ -525,6 +605,9 @@ class MigrationService:
         # Phase 3: configure retry budget for transient errors. Decorator
         # on ``_cross_source_transfer`` reads ``self._max_retries``.
         self.set_max_retries(max_retries)
+        # Phase 3 P2: configure conflict-resolution policy. Read by
+        # Gate 3 collision dispatch + _cross_source_transfer.
+        self.set_on_conflict_mode(on_conflict)
 
         report = MigrationReport(plan=plan)
 
@@ -557,12 +640,30 @@ class MigrationService:
                 report.moves.append(move)
                 continue
 
-            # Gate 3: collision check
+            # Gate 3: collision check + Phase 3 P2 conflict resolution.
+            # On skip/fail (or backup/rename setup failure): the helper
+            # sets move.outcome and returns short_circuit=True; we append
+            # and continue. On overwrite-with-backup or rename-with-
+            # suffix success: dst was prepared and we proceed with the
+            # move; the outcome override is applied AFTER _execute_one
+            # sets MOVED.
             dst_p = Path(move.dst_path)
+            outcome_override: MigrationOutcome | None = None
             if dst_p.exists():
-                move.outcome = MigrationOutcome.SKIPPED_COLLISION
-                report.moves.append(move)
-                continue
+                short_circuit, outcome_override = self._resolve_collision(
+                    move, dst_p,
+                )
+                if short_circuit:
+                    report.moves.append(move)
+                    if (move.outcome == MigrationOutcome.FAILED_DUE_TO_CONFLICT
+                            and self._on_conflict_mode == "fail"):
+                        # --on-conflict=fail aborts the whole pass on the
+                        # first collision per design DM-4.
+                        report.completed_at = datetime.utcnow()
+                        raise MigrationConflictError(
+                            move.dst_path, src_path=move.src_path,
+                        )
+                    continue
 
             # Execute the move with hash-verify-before-move
             self._execute_one(
@@ -572,7 +673,28 @@ class MigrationService:
                 src_source_id=plan.src_source_id,
                 dst_source_id=plan.dst_source_id,
             )
+
+            # If conflict resolution prepared dst (overwrite-with-backup
+            # or rename-with-suffix) and the move succeeded, replace the
+            # plain MOVED with the variant outcome so MigrationReport's
+            # tallies (moved_count, bytes_moved) and downstream JSON
+            # consumers can distinguish them.
+            if outcome_override is not None and move.outcome == MigrationOutcome.MOVED:
+                move.outcome = outcome_override
+
             report.moves.append(move)
+
+            # Phase 3 P2: --on-conflict=fail aborts on the first collision,
+            # including cross-source collisions detected inside
+            # _execute_one (which set outcome=FAILED_DUE_TO_CONFLICT but
+            # didn't raise so the move could be appended to the report
+            # first).
+            if (move.outcome == MigrationOutcome.FAILED_DUE_TO_CONFLICT
+                    and self._on_conflict_mode == "fail"):
+                report.completed_at = datetime.utcnow()
+                raise MigrationConflictError(
+                    move.dst_path, src_path=move.src_path,
+                )
 
         report.completed_at = datetime.utcnow()
         return report
@@ -728,6 +850,47 @@ class MigrationService:
             )
             return
         if outcome == MigrationOutcome.SKIPPED_COLLISION:
+            # Phase 3 P2: cross-source collision detected at write-time
+            # (plugin's curator_source_write raised FileExistsError).
+            # Apply --on-conflict policy:
+            #   skip   -> keep the SKIPPED_COLLISION outcome (current behavior)
+            #   fail   -> mark FAILED_DUE_TO_CONFLICT; apply() raises
+            #             MigrationConflictError after the move is
+            #             appended to the report.
+            #   overwrite-with-backup, rename-with-suffix -> degrade to
+            #             skip with a warning + audit. The plugin contract
+            #             lacks an atomic-rename / exists-probe hook, so
+            #             a clean implementation isn't yet possible for
+            #             cloud sources. Documented P2 simplification;
+            #             revisit in Phase 4.
+            mode = self._on_conflict_mode
+            if mode == "fail":
+                move.outcome = MigrationOutcome.FAILED_DUE_TO_CONFLICT
+                move.error = (
+                    f"destination already exists with --on-conflict=fail "
+                    f"(cross-source): {move.dst_path}"
+                )
+                self._audit_conflict(move, mode="fail",
+                                     details_extra={"cross_source": True})
+                # apply() will raise MigrationConflictError after appending
+                # the move to the report (so the failed move is recorded).
+                return
+            if mode in ("overwrite-with-backup", "rename-with-suffix"):
+                logger.warning(
+                    "MigrationService: cross-source --on-conflict={m} "
+                    "degraded to skip for {p} (plugin contract lacks "
+                    "atomic-rename hook)",
+                    m=mode, p=move.src_path,
+                )
+                self._audit_conflict(
+                    move,
+                    mode=f"{mode}-degraded-cross-source",
+                    details_extra={
+                        "cross_source": True,
+                        "reason": "plugin contract lacks atomic-rename hook",
+                        "fallback": "skipped",
+                    },
+                )
             move.outcome = outcome
             return
 
@@ -818,6 +981,292 @@ class MigrationService:
                 (move.error or "") +
                 f" [trash failed: {type(e).__name__}: {e}]"
             ).strip()
+
+    # ==================================================================
+    # Phase 3 P2: collision-resolution helpers (DM-4)
+    # ==================================================================
+
+    @staticmethod
+    def _compute_backup_path(dst_p: Path) -> Path:
+        """Generate ``<name>.curator-backup-<UTC-iso8601><ext>`` next to dst.
+
+        Example: ``C:/music/foo.mp3`` -> ``C:/music/foo.curator-backup-2026-05-08T17-30-00Z.mp3``.
+        Compact ISO 8601 (colons replaced with hyphens) so the filename is
+        legal on Windows. UTC-fixed because servers + dev machines may sit
+        in different timezones.
+        """
+        timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H-%M-%SZ")
+        stem = dst_p.stem
+        ext = dst_p.suffix
+        new_name = f"{stem}.curator-backup-{timestamp}{ext}"
+        return dst_p.with_name(new_name)
+
+    @staticmethod
+    def _find_available_suffix(dst_p: Path) -> tuple[Path, int]:
+        """Find the lowest n in [1, 9999] such that ``<name>.curator-<n><ext>`` doesn't exist.
+
+        Returns ``(new_path, n)``. Raises :class:`RuntimeError` if all
+        9999 candidate suffixes are already taken (extreme edge case).
+        Suffix-N files from prior runs are correctly skipped because the
+        existence check probes the filesystem each time.
+        """
+        stem = dst_p.stem
+        ext = dst_p.suffix
+        for n in range(1, 10_000):
+            candidate = dst_p.with_name(f"{stem}.curator-{n}{ext}")
+            if not candidate.exists():
+                return (candidate, n)
+        raise RuntimeError(
+            f"no available .curator-N{ext} suffix in [1, 9999] for {dst_p}"
+        )
+
+    def _audit_conflict(
+        self,
+        move: MigrationMove,
+        *,
+        mode: str,
+        details_extra: dict[str, Any] | None = None,
+    ) -> None:
+        """Emit a ``migration.conflict_resolved`` audit event. Best-effort.
+
+        Distinct from ``migration.move`` so audit log queries can find
+        every conflict resolution that fired regardless of whether the
+        downstream move ultimately succeeded. The ``mode`` field reflects
+        the conflict-resolution policy that was applied (or attempted +
+        failed). Audit emission failures never propagate.
+        """
+        if self.audit is None:
+            return
+        details: dict[str, Any] = {
+            "src_path": move.src_path,
+            "dst_path": move.dst_path,
+            "mode": mode,
+            "size": move.size,
+        }
+        if details_extra:
+            details.update(details_extra)
+        try:
+            self.audit.log(
+                actor="curator.migrate",
+                action="migration.conflict_resolved",
+                entity_type="file",
+                entity_id=str(move.curator_id),
+                details=details,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "MigrationService: conflict audit failed for {cid}: {e}",
+                cid=move.curator_id, e=e,
+            )
+
+    def _resolve_collision(
+        self, move: MigrationMove, dst_p: Path,
+    ) -> tuple[bool, MigrationOutcome | None]:
+        """Apply ``self._on_conflict_mode`` policy when ``dst_p`` exists.
+
+        Mutates ``move`` in place per the active mode:
+
+        * ``skip``: sets ``move.outcome = SKIPPED_COLLISION``; returns
+          ``(short_circuit=True, override=None)``. Caller should append
+          and move on.
+        * ``fail``: sets ``move.outcome = FAILED_DUE_TO_CONFLICT`` +
+          ``move.error``; emits ``migration.conflict_resolved``; returns
+          ``(short_circuit=True, override=None)``.
+        * ``overwrite-with-backup``: renames ``dst_p`` to backup path
+          (atomic on same FS); emits audit; returns
+          ``(short_circuit=False, override=MOVED_OVERWROTE_WITH_BACKUP)``.
+          Caller proceeds with the move; on success replaces ``MOVED``
+          with the override.
+        * ``rename-with-suffix``: mutates ``move.dst_path`` to a free
+          ``.curator-<n><ext>`` path; emits audit; returns
+          ``(short_circuit=False, override=MOVED_RENAMED_WITH_SUFFIX)``.
+
+        OS errors during the rename (e.g. cross-volume rename, missing
+        parent dir, permission denied) are caught and turn the outcome
+        into ``FAILED_DUE_TO_CONFLICT`` with the error message attached.
+
+        See ``docs/TRACER_PHASE_3_DESIGN.md`` v0.2 §4.6 (DM-4).
+        """
+        mode = self._on_conflict_mode
+
+        if mode == "skip":
+            move.outcome = MigrationOutcome.SKIPPED_COLLISION
+            return (True, None)
+
+        if mode == "fail":
+            move.outcome = MigrationOutcome.FAILED_DUE_TO_CONFLICT
+            move.error = (
+                f"destination already exists with --on-conflict=fail: "
+                f"{move.dst_path}"
+            )
+            self._audit_conflict(move, mode="fail")
+            return (True, None)
+
+        if mode == "overwrite-with-backup":
+            backup_path = self._compute_backup_path(dst_p)
+            try:
+                dst_p.rename(backup_path)
+            except OSError as e:
+                move.outcome = MigrationOutcome.FAILED_DUE_TO_CONFLICT
+                move.error = (
+                    f"backup rename failed for {dst_p} -> {backup_path}: "
+                    f"{type(e).__name__}: {e}"
+                )
+                self._audit_conflict(
+                    move, mode="overwrite-with-backup-failed",
+                    details_extra={"backup_path": str(backup_path),
+                                   "error": move.error},
+                )
+                return (True, None)
+            self._audit_conflict(
+                move, mode="overwrite-with-backup",
+                details_extra={"backup_path": str(backup_path)},
+            )
+            return (False, MigrationOutcome.MOVED_OVERWROTE_WITH_BACKUP)
+
+        if mode == "rename-with-suffix":
+            try:
+                new_path, suffix_n = self._find_available_suffix(dst_p)
+            except RuntimeError as e:
+                move.outcome = MigrationOutcome.FAILED_DUE_TO_CONFLICT
+                move.error = str(e)
+                self._audit_conflict(
+                    move, mode="rename-with-suffix-failed",
+                    details_extra={"error": str(e)},
+                )
+                return (True, None)
+            original_dst = move.dst_path
+            move.dst_path = str(new_path)
+            self._audit_conflict(
+                move, mode="rename-with-suffix",
+                details_extra={
+                    "original_dst": original_dst,
+                    "renamed_dst": str(new_path),
+                    "suffix_n": suffix_n,
+                },
+            )
+            return (False, MigrationOutcome.MOVED_RENAMED_WITH_SUFFIX)
+
+        # Unreachable given set_on_conflict_mode validation, but be defensive
+        logger.warning(
+            "MigrationService: unknown on_conflict mode {m}, falling back to skip",
+            m=mode,
+        )
+        move.outcome = MigrationOutcome.SKIPPED_COLLISION
+        return (True, None)
+
+    def _resolve_collision_for_progress(
+        self,
+        progress: MigrationProgress,
+        dst_p: Path,
+    ) -> tuple[bool, MigrationOutcome | None, Path | None, str | None]:
+        """Sister of :meth:`_resolve_collision` for the persistent (Phase 2) path.
+
+        Operates on :class:`MigrationProgress` instead of
+        :class:`MigrationMove`. Returns the same kind of decision but as
+        a 4-tuple because progress doesn't carry an in-memory outcome
+        field that the resolver can mutate (the worker writes it to the
+        DB instead).
+
+        Returns ``(short_circuit, outcome_override, new_dst, conflict_error)``:
+
+        * ``skip``: ``(True, None, None, None)`` -- caller returns SKIPPED_COLLISION.
+        * ``fail``: ``(True, None, None, error_msg)`` -- caller raises
+          :class:`MigrationConflictError`; the worker turns that into
+          status='failed', outcome=FAILED_DUE_TO_CONFLICT.
+        * ``overwrite-with-backup`` success: ``(False, MOVED_OVERWROTE_WITH_BACKUP, None, None)``.
+          dst was renamed to backup; caller proceeds with progress.dst_path unchanged.
+        * ``rename-with-suffix`` success: ``(False, MOVED_RENAMED_WITH_SUFFIX, new_path, None)``.
+          caller MUST update progress.dst_path = str(new_path).
+        * Setup error (overwrite/rename can't proceed): ``(True, None, None, error_msg)``.
+
+        Emits ``migration.conflict_resolved`` audit events with the
+        ``job_id`` field for cross-reference.
+        """
+        mode = self._on_conflict_mode
+
+        def _emit_audit(audit_mode: str, extra: dict[str, Any] | None = None) -> None:
+            if self.audit is None:
+                return
+            details: dict[str, Any] = {
+                "src_path": progress.src_path,
+                "dst_path": progress.dst_path,
+                "mode": audit_mode,
+                "size": progress.size,
+                "job_id": str(progress.job_id),
+            }
+            if extra:
+                details.update(extra)
+            try:
+                self.audit.log(
+                    actor="curator.migrate",
+                    action="migration.conflict_resolved",
+                    entity_type="file",
+                    entity_id=str(progress.curator_id),
+                    details=details,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "MigrationService: conflict audit failed for {cid}: {e}",
+                    cid=progress.curator_id, e=e,
+                )
+
+        if mode == "skip":
+            return (True, None, None, None)
+
+        if mode == "fail":
+            err = (
+                f"destination already exists with --on-conflict=fail: "
+                f"{progress.dst_path}"
+            )
+            _emit_audit("fail")
+            return (True, None, None, err)
+
+        if mode == "overwrite-with-backup":
+            backup_path = self._compute_backup_path(dst_p)
+            try:
+                dst_p.rename(backup_path)
+            except OSError as e:
+                err = (
+                    f"backup rename failed for {dst_p} -> {backup_path}: "
+                    f"{type(e).__name__}: {e}"
+                )
+                _emit_audit(
+                    "overwrite-with-backup-failed",
+                    extra={"backup_path": str(backup_path), "error": err},
+                )
+                return (True, None, None, err)
+            _emit_audit(
+                "overwrite-with-backup",
+                extra={"backup_path": str(backup_path)},
+            )
+            return (False, MigrationOutcome.MOVED_OVERWROTE_WITH_BACKUP, None, None)
+
+        if mode == "rename-with-suffix":
+            try:
+                new_path, suffix_n = self._find_available_suffix(dst_p)
+            except RuntimeError as e:
+                _emit_audit(
+                    "rename-with-suffix-failed",
+                    extra={"error": str(e)},
+                )
+                return (True, None, None, str(e))
+            _emit_audit(
+                "rename-with-suffix",
+                extra={
+                    "original_dst": progress.dst_path,
+                    "renamed_dst": str(new_path),
+                    "suffix_n": suffix_n,
+                },
+            )
+            return (False, MigrationOutcome.MOVED_RENAMED_WITH_SUFFIX, new_path, None)
+
+        # Unreachable given set_on_conflict_mode validation
+        logger.warning(
+            "MigrationService: unknown on_conflict mode {m}, falling back to skip",
+            m=mode,
+        )
+        return (True, None, None, None)
 
     def _audit_move(self, move: MigrationMove) -> None:
         """Append an audit entry for a successful move. Best-effort."""
@@ -1242,6 +1691,7 @@ class MigrationService:
         keep_source: bool = False,
         on_progress: Callable[[MigrationProgress], None] | None = None,
         max_retries: int = 3,
+        on_conflict: str = "skip",
     ) -> MigrationReport:
         """Execute or resume a persisted job using a worker pool.
 
@@ -1310,6 +1760,26 @@ class MigrationService:
         except (AttributeError, TypeError, ValueError):
             pass
         self.set_max_retries(effective_retries)
+
+        # Phase 3 P2: same pattern for on_conflict policy. Resumed jobs
+        # inherit the original mode unless the CLI explicitly overrides.
+        effective_on_conflict: str = on_conflict
+        try:
+            persisted_mode = job.options.get("on_conflict")
+            if persisted_mode is not None and on_conflict == "skip":
+                effective_on_conflict = str(persisted_mode)
+        except (AttributeError, TypeError, ValueError):
+            pass
+        try:
+            self.set_on_conflict_mode(effective_on_conflict)
+        except ValueError:
+            # Persisted options had a stale/unknown value; fall back to
+            # skip rather than refusing to resume.
+            logger.warning(
+                "MigrationService.run_job: invalid persisted on_conflict={m!r}, falling back to skip",
+                m=effective_on_conflict,
+            )
+            self.set_on_conflict_mode("skip")
 
         # Already-completed jobs are no-ops; return their report.
         if job.status == "completed":
@@ -1472,7 +1942,11 @@ class MigrationService:
                     dst_source_id=dst_source_id,
                 )
 
-                if outcome in (MigrationOutcome.MOVED, MigrationOutcome.COPIED):
+                if outcome in (
+                    MigrationOutcome.MOVED, MigrationOutcome.COPIED,
+                    MigrationOutcome.MOVED_OVERWROTE_WITH_BACKUP,
+                    MigrationOutcome.MOVED_RENAMED_WITH_SUFFIX,
+                ):
                     self.migration_jobs.update_progress(
                         job_id, progress.curator_id,
                         status="completed", outcome=outcome.value,
@@ -1506,6 +1980,18 @@ class MigrationService:
                     )
                     self.migration_jobs.increment_job_counts(job_id, failed=1)
 
+            except MigrationConflictError as e:  # noqa: BLE001 -- Phase 3 P2 fail mode
+                # --on-conflict=fail collision; record FAILED_DUE_TO_CONFLICT
+                # specifically (distinct from generic FAILED) so the
+                # report's failed_count includes it AND audit log queries
+                # can find conflict-specific failures.
+                self.migration_jobs.update_progress(
+                    job_id, progress.curator_id,
+                    status="failed",
+                    outcome=MigrationOutcome.FAILED_DUE_TO_CONFLICT.value,
+                    error=str(e),
+                )
+                self.migration_jobs.increment_job_counts(job_id, failed=1)
             except Exception as e:  # noqa: BLE001 -- worker boundary
                 self.migration_jobs.update_progress(
                     job_id, progress.curator_id,
@@ -1589,9 +2075,26 @@ class MigrationService:
 
         # Defensive collision check at apply time (the row was pending
         # so it wasn't pre-skipped, but a parallel migration could have
-        # created the dst file in the meantime).
+        # created the dst file in the meantime). Phase 3 P2: dispatch on
+        # self._on_conflict_mode -- run_job already configured it from
+        # the run_job parameter or persisted job.options['on_conflict'].
+        outcome_override: MigrationOutcome | None = None
         if dst_p.exists():
-            return (MigrationOutcome.SKIPPED_COLLISION, None)
+            short_circuit, outcome_override, new_dst, conflict_error = (
+                self._resolve_collision_for_progress(progress, dst_p)
+            )
+            if short_circuit:
+                if conflict_error is not None:
+                    # fail mode (or backup/rename setup error) -- worker
+                    # records FAILED_DUE_TO_CONFLICT against the progress row.
+                    raise MigrationConflictError(
+                        progress.dst_path, src_path=progress.src_path,
+                    )
+                return (MigrationOutcome.SKIPPED_COLLISION, None)
+            # Backup/rename succeeded -- continue with the prepared dst.
+            if new_dst is not None:
+                progress.dst_path = str(new_dst)
+                dst_p = new_dst
 
         # Step 1: src hash (use cached if available)
         src_hash = progress.src_xxhash
@@ -1684,6 +2187,11 @@ class MigrationService:
                     cid=progress.curator_id, e=e,
                 )
 
+        # Phase 3 P2: if conflict resolution prepared dst, surface the variant
+        # outcome (MOVED_OVERWROTE_WITH_BACKUP / MOVED_RENAMED_WITH_SUFFIX) so the
+        # report distinguishes them from plain MOVED.
+        if outcome_override is not None:
+            return (outcome_override, verified_hash)
         return (MigrationOutcome.MOVED, verified_hash)
 
     def _execute_one_persistent_cross_source(
@@ -1717,6 +2225,65 @@ class MigrationService:
         if outcome == MigrationOutcome.HASH_MISMATCH:
             return (outcome, verified_hash)
         if outcome == MigrationOutcome.SKIPPED_COLLISION:
+            # Phase 3 P2: same cross-source collision dispatch as the
+            # in-memory path. Worker maps MigrationConflictError to
+            # FAILED_DUE_TO_CONFLICT outcome.
+            mode = self._on_conflict_mode
+            if mode == "fail":
+                if self.audit is not None:
+                    try:
+                        self.audit.log(
+                            actor="curator.migrate",
+                            action="migration.conflict_resolved",
+                            entity_type="file",
+                            entity_id=str(progress.curator_id),
+                            details={
+                                "src_path": progress.src_path,
+                                "dst_path": progress.dst_path,
+                                "mode": "fail",
+                                "size": progress.size,
+                                "job_id": str(progress.job_id),
+                                "cross_source": True,
+                            },
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(
+                            "MigrationService: conflict audit failed for {cid}: {e}",
+                            cid=progress.curator_id, e=e,
+                        )
+                raise MigrationConflictError(
+                    progress.dst_path, src_path=progress.src_path,
+                )
+            if mode in ("overwrite-with-backup", "rename-with-suffix"):
+                logger.warning(
+                    "MigrationService: cross-source --on-conflict={m} "
+                    "degraded to skip for {p} (plugin contract lacks "
+                    "atomic-rename hook)",
+                    m=mode, p=progress.src_path,
+                )
+                if self.audit is not None:
+                    try:
+                        self.audit.log(
+                            actor="curator.migrate",
+                            action="migration.conflict_resolved",
+                            entity_type="file",
+                            entity_id=str(progress.curator_id),
+                            details={
+                                "src_path": progress.src_path,
+                                "dst_path": progress.dst_path,
+                                "mode": f"{mode}-degraded-cross-source",
+                                "size": progress.size,
+                                "job_id": str(progress.job_id),
+                                "cross_source": True,
+                                "reason": "plugin contract lacks atomic-rename hook",
+                                "fallback": "skipped",
+                            },
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(
+                            "MigrationService: conflict audit failed for {cid}: {e}",
+                            cid=progress.curator_id, e=e,
+                        )
             return (outcome, None)
 
         # Bytes successfully transferred + verified.
@@ -1844,6 +2411,7 @@ class MigrationService:
 
 __all__ = [
     "MigrationOutcome",
+    "MigrationConflictError",
     "MigrationMove",
     "MigrationPlan",
     "MigrationReport",
