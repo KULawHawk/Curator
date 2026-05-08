@@ -680,3 +680,220 @@ class TestGetJobStatusAndList:
         running = migration_service.list_jobs(status="running")
         assert len(running) == 1
         assert running[0].status == "running"
+
+
+# ---------------------------------------------------------------------------
+# A3: Service-layer additions (keep_source / globs / path_prefix / include_caution)
+# ---------------------------------------------------------------------------
+
+
+class TestPlanGlobFilters:
+    def test_includes_whitelist_only_matches(
+        self, migration_service, tmp_path, migration_runtime,
+    ):
+        rt = migration_runtime
+        src_root = tmp_path / "library"
+        # Mix of mp3 and flac
+        for name in ["a.mp3", "b.flac", "c.mp3", "d.txt"]:
+            _seed_real_file(rt, src_root / name)
+        plan = migration_service.plan(
+            src_source_id="local",
+            src_root=str(src_root),
+            dst_root=str(tmp_path / "out"),
+            includes=["*.mp3"],
+        )
+        # Only the two mp3 files should be in the plan
+        assert plan.total_count == 2
+        assert all(m.src_path.endswith(".mp3") for m in plan.moves)
+
+    def test_excludes_blacklist_removes_matches(
+        self, migration_service, tmp_path, migration_runtime,
+    ):
+        rt = migration_runtime
+        src_root = tmp_path / "library"
+        for name in ["a.mp3", "b.flac", "draft_c.mp3"]:
+            _seed_real_file(rt, src_root / name)
+        plan = migration_service.plan(
+            src_source_id="local",
+            src_root=str(src_root),
+            dst_root=str(tmp_path / "out"),
+            excludes=["draft_*"],
+        )
+        # draft_c.mp3 excluded; a.mp3 and b.flac remain
+        assert plan.total_count == 2
+        assert not any("draft_" in m.src_path for m in plan.moves)
+
+    def test_includes_and_excludes_combine_intersect(
+        self, migration_service, tmp_path, migration_runtime,
+    ):
+        rt = migration_runtime
+        src_root = tmp_path / "library"
+        for name in ["a.mp3", "b.flac", "draft_c.mp3", "d.txt"]:
+            _seed_real_file(rt, src_root / name)
+        plan = migration_service.plan(
+            src_source_id="local",
+            src_root=str(src_root),
+            dst_root=str(tmp_path / "out"),
+            includes=["*.mp3"],
+            excludes=["draft_*"],
+        )
+        # Only non-draft mp3 -- just a.mp3
+        assert plan.total_count == 1
+        assert plan.moves[0].src_path.endswith("a.mp3")
+
+    def test_path_prefix_narrows_query_but_preserves_dst_subpath(
+        self, migration_service, tmp_path, migration_runtime,
+    ):
+        rt = migration_runtime
+        src_root = tmp_path / "library"
+        # Files at library/Pink Floyd/ and library/Beatles/
+        f_pf = _seed_real_file(rt, src_root / "Pink Floyd" / "Wall.mp3")
+        f_b = _seed_real_file(rt, src_root / "Beatles" / "Abbey.mp3")
+        dst_root = tmp_path / "out"
+        plan = migration_service.plan(
+            src_source_id="local",
+            src_root=str(src_root),
+            dst_root=str(dst_root),
+            path_prefix="Pink Floyd",
+        )
+        # Only Pink Floyd file selected
+        assert plan.total_count == 1
+        assert "Pink Floyd" in plan.moves[0].src_path
+        # Dst path preserves the FULL relative subpath under src_root
+        assert plan.moves[0].dst_path.endswith(
+            str(Path("Pink Floyd") / "Wall.mp3")
+        )
+
+
+class TestApplyKeepSource:
+    def test_keep_source_leaves_src_intact_and_index_unchanged(
+        self, migration_service, small_library, tmp_path,
+    ):
+        rt, src_root, files = small_library
+        plan = _build_plan(migration_service, src_root, tmp_path / "out")
+        report = migration_service.apply(plan, keep_source=True)
+
+        assert report.moved_count == 5  # COPIED counts as moved
+        # Sources still exist
+        for f in files:
+            assert Path(f.source_path).exists()
+        # Index still points at original src paths (NOT updated)
+        for f in files:
+            entity = rt.file_repo.get(f.curator_id)
+            assert entity.source_path == f.source_path
+        # Dst files all created
+        for f in files:
+            rel = Path(f.source_path).relative_to(src_root)
+            assert (tmp_path / "out" / rel).exists()
+        # Outcomes are COPIED (not MOVED)
+        for m in report.moves:
+            if m.outcome:
+                assert m.outcome.value == "copied"
+
+    def test_keep_source_audit_uses_migration_copy_action(
+        self, migration_service, small_library, tmp_path,
+    ):
+        rt, src_root, files = small_library
+        plan = _build_plan(migration_service, src_root, tmp_path / "out")
+        migration_service.apply(plan, keep_source=True)
+        copy_entries = rt.audit_repo.query(action="migration.copy", limit=20)
+        move_entries = rt.audit_repo.query(action="migration.move", limit=20)
+        assert len(copy_entries) == 5
+        assert len(move_entries) == 0
+
+
+class TestApplyIncludeCaution:
+    def test_include_caution_true_migrates_caution_files(
+        self, migration_runtime, tmp_path,
+    ):
+        rt = migration_runtime
+        src_root = tmp_path / "mixed"
+        files = [_seed_real_file(rt, src_root / f"f{i}.mp3") for i in range(3)]
+        # Stub safety: f0/f1 SAFE, f2 CAUTION
+        from curator.services.safety import SafetyReport, SafetyLevel as SL
+        def safety_stub(p, **kw):
+            level = SL.CAUTION if str(p).endswith("f2.mp3") else SL.SAFE
+            return SafetyReport(path=p, level=level)
+        rt.safety.check_path = safety_stub
+        svc = rt.migration
+        plan = _build_plan(svc, src_root, tmp_path / "out")
+        report = svc.apply(plan, include_caution=True)
+        # All 3 should have moved
+        assert report.moved_count == 3
+
+    def test_include_caution_false_default_skips_caution(
+        self, migration_runtime, tmp_path,
+    ):
+        rt = migration_runtime
+        src_root = tmp_path / "mixed"
+        files = [_seed_real_file(rt, src_root / f"f{i}.mp3") for i in range(3)]
+        from curator.services.safety import SafetyReport, SafetyLevel as SL
+        def safety_stub(p, **kw):
+            level = SL.CAUTION if str(p).endswith("f2.mp3") else SL.SAFE
+            return SafetyReport(path=p, level=level)
+        rt.safety.check_path = safety_stub
+        svc = rt.migration
+        plan = _build_plan(svc, src_root, tmp_path / "out")
+        report = svc.apply(plan)  # default include_caution=False
+        assert report.moved_count == 2  # SAFE only
+        # CAUTION file recorded as SKIPPED_NOT_SAFE
+        skipped = [m for m in report.moves if m.outcome
+                   and m.outcome.value == "skipped_not_safe"]
+        assert len(skipped) == 1
+
+    def test_include_caution_true_still_skips_refuse(
+        self, migration_runtime, tmp_path,
+    ):
+        rt = migration_runtime
+        src_root = tmp_path / "with_refuse"
+        files = [_seed_real_file(rt, src_root / f"f{i}.mp3") for i in range(3)]
+        from curator.services.safety import SafetyReport, SafetyLevel as SL
+        def safety_stub(p, **kw):
+            if str(p).endswith("f2.mp3"):
+                return SafetyReport(path=p, level=SL.REFUSE)
+            return SafetyReport(path=p, level=SL.SAFE)
+        rt.safety.check_path = safety_stub
+        svc = rt.migration
+        plan = _build_plan(svc, src_root, tmp_path / "out")
+        report = svc.apply(plan, include_caution=True)
+        # 2 SAFE move; REFUSE never moves regardless of include_caution
+        assert report.moved_count == 2
+        skipped = [m for m in report.moves if m.outcome
+                   and m.outcome.value == "skipped_not_safe"]
+        assert len(skipped) == 1
+
+
+class TestRunJobKeepSource:
+    def test_run_job_keep_source_under_workers_leaves_sources_intact(
+        self, migration_service, medium_library, tmp_path,
+    ):
+        rt, src_root, files = medium_library
+        plan = _build_plan(migration_service, src_root, tmp_path / "out")
+        job_id = migration_service.create_job(
+            plan, options={"keep_source": True, "workers": 4},
+        )
+        report = migration_service.run_job(
+            job_id, workers=4, keep_source=True,
+        )
+        # All 12 dst files exist; all 12 src files ALSO still exist
+        for f in files:
+            assert Path(f.source_path).exists()
+            rel = Path(f.source_path).relative_to(src_root)
+            assert (tmp_path / "out" / rel).exists()
+        # Index untouched -- still points at src
+        for f in files:
+            assert rt.file_repo.get(f.curator_id).source_path == f.source_path
+        # All audit entries are migration.copy (not migration.move)
+        copy_entries = rt.audit_repo.query(action="migration.copy", limit=20)
+        move_entries = rt.audit_repo.query(action="migration.move", limit=20)
+        assert len(copy_entries) == 12
+        assert len(move_entries) == 0
+        # Each copy audit entry has the job_id for cross-reference
+        for entry in copy_entries:
+            assert entry.details.get("job_id") == str(job_id)
+        # Progress rows reflect outcome=copied
+        rows = rt.migration_job_repo.query_progress(job_id)
+        assert len(rows) == 12
+        for r in rows:
+            assert r.outcome == "copied"
+            assert r.status == "completed"

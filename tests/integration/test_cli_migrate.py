@@ -180,7 +180,9 @@ def test_apply_no_safe_files_returns_zero_moved(runner, seeded_db, tmp_path):
     payload = json.loads(result.stdout)
     assert payload["action"] == "migrate.apply"
     assert payload["moved"] == 0
-    assert "no SAFE files" in payload.get("reason", "")
+    # Phase 2 changed wording: "no SAFE files" -> "no eligible files"
+    # because --include-caution widens eligibility beyond SAFE.
+    assert "no eligible files" in payload.get("reason", "")
 
 
 def test_dst_inside_src_exits_2(runner, seeded_db, tmp_path):
@@ -209,3 +211,330 @@ def test_extension_filter_narrows_plan(runner, seeded_db, tmp_path):
     assert payload["total"] == 2
     for m in payload["moves"]:
         assert m["src_path"].endswith(".mp3")
+
+
+# ---------------------------------------------------------------------------
+# A3: CLI extensions for Phase 2 (lifecycle + flags)
+# ---------------------------------------------------------------------------
+
+
+class TestLifecycleList:
+    def test_list_empty_returns_dim_message(self, runner, seeded_db):
+        db_path, _, _ = seeded_db
+        result = runner.invoke(app, [
+            "--db", str(db_path), "migrate", "--list",
+        ])
+        assert result.exit_code == 0
+        assert "No migration jobs" in result.stdout
+
+    def test_list_after_phase2_apply_shows_job(
+        self, runner, seeded_db, tmp_path,
+    ):
+        db_path, src_root, files = seeded_db
+        dst_root = tmp_path / "library_new"
+        # Create a Phase 2 job by using --workers 2 --apply
+        applied = runner.invoke(app, [
+            "--db", str(db_path),
+            "migrate", "local", str(src_root), str(dst_root),
+            "--apply", "--workers", "2",
+        ])
+        assert applied.exit_code == 0
+        # Now list should show 1 job
+        listed = runner.invoke(app, [
+            "--json", "--db", str(db_path), "migrate", "--list",
+        ])
+        assert listed.exit_code == 0
+        payload = json.loads(listed.stdout)
+        assert isinstance(payload, list)
+        assert len(payload) == 1
+        assert payload[0]["status"] == "completed"
+        assert payload[0]["files_copied"] == 3  # all 3 files moved
+
+    def test_list_status_filter_narrows(
+        self, runner, seeded_db, tmp_path,
+    ):
+        db_path, src_root, files = seeded_db
+        # Create one Phase 2 job (will end as 'completed')
+        runner.invoke(app, [
+            "--db", str(db_path),
+            "migrate", "local", str(src_root), str(tmp_path / "out"),
+            "--apply", "--workers", "2",
+        ])
+        # Filter for 'running' (none should match)
+        result = runner.invoke(app, [
+            "--json", "--db", str(db_path),
+            "migrate", "--list", "--status-filter", "running",
+        ])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        assert payload == []
+
+
+class TestLifecycleStatus:
+    def test_status_bad_uuid_exits_2(self, runner, seeded_db):
+        db_path, _, _ = seeded_db
+        result = runner.invoke(app, [
+            "--db", str(db_path), "migrate", "--status", "not-a-uuid",
+        ])
+        assert result.exit_code == 2
+        assert "job_id" in result.output.lower() or "uuid" in result.output.lower()
+
+    def test_status_unknown_uuid_exits_1(self, runner, seeded_db):
+        db_path, _, _ = seeded_db
+        result = runner.invoke(app, [
+            "--db", str(db_path),
+            "migrate", "--status", "00000000-0000-0000-0000-000000000000",
+        ])
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower()
+
+    def test_status_known_id_full_dict(
+        self, runner, seeded_db, tmp_path,
+    ):
+        db_path, src_root, files = seeded_db
+        # Create a Phase 2 job
+        applied = runner.invoke(app, [
+            "--json", "--db", str(db_path),
+            "migrate", "local", str(src_root), str(tmp_path / "out"),
+            "--apply", "--workers", "2",
+        ])
+        assert applied.exit_code == 0
+        applied_payload = json.loads(applied.stdout)
+        job_id = applied_payload["job_id"]
+        # Query its status
+        status = runner.invoke(app, [
+            "--json", "--db", str(db_path),
+            "migrate", "--status", job_id,
+        ])
+        assert status.exit_code == 0
+        payload = json.loads(status.stdout)
+        assert payload["job_id"] == job_id
+        assert payload["status"] == "completed"
+        assert payload["files_total"] == 3
+        assert payload["files_copied"] == 3
+        assert payload["files_failed"] == 0
+        assert payload["bytes_copied"] > 0
+        assert "progress_histogram" in payload
+        assert "options" in payload
+
+
+class TestLifecycleAbort:
+    def test_abort_bad_uuid_exits_2(self, runner, seeded_db):
+        db_path, _, _ = seeded_db
+        result = runner.invoke(app, [
+            "--db", str(db_path), "migrate", "--abort", "garbage",
+        ])
+        assert result.exit_code == 2
+
+    def test_abort_unknown_job_is_noop(self, runner, seeded_db):
+        """Sending abort to a non-running job is a quiet no-op (the
+        signal is dropped if no thread is listening)."""
+        db_path, _, _ = seeded_db
+        result = runner.invoke(app, [
+            "--db", str(db_path),
+            "migrate", "--abort", "00000000-0000-0000-0000-000000000000",
+        ])
+        assert result.exit_code == 0
+        assert "Abort signal sent" in result.stdout
+
+    def test_abort_json_output_shape(self, runner, seeded_db):
+        db_path, _, _ = seeded_db
+        result = runner.invoke(app, [
+            "--json", "--db", str(db_path),
+            "migrate", "--abort", "00000000-0000-0000-0000-000000000000",
+        ])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        assert payload["action"] == "migrate.abort"
+        assert payload["sent"] is True
+
+
+class TestLifecycleResume:
+    def test_resume_unknown_id_exits_1(self, runner, seeded_db):
+        db_path, _, _ = seeded_db
+        result = runner.invoke(app, [
+            "--db", str(db_path),
+            "migrate", "--resume", "00000000-0000-0000-0000-000000000000",
+        ])
+        assert result.exit_code == 1
+        assert "not found" in result.output.lower()
+
+    def test_resume_completed_job_returns_report(
+        self, runner, seeded_db, tmp_path,
+    ):
+        """Resuming an already-completed job is a no-op that returns the
+        existing report (no re-execution)."""
+        db_path, src_root, files = seeded_db
+        # Create a Phase 2 job
+        applied = runner.invoke(app, [
+            "--json", "--db", str(db_path),
+            "migrate", "local", str(src_root), str(tmp_path / "out"),
+            "--apply", "--workers", "2",
+        ])
+        assert applied.exit_code == 0
+        job_id = json.loads(applied.stdout)["job_id"]
+        # Resume it (should be no-op)
+        resumed = runner.invoke(app, [
+            "--json", "--db", str(db_path),
+            "migrate", "--resume", job_id,
+        ])
+        assert resumed.exit_code == 0
+        resumed_payload = json.loads(resumed.stdout)
+        assert resumed_payload["job_id"] == job_id
+        assert resumed_payload["moved"] == 3
+
+
+class TestRoutingWorkers:
+    def test_workers_gt_1_routes_to_phase2(
+        self, runner, seeded_db, tmp_path,
+    ):
+        """--workers > 1 creates a persisted migration_jobs row."""
+        db_path, src_root, files = seeded_db
+        result = runner.invoke(app, [
+            "--json", "--db", str(db_path),
+            "migrate", "local", str(src_root), str(tmp_path / "out"),
+            "--apply", "--workers", "4",
+        ])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        # Phase 2 path -> JSON includes job_id
+        assert "job_id" in payload
+        assert payload["moved"] == 3
+        # And a job exists in the DB now
+        listed = runner.invoke(app, [
+            "--json", "--db", str(db_path), "migrate", "--list",
+        ])
+        jobs = json.loads(listed.stdout)
+        assert len(jobs) == 1
+
+    def test_workers_eq_1_stays_phase1(
+        self, runner, seeded_db, tmp_path,
+    ):
+        """--workers 1 (default) does NOT create a migration_jobs row."""
+        db_path, src_root, files = seeded_db
+        result = runner.invoke(app, [
+            "--json", "--db", str(db_path),
+            "migrate", "local", str(src_root), str(tmp_path / "out"),
+            "--apply",  # no --workers, defaults to 1
+        ])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        # Phase 1 path -> NO job_id in payload
+        assert "job_id" not in payload
+        # And no jobs in --list
+        listed = runner.invoke(app, [
+            "--json", "--db", str(db_path), "migrate", "--list",
+        ])
+        jobs = json.loads(listed.stdout)
+        assert jobs == []
+
+
+class TestKeepSourceFlag:
+    def test_keep_source_preserves_files(
+        self, runner, seeded_db, tmp_path,
+    ):
+        db_path, src_root, files = seeded_db
+        dst_root = tmp_path / "out"
+        result = runner.invoke(app, [
+            "--db", str(db_path),
+            "migrate", "local", str(src_root), str(dst_root),
+            "--apply", "--keep-source",
+        ])
+        assert result.exit_code == 0
+        # All 3 sources still on disk
+        for f in files:
+            assert Path(f.source_path).exists()
+        # All 3 dsts created
+        for f in files:
+            rel = Path(f.source_path).relative_to(src_root)
+            assert (dst_root / rel).exists()
+
+    def test_keep_source_json_reflects_flag(
+        self, runner, seeded_db, tmp_path,
+    ):
+        db_path, src_root, files = seeded_db
+        result = runner.invoke(app, [
+            "--json", "--db", str(db_path),
+            "migrate", "local", str(src_root), str(tmp_path / "out"),
+            "--apply", "--keep-source",
+        ])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        assert payload["keep_source"] is True
+        assert payload["moved"] == 3  # COPIED counts as moved in headline
+        # All per-file outcomes are 'copied' not 'moved'
+        for r in payload["results"]:
+            if r["outcome"]:
+                assert r["outcome"] == "copied"
+
+
+class TestPlanFilters:
+    def test_include_glob_narrows(self, runner, seeded_db, tmp_path):
+        db_path, src_root, files = seeded_db
+        result = runner.invoke(app, [
+            "--json", "--db", str(db_path),
+            "migrate", "local", str(src_root), str(tmp_path / "out"),
+            "--include", "*.mp3",
+        ])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        # Only the 2 mp3 files (excludes the Photos/img.jpg)
+        assert payload["total"] == 2
+        for m in payload["moves"]:
+            assert m["src_path"].endswith(".mp3")
+
+    def test_exclude_glob_narrows(self, runner, seeded_db, tmp_path):
+        db_path, src_root, files = seeded_db
+        result = runner.invoke(app, [
+            "--json", "--db", str(db_path),
+            "migrate", "local", str(src_root), str(tmp_path / "out"),
+            "--exclude", "Photos/*",
+        ])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        # Excludes the photo, keeps the 2 mp3s
+        assert payload["total"] == 2
+        for m in payload["moves"]:
+            assert "Photos" not in m["src_path"]
+
+    def test_path_prefix_narrows_to_subdir(
+        self, runner, seeded_db, tmp_path,
+    ):
+        db_path, src_root, files = seeded_db
+        result = runner.invoke(app, [
+            "--json", "--db", str(db_path),
+            "migrate", "local", str(src_root), str(tmp_path / "out"),
+            "--path-prefix", "Photos",
+        ])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        # Only the Photos/img.jpg
+        assert payload["total"] == 1
+        assert "Photos" in payload["moves"][0]["src_path"]
+
+
+class TestGuardsAndErrors:
+    def test_dst_source_id_different_exits_2(
+        self, runner, seeded_db, tmp_path,
+    ):
+        """Cross-source migration is Session B; should error cleanly."""
+        db_path, src_root, files = seeded_db
+        result = runner.invoke(app, [
+            "--db", str(db_path),
+            "migrate", "local", str(src_root), str(tmp_path / "out"),
+            "--dst-source-id", "gdrive",
+        ])
+        assert result.exit_code == 2
+        assert "cross-source" in result.output.lower()
+
+    def test_missing_positional_no_lifecycle_exits_2(
+        self, runner, seeded_db,
+    ):
+        """Bare `migrate` with no positional args + no lifecycle flag
+        produces a clean error."""
+        db_path, _, _ = seeded_db
+        result = runner.invoke(app, [
+            "--db", str(db_path), "migrate",
+        ])
+        assert result.exit_code == 2
+        assert "required" in result.output.lower()

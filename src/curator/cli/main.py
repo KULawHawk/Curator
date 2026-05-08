@@ -2500,101 +2500,433 @@ def gdrive_auth_cmd(
 
 
 # ---------------------------------------------------------------------------
-# v1.0.0a1: Migration tool (Feature M Phase 1)
+# v1.1.0a1: Tracer (Migration tool) -- Phase 1 + Phase 2
 # ---------------------------------------------------------------------------
 
 
 @app.command(name="migrate")
 def migrate_cmd(
     ctx: typer.Context,
-    src_source_id: str = typer.Argument(
-        ...,
-        help="Source plugin id whose files to migrate (e.g. 'local').",
+    src_source_id: Optional[str] = typer.Argument(
+        None,
+        help="Source plugin id whose files to migrate (e.g. 'local'). "
+             "Required for new-job creation; omit when using "
+             "--list / --status / --abort / --resume.",
     ),
-    src_root: str = typer.Argument(
-        ...,
-        help="Path prefix at the source. Only files under this prefix are candidates.",
+    src_root: Optional[str] = typer.Argument(
+        None,
+        help="Path prefix at the source. Only files under this prefix "
+             "are candidates. Required for new-job creation.",
     ),
-    dst_root: str = typer.Argument(
-        ...,
-        help="Path prefix at the destination. Subpaths are preserved.",
+    dst_root: Optional[str] = typer.Argument(
+        None,
+        help="Path prefix at the destination. Subpaths are preserved. "
+             "Required for new-job creation.",
     ),
+    # ---- Plan-time filters ---------------------------------------------
     extensions: Optional[str] = typer.Option(
         None, "--ext",
-        help="Comma-separated extension filter (e.g. '.mp3,.flac'). Case-insensitive.",
+        help="Comma-separated extension filter (e.g. '.mp3,.flac'). "
+             "Case-insensitive.",
     ),
+    includes: list[str] = typer.Option(
+        [], "--include",
+        help="Glob whitelist (relative to src_root). Repeatable. File must "
+             "match AT LEAST ONE include if any are specified. Phase 2.",
+    ),
+    excludes: list[str] = typer.Option(
+        [], "--exclude",
+        help="Glob blacklist (relative to src_root). Repeatable. File "
+             "must match NO excludes. Phase 2.",
+    ),
+    path_prefix: Optional[str] = typer.Option(
+        None, "--path-prefix",
+        help="Sub-path under src_root to narrow selection "
+             "(e.g. 'Pink Floyd' under src_root='C:/Music'). Phase 2.",
+    ),
+    dst_source_id: Optional[str] = typer.Option(
+        None, "--dst-source-id",
+        help="Destination source id. Defaults to src_source_id. "
+             "Cross-source migration is Session B (not yet shipped).",
+    ),
+    # ---- Apply / job behavior ------------------------------------------
     apply: bool = typer.Option(
         False, "--apply",
         help="Required to actually perform the moves. Without this, plan-only.",
     ),
+    workers: int = typer.Option(
+        1, "--workers", "-w",
+        help="Number of concurrent workers (default 1). When >1, the "
+             "job is persisted as a migration_jobs row so it can be "
+             "--resume'd later. Phase 2.",
+    ),
+    keep_source: bool = typer.Option(
+        False, "--keep-source/--trash-source",
+        help="--keep-source: dst created+verified, src untouched, index "
+             "NOT updated. The next 'curator scan' picks up dst as a "
+             "new file. Default --trash-source: index re-pointed + src "
+             "sent to OS trash. Phase 2.",
+    ),
+    include_caution: bool = typer.Option(
+        False, "--include-caution",
+        help="Include CAUTION-level files in the migration. Default "
+             "False (only SAFE migrates). REFUSE is always skipped. "
+             "Phase 2.",
+    ),
     verify_hash: bool = typer.Option(
         True, "--verify-hash/--no-verify-hash",
-        help="Recompute xxhash3_128 of the destination after copy and require "
-             "a match before updating the index. Default ON (Hash-Verify-Before-Move "
-             "Constitutional discipline).",
+        help="Recompute xxhash3_128 of the destination after copy and "
+             "require a match. Default ON (Constitutional discipline).",
+    ),
+    # ---- Lifecycle commands (Phase 2) ----------------------------------
+    list_jobs_flag: bool = typer.Option(
+        False, "--list",
+        help="List recent migration jobs and exit. "
+             "Filter with --status-filter. Phase 2.",
+    ),
+    status_filter: Optional[str] = typer.Option(
+        None, "--status-filter",
+        help="For --list: filter by job status (queued|running|"
+             "completed|failed|cancelled|partial).",
+    ),
+    status: Optional[str] = typer.Option(
+        None, "--status",
+        help="Show full status for a job by id and exit. Phase 2.",
+    ),
+    abort: Optional[str] = typer.Option(
+        None, "--abort",
+        help="Signal a running job to abort gracefully. Workers finish "
+             "their current file then exit. Phase 2.",
+    ),
+    resume: Optional[str] = typer.Option(
+        None, "--resume",
+        help="Resume a previously-created (or interrupted) job by id. "
+             "Phase 2.",
     ),
 ) -> None:
-    """Relocate files across paths/sources with index integrity (Phase 1).
+    """Relocate files across paths/sources with index integrity (Tracer).
 
-    Same-source local-to-local migration with hash-verify-before-move per file.
-    The curator_id stays constant so lineage edges + bundle memberships persist.
-    Source files are trashed (recoverable via OS Recycle Bin) only after the
-    destination is verified.
+    Two execution paths:
+
+    * **Phase 1 (default):** in-memory plan + apply, single-threaded.
+      Triggered when ``--workers`` is 1 (default) and ``--resume`` is
+      not used. Fast for small migrations.
+
+    * **Phase 2:** persisted job with worker pool. Triggered when
+      ``--workers > 1`` OR ``--resume`` is specified. Plan + per-file
+      progress are persisted to ``migration_jobs`` / ``migration_progress``
+      so the migration can be resumed after an interruption.
+
+    Lifecycle commands (Phase 2 jobs only):
+
+    * ``curator migrate --list [--status-filter X]``
+    * ``curator migrate --status <job_id>``
+    * ``curator migrate --abort <job_id>``
+    * ``curator migrate --resume <job_id> [--workers N]``
 
     Examples:
-      curator migrate local C:/Music D:/Music             # plan only
-      curator migrate local C:/Music D:/Music --apply     # actually move
-      curator migrate local C:/Music D:/Music --apply --ext .mp3,.flac
-
-    Phase 2 will add cross-source migration (local <-> gdrive), --resume,
-    worker concurrency, and a GUI Migrate tab.
+      curator migrate local C:/Music D:/Music                     # plan only
+      curator migrate local C:/Music D:/Music --apply             # Phase 1
+      curator migrate local C:/Music D:/Music --apply -w 4        # Phase 2
+      curator migrate local C:/Music D:/Music --apply --include '**/*.mp3'
+      curator migrate local C:/Music D:/Music --apply --keep-source
+      curator migrate --list --status-filter running
+      curator migrate --status <job_id>
+      curator migrate --resume <job_id> --workers 4
     """
     rt: CuratorRuntime = ctx.obj
     console = _console(rt)
     err = _err_console(rt)
+
+    # ---- Lifecycle dispatch first (no positional args needed) --------
+    if list_jobs_flag:
+        _migrate_list(rt, status_filter=status_filter, console=console)
+        return
+    if status is not None:
+        _migrate_status(rt, status, console=console, err=err)
+        return
+    if abort is not None:
+        _migrate_abort(rt, abort, console=console, err=err)
+        return
+    if resume is not None:
+        _migrate_resume(
+            rt, resume,
+            workers=workers, verify_hash=verify_hash,
+            keep_source=keep_source,
+            console=console, err=err,
+        )
+        return
+
+    # ---- New-job creation (positional args required) -----------------
+    if not (src_source_id and src_root and dst_root):
+        err.print(
+            "[red]src_source_id, src_root, and dst_root are required for "
+            "new migrations. Use --resume / --list / --status / --abort "
+            "for lifecycle operations.[/]"
+        )
+        raise typer.Exit(code=2)
+
+    # Cross-source guard: Session B not yet shipped
+    effective_dst_source = dst_source_id or src_source_id
+    if effective_dst_source != src_source_id:
+        err.print(
+            f"[red]Cross-source migration not yet supported ("
+            f"src={src_source_id!r} -> dst={effective_dst_source!r}). "
+            "Same-source only in Phase 2 Session A; Session B will add "
+            "cross-source via curator_source_write hook.[/]"
+        )
+        raise typer.Exit(code=2)
+
     ext_list: list[str] | None = None
     if extensions:
         ext_list = [e.strip() for e in extensions.split(",") if e.strip()]
+
+    include_list = list(includes) if includes else None
+    exclude_list = list(excludes) if excludes else None
 
     try:
         plan = rt.migration.plan(
             src_source_id=src_source_id,
             src_root=src_root,
             dst_root=dst_root,
+            dst_source_id=effective_dst_source,
             extensions=ext_list,
+            includes=include_list,
+            excludes=exclude_list,
+            path_prefix=path_prefix,
         )
     except ValueError as e:
         err.print(f"[red]{e}[/]")
         raise typer.Exit(code=2) from e
 
-    # --- Plan rendering -------------------------------------------------
+    # Plan-only mode
     if not apply:
         _render_migration_plan(rt, plan, verify_hash=verify_hash, console=console)
         return
 
-    if plan.safe_count == 0:
+    # Routing: --workers > 1 -> Phase 2 persisted path; otherwise Phase 1
+    use_phase2 = workers > 1
+
+    eligible_count = (
+        plan.safe_count + (plan.caution_count if include_caution else 0)
+    )
+    if eligible_count == 0:
         if rt.json_output:
             typer.echo(json.dumps({
                 "action": "migrate.apply",
                 "moved": 0,
-                "skipped": plan.caution_count + plan.refuse_count,
+                "skipped": plan.total_count,
                 "failed": 0,
-                "reason": "no SAFE files in plan",
+                "reason": "no eligible files in plan",
             }, indent=2))
         else:
             console.print(
-                "[yellow]No SAFE files to migrate. "
-                f"({plan.caution_count} CAUTION, {plan.refuse_count} REFUSE skipped.)[/]"
+                "[yellow]No eligible files to migrate. "
+                f"({plan.safe_count} SAFE, {plan.caution_count} CAUTION, "
+                f"{plan.refuse_count} REFUSE; include_caution={include_caution})[/]"
             )
         return
 
-    # --- Apply rendering ------------------------------------------------
     db_guard = Path(rt.db.db_path) if rt.db.db_path else None
+
+    if use_phase2:
+        # Phase 2: create_job + run_job
+        options = {
+            "workers": workers, "verify_hash": verify_hash,
+            "keep_source": keep_source, "include_caution": include_caution,
+            "ext": ext_list, "includes": include_list, "excludes": exclude_list,
+            "path_prefix": path_prefix,
+        }
+        job_id = rt.migration.create_job(
+            plan, options=options,
+            db_path_guard=db_guard,
+            include_caution=include_caution,
+        )
+        if not rt.json_output:
+            console.print(
+                f"\n[bold cyan]Migration job created[/]: [cyan]{job_id}[/] "
+                f"({eligible_count} eligible files, {workers} workers)"
+            )
+        report = rt.migration.run_job(
+            job_id,
+            workers=workers,
+            verify_hash=verify_hash,
+            keep_source=keep_source,
+        )
+        _render_migration_report(
+            rt, report, console=console, job_id=job_id, keep_source=keep_source,
+        )
+        if report.failed_count:
+            raise typer.Exit(code=1)
+        return
+
+    # Phase 1: apply()
     report = rt.migration.apply(
-        plan, verify_hash=verify_hash, db_path_guard=db_guard,
+        plan,
+        verify_hash=verify_hash,
+        db_path_guard=db_guard,
+        keep_source=keep_source,
+        include_caution=include_caution,
     )
-    _render_migration_report(rt, report, console=console)
-    # Non-zero exit if anything failed
+    _render_migration_report(
+        rt, report, console=console, keep_source=keep_source,
+    )
+    if report.failed_count:
+        raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle dispatch helpers (Phase 2)
+# ---------------------------------------------------------------------------
+
+def _parse_job_id(rt, raw: str, err) -> UUID:
+    """Parse a UUID string; surface a clean CLI error on bad input."""
+    try:
+        return UUID(raw)
+    except ValueError:
+        err.print(f"[red]Not a valid job_id (UUID): {raw!r}[/]")
+        raise typer.Exit(code=2) from None
+
+
+def _migrate_list(rt, *, status_filter: str | None, console) -> None:
+    """`curator migrate --list` -- show recent migration jobs."""
+    jobs = rt.migration.list_jobs(status=status_filter, limit=50)
+    if rt.json_output:
+        typer.echo(json.dumps([
+            {
+                "job_id": str(j.job_id),
+                "status": j.status,
+                "src_source_id": j.src_source_id,
+                "src_root": j.src_root,
+                "dst_source_id": j.dst_source_id,
+                "dst_root": j.dst_root,
+                "files_total": j.files_total,
+                "files_copied": j.files_copied,
+                "files_skipped": j.files_skipped,
+                "files_failed": j.files_failed,
+                "bytes_copied": j.bytes_copied,
+                "started_at": j.started_at,
+                "completed_at": j.completed_at,
+                "duration_seconds": j.duration_seconds,
+            }
+            for j in jobs
+        ], indent=2, default=str))
+        return
+    if not jobs:
+        suffix = f" (status={status_filter})" if status_filter else ""
+        console.print(f"[dim]No migration jobs found{suffix}.[/]")
+        return
+    table = Table(title=f"{len(jobs)} migration job(s)")
+    table.add_column("job_id", style="dim")
+    table.add_column("status")
+    table.add_column("src -> dst")
+    table.add_column("files", justify="right")
+    table.add_column("copied", justify="right")
+    table.add_column("failed", justify="right")
+    table.add_column("started", style="dim")
+    for j in jobs:
+        status_color = {
+            "queued": "dim", "running": "cyan", "completed": "green",
+            "failed": "red", "cancelled": "yellow", "partial": "yellow",
+        }.get(j.status, "white")
+        table.add_row(
+            str(j.job_id)[:8],
+            f"[{status_color}]{j.status}[/]",
+            f"{j.src_source_id}:{j.src_root[:30]} -> {j.dst_source_id}:{j.dst_root[:30]}",
+            str(j.files_total),
+            str(j.files_copied),
+            f"[red]{j.files_failed}[/]" if j.files_failed else "0",
+            j.started_at.strftime("%Y-%m-%d %H:%M") if j.started_at else "-",
+        )
+    console.print(table)
+
+
+def _migrate_status(rt, raw_id: str, *, console, err) -> None:
+    """`curator migrate --status <job_id>` -- show one job's full status."""
+    job_id = _parse_job_id(rt, raw_id, err)
+    try:
+        info = rt.migration.get_job_status(job_id)
+    except ValueError as e:
+        err.print(f"[red]{e}[/]")
+        raise typer.Exit(code=1) from e
+    if rt.json_output:
+        typer.echo(json.dumps(info, indent=2, default=str))
+        return
+    console.print(f"\n[bold cyan]Migration job[/] [cyan]{info['job_id']}[/]")
+    console.print(f"  status:        {info['status']}")
+    console.print(
+        f"  src -> dst:    {info['src_source_id']}:{info['src_root']}"
+        f"  ->  {info['dst_source_id']}:{info['dst_root']}"
+    )
+    console.print(f"  files total:   {info['files_total']}")
+    console.print(f"  files copied:  [green]{info['files_copied']}[/]")
+    console.print(f"  files skipped: [yellow]{info['files_skipped']}[/]")
+    console.print(f"  files failed:  [red]{info['files_failed']}[/]")
+    console.print(f"  bytes copied:  {info['bytes_copied']:,}")
+    if info["started_at"]:
+        console.print(f"  started:       {info['started_at']}")
+    if info["completed_at"]:
+        console.print(f"  completed:     {info['completed_at']}")
+    if info["duration_seconds"] is not None:
+        console.print(f"  duration:      {info['duration_seconds']:.2f}s")
+    if info["progress_histogram"]:
+        console.print("  progress:")
+        for k, v in info["progress_histogram"].items():
+            console.print(f"    {k}: {v}")
+    if info["options"]:
+        console.print("  options:")
+        for k, v in info["options"].items():
+            console.print(f"    {k} = {v!r}")
+    if info["error"]:
+        console.print(f"  [red]error:[/] {info['error']}")
+
+
+def _migrate_abort(rt, raw_id: str, *, console, err) -> None:
+    """`curator migrate --abort <job_id>` -- signal a running job to stop."""
+    job_id = _parse_job_id(rt, raw_id, err)
+    rt.migration.abort_job(job_id)
+    if rt.json_output:
+        typer.echo(json.dumps({
+            "action": "migrate.abort", "job_id": str(job_id),
+            "sent": True,
+        }, indent=2))
+        return
+    console.print(
+        f"[yellow]✓[/] Abort signal sent to job [cyan]{job_id}[/]. "
+        "Workers will finish their current file then exit."
+    )
+
+
+def _migrate_resume(
+    rt, raw_id: str, *,
+    workers: int, verify_hash: bool, keep_source: bool,
+    console, err,
+) -> None:
+    """`curator migrate --resume <job_id>` -- re-execute pending rows."""
+    job_id = _parse_job_id(rt, raw_id, err)
+    try:
+        # Sanity check: job must exist before we spawn workers
+        existing = rt.migration_job_repo.get_job(job_id)
+    except Exception as e:
+        err.print(f"[red]Failed to look up job: {e}[/]")
+        raise typer.Exit(code=1) from e
+    if existing is None:
+        err.print(f"[red]Migration job not found: {job_id}[/]")
+        raise typer.Exit(code=1)
+    if not rt.json_output:
+        console.print(
+            f"\n[bold cyan]Resuming migration job[/] [cyan]{job_id}[/] "
+            f"(status={existing.status}, files_total={existing.files_total})"
+        )
+    report = rt.migration.run_job(
+        job_id,
+        workers=max(1, workers),
+        verify_hash=verify_hash,
+        keep_source=keep_source,
+    )
+    _render_migration_report(
+        rt, report, console=console, job_id=job_id, keep_source=keep_source,
+    )
     if report.failed_count:
         raise typer.Exit(code=1)
 
@@ -2659,29 +2991,42 @@ def _render_migration_plan(rt, plan, *, verify_hash: bool, console=None) -> None
 
     if plan.safe_count > 0:
         console.print(
-            "\n[dim]Re-run with [bold]--apply[/bold] to perform the moves.[/]"
+            "\n[dim]Re-run with [bold]--apply[/bold] to perform the moves. "
+            "Add [bold]--workers N[/bold] (N>1) for the resumable Phase 2 path.[/]"
         )
     else:
         console.print("\n[yellow]Nothing to do.[/]")
 
 
-def _render_migration_report(rt, report, *, console=None) -> None:
-    """Render a migration apply report."""
+def _render_migration_report(
+    rt, report, *, console=None, job_id: UUID | None = None,
+    keep_source: bool = False,
+) -> None:
+    """Render a migration apply / run_job report.
+
+    The ``job_id`` argument signals Phase 2 mode (persisted job) and
+    is included in JSON output + the human heading. The ``keep_source``
+    argument changes the heading word from MOVED to COPIED.
+    """
     moves = report.moves
-    moved = [m for m in moves if m.outcome and m.outcome.value == "moved"]
+    moved = [
+        m for m in moves
+        if m.outcome and m.outcome.value in ("moved", "copied")
+    ]
     skipped = [m for m in moves if m.outcome and m.outcome.value.startswith("skipped")]
     failed = [m for m in moves if m.outcome and m.outcome.value in ("failed", "hash_mismatch")]
 
     if console is None:
         console = _console(rt)
     if rt.json_output:
-        typer.echo(json.dumps({
+        payload = {
             "action": "migrate.apply",
             "moved": len(moved),
             "skipped": len(skipped),
             "failed": len(failed),
             "bytes_moved": report.bytes_moved,
             "duration_seconds": report.duration_seconds,
+            "keep_source": keep_source,
             "results": [
                 {
                     "curator_id": str(m.curator_id),
@@ -2692,14 +3037,21 @@ def _render_migration_report(rt, report, *, console=None) -> None:
                 }
                 for m in moves
             ],
-        }, indent=2, default=str))
+        }
+        if job_id is not None:
+            payload["job_id"] = str(job_id)
+        typer.echo(json.dumps(payload, indent=2, default=str))
         return
 
+    action_word = "copied" if keep_source else "applied"
+    moved_label = "COPIED" if keep_source else "MOVED"
+    duration = report.duration_seconds or 0.0
+    heading = f"\n[bold green]Migration {action_word}[/] in {duration:.2f}s"
+    if job_id is not None:
+        heading += f"  [dim](job {job_id})[/]"
+    console.print(heading)
     console.print(
-        f"\n[bold green]Migration applied[/] in {report.duration_seconds:.2f}s"
-    )
-    console.print(
-        f"  [green]MOVED[/]: {len(moved)}    "
+        f"  [green]{moved_label}[/]: {len(moved)}    "
         f"[yellow]SKIPPED[/]: {len(skipped)}    "
         f"[red]FAILED[/]: {len(failed)}"
     )

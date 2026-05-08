@@ -70,6 +70,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Callable
 from uuid import UUID, uuid4
@@ -96,6 +97,7 @@ class MigrationOutcome(str, Enum):
     """Per-file outcome of a migration apply pass."""
 
     MOVED = "moved"
+    COPIED = "copied"  # keep_source=True: dst created+verified, src untouched, index NOT updated
     SKIPPED_NOT_SAFE = "skipped_not_safe"  # CAUTION or REFUSE per SafetyService
     SKIPPED_COLLISION = "skipped_collision"  # destination exists
     SKIPPED_DB_GUARD = "skipped_db_guard"  # source IS the curator.db file
@@ -161,7 +163,10 @@ class MigrationReport:
 
     @property
     def moved_count(self) -> int:
-        return sum(1 for m in self.moves if m.outcome == MigrationOutcome.MOVED)
+        return sum(
+            1 for m in self.moves
+            if m.outcome in (MigrationOutcome.MOVED, MigrationOutcome.COPIED)
+        )
 
     @property
     def skipped_count(self) -> int:
@@ -180,7 +185,8 @@ class MigrationReport:
     @property
     def bytes_moved(self) -> int:
         return sum(
-            m.size for m in self.moves if m.outcome == MigrationOutcome.MOVED
+            m.size for m in self.moves
+            if m.outcome in (MigrationOutcome.MOVED, MigrationOutcome.COPIED)
         )
 
     @property
@@ -287,12 +293,21 @@ class MigrationService:
         dst_root: str,
         dst_source_id: str | None = None,
         extensions: list[str] | None = None,
+        includes: list[str] | None = None,
+        excludes: list[str] | None = None,
+        path_prefix: str | None = None,
     ) -> MigrationPlan:
         """Build a migration plan: every file under ``src_root`` partitioned
         by SafetyService verdict with a computed destination path.
 
         Phase 1: ``dst_source_id`` defaults to ``src_source_id`` (same-source).
-        Cross-source migration in Phase 2.
+        Cross-source migration in Phase 2 (Session B).
+
+        Filter composition (all applied; ALL must pass):
+          1. Files must be under ``src_root`` (and ``src_root + path_prefix`` if set).
+          2. ``extensions`` whitelist (case-insensitive).
+          3. ``includes`` glob whitelist (file must match at least ONE).
+          4. ``excludes`` glob blacklist (file must match NONE).
 
         Args:
             src_source_id: The source plugin id whose files we're migrating.
@@ -303,6 +318,17 @@ class MigrationService:
             extensions: Optional list of extensions to filter candidates
                 (e.g. ``['.mp3', '.flac']``). Case-insensitive; leading
                 dot optional.
+            includes: Optional list of glob patterns to whitelist files
+                by relative-to-src_root path. Phase 2. Repeatable; file
+                must match AT LEAST ONE include if any are specified.
+            excludes: Optional list of glob patterns to blacklist files
+                by relative-to-src_root path. Phase 2. Repeatable; file
+                must match NO excludes.
+            path_prefix: Optional sub-path under ``src_root`` to narrow
+                the selection. E.g. ``src_root='C:/Music'``,
+                ``path_prefix='Pink Floyd'`` only considers files under
+                ``C:/Music/Pink Floyd/``. Dst paths still preserve the
+                full relative-to-src_root subpath.
 
         Returns:
             A :class:`MigrationPlan` with moves partitioned by SafetyLevel.
@@ -319,6 +345,10 @@ class MigrationService:
                 ("." + e.lstrip(".")).lower() for e in extensions
             }
 
+        # Normalize glob filters (Phase 2)
+        include_patterns = list(includes) if includes else None
+        exclude_patterns = list(excludes) if excludes else None
+
         # Defensive: refuse if dst_root is INSIDE src_root (would loop)
         try:
             if Path(dst_root).resolve().is_relative_to(Path(src_root).resolve()):
@@ -332,12 +362,17 @@ class MigrationService:
             # Resolve failures (paths don't exist yet, etc.) are non-fatal
             # for plan-time -- apply() will surface them.
 
+        # Compute the actual query prefix (src_root + optional path_prefix)
+        query_prefix = src_root
+        if path_prefix:
+            query_prefix = str(Path(src_root) / path_prefix)
+
         # Query the file index for candidates
         try:
             candidates = self.files.query(
                 FileQuery(
                     source_ids=[src_source_id],
-                    source_path_starts_with=src_root,
+                    source_path_starts_with=query_prefix,
                     deleted=False,
                     order_by="source_path ASC",
                 )
@@ -358,6 +393,24 @@ class MigrationService:
                 ext = (f.extension or "").lower()
                 if ext not in ext_filter:
                     continue
+
+            # Glob filters (Phase 2): match against the relative path
+            # under src_root so users write "**/*.flac" not "C:/Music/**/*.flac".
+            if include_patterns is not None or exclude_patterns is not None:
+                try:
+                    rel = str(Path(f.source_path).relative_to(Path(src_root)))
+                except ValueError:
+                    # File is not actually under src_root despite the query;
+                    # skip defensively.
+                    continue
+                # Normalize separators so globs work the same on Win/Mac/Linux
+                rel_norm = rel.replace("\\", "/")
+                if include_patterns is not None:
+                    if not any(fnmatch(rel_norm, pat) for pat in include_patterns):
+                        continue
+                if exclude_patterns is not None:
+                    if any(fnmatch(rel_norm, pat) for pat in exclude_patterns):
+                        continue
 
             # Safety verdict (per-file)
             try:
@@ -405,11 +458,15 @@ class MigrationService:
         *,
         verify_hash: bool = True,
         db_path_guard: Path | None = None,
+        keep_source: bool = False,
+        include_caution: bool = False,
     ) -> MigrationReport:
         """Execute the plan with hash-verify-before-move per file.
 
-        Only SAFE moves run. CAUTION + REFUSE files are recorded with
-        outcome ``SKIPPED_NOT_SAFE``.
+        Only SAFE moves run by default. CAUTION + REFUSE files are
+        recorded with outcome ``SKIPPED_NOT_SAFE``. With
+        ``include_caution=True``, CAUTION files are also eligible (REFUSE
+        is still always skipped).
 
         Args:
             plan: The plan returned by :meth:`plan`.
@@ -422,6 +479,18 @@ class MigrationService:
                 path, the move is skipped with outcome
                 ``SKIPPED_DB_GUARD``. Prevents migrating Curator's own
                 DB out from under itself.
+            keep_source: When True (Phase 2 ``--keep-source`` flag),
+                after dst is created and verified, leave src untouched
+                AND do NOT update the FileEntity index pointer. Outcome
+                is :attr:`MigrationOutcome.COPIED` instead of MOVED.
+                Audit action is ``migration.copy`` instead of
+                ``migration.move``. The next ``curator scan`` will pick
+                up dst as a new file. Default False (Phase 1 trash-source
+                semantics preserved).
+            include_caution: When True (Phase 2 ``--include-caution``
+                flag), CAUTION-level files are eligible for migration
+                alongside SAFE. REFUSE is always skipped regardless.
+                Default False.
 
         Returns:
             A :class:`MigrationReport` with one :class:`MigrationMove`
@@ -440,8 +509,13 @@ class MigrationService:
                 src_xxhash=src_move.src_xxhash,
             )
 
-            # Gate 1: only SAFE files
-            if move.safety_level != SafetyLevel.SAFE:
+            # Gate 1: REFUSE always skipped; CAUTION skipped unless include_caution
+            if move.safety_level == SafetyLevel.REFUSE:
+                move.outcome = MigrationOutcome.SKIPPED_NOT_SAFE
+                report.moves.append(move)
+                continue
+            if (move.safety_level == SafetyLevel.CAUTION
+                    and not include_caution):
                 move.outcome = MigrationOutcome.SKIPPED_NOT_SAFE
                 report.moves.append(move)
                 continue
@@ -461,14 +535,24 @@ class MigrationService:
                 continue
 
             # Execute the move with hash-verify-before-move
-            self._execute_one(move, verify_hash=verify_hash)
+            self._execute_one(
+                move, verify_hash=verify_hash, keep_source=keep_source,
+            )
             report.moves.append(move)
 
         report.completed_at = datetime.utcnow()
         return report
 
-    def _execute_one(self, move: MigrationMove, *, verify_hash: bool) -> None:
-        """Per-file move discipline. Mutates ``move`` in place."""
+    def _execute_one(
+        self, move: MigrationMove, *, verify_hash: bool,
+        keep_source: bool = False,
+    ) -> None:
+        """Per-file move discipline. Mutates ``move`` in place.
+
+        When ``keep_source`` is True, steps 6 (index update) and 7
+        (trash) are skipped; outcome is :attr:`MigrationOutcome.COPIED`
+        and the audit action is ``migration.copy``.
+        """
         src_p = Path(move.src_path)
         dst_p = Path(move.dst_path)
 
@@ -499,6 +583,12 @@ class MigrationService:
                         f"dst={dst_hash}"
                     )
                     return
+
+            if keep_source:
+                # keep-source: dst created+verified, src untouched, index NOT updated
+                move.outcome = MigrationOutcome.COPIED
+                self._audit_copy(move)
+                return
 
             # Step 6: update index (curator_id stays, source_path changes)
             self._update_index(move)
@@ -569,6 +659,35 @@ class MigrationService:
             entry = AuditEntry(
                 actor="curator.migrate",
                 action="migration.move",
+                entity_type="file",
+                entity_id=str(move.curator_id),
+                details={
+                    "src_path": move.src_path,
+                    "dst_path": move.dst_path,
+                    "size": move.size,
+                    "xxhash3_128": move.verified_xxhash or move.src_xxhash,
+                },
+            )
+            self.audit.insert(entry)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "MigrationService: audit append failed for {cid}: {e}",
+                cid=move.curator_id, e=e,
+            )
+
+    def _audit_copy(self, move: MigrationMove) -> None:
+        """Append an audit entry for a successful keep-source copy. Best-effort.
+
+        Distinct from :meth:`_audit_move` so audit log queries can
+        differentiate ``migration.move`` (index re-pointed, src trashed)
+        from ``migration.copy`` (dst created, src + index untouched).
+        """
+        if self.audit is None:
+            return
+        try:
+            entry = AuditEntry(
+                actor="curator.migrate",
+                action="migration.copy",
                 entity_type="file",
                 entity_id=str(move.curator_id),
                 details={
@@ -694,6 +813,7 @@ class MigrationService:
         *,
         workers: int = 4,
         verify_hash: bool = True,
+        keep_source: bool = False,
         on_progress: Callable[[MigrationProgress], None] | None = None,
     ) -> MigrationReport:
         """Execute or resume a persisted job using a worker pool.
@@ -726,6 +846,11 @@ class MigrationService:
             verify_hash: When True, recompute xxhash3_128 of the
                 destination after copy and require it match the source
                 hash. Default True (Constitutional discipline).
+            keep_source: When True, after dst is created and verified,
+                leave src untouched AND skip the FileEntity index
+                update. Per-file outcome is :attr:`MigrationOutcome.COPIED`;
+                audit action is ``migration.copy``. Default False
+                (move semantics: index re-pointed + src trashed).
             on_progress: Optional callback invoked once per file after
                 the row reaches a terminal state. Receives the freshly
                 updated :class:`MigrationProgress`. Exceptions in the
@@ -767,7 +892,7 @@ class MigrationService:
                 futures = [
                     pool.submit(
                         self._worker_loop, job_id,
-                        verify_hash, abort_event, on_progress,
+                        verify_hash, keep_source, abort_event, on_progress,
                     )
                     for _ in range(worker_count)
                 ]
@@ -872,6 +997,7 @@ class MigrationService:
         self,
         job_id: UUID,
         verify_hash: bool,
+        keep_source: bool,
         abort_event: threading.Event,
         on_progress: Callable[[MigrationProgress], None] | None,
     ) -> None:
@@ -887,10 +1013,12 @@ class MigrationService:
 
             try:
                 outcome, verified_hash = self._execute_one_persistent(
-                    progress, verify_hash=verify_hash,
+                    progress,
+                    verify_hash=verify_hash,
+                    keep_source=keep_source,
                 )
 
-                if outcome == MigrationOutcome.MOVED:
+                if outcome in (MigrationOutcome.MOVED, MigrationOutcome.COPIED):
                     self.migration_jobs.update_progress(
                         job_id, progress.curator_id,
                         status="completed", outcome=outcome.value,
@@ -951,11 +1079,17 @@ class MigrationService:
         progress: MigrationProgress,
         *,
         verify_hash: bool,
+        keep_source: bool = False,
     ) -> tuple[MigrationOutcome, str | None]:
         """Per-file Hash-Verify-Before-Move for the persistent path.
 
         Returns ``(outcome, verified_xxhash_or_None)``. Caller (worker
         loop) records the outcome to ``migration_progress``.
+
+        When ``keep_source`` is True, after dst is created and verified,
+        steps 6 (index update) and 7 (trash) are skipped; outcome is
+        :attr:`MigrationOutcome.COPIED` and audit action is
+        ``migration.copy`` (not ``migration.move``).
 
         Raises on unexpected exceptions; the worker catches and records
         ``status='failed', outcome='failed'``.
@@ -992,6 +1126,31 @@ class MigrationService:
                 except OSError:
                     pass
                 return (MigrationOutcome.HASH_MISMATCH, verified_hash)
+
+        if keep_source:
+            # keep-source: dst created+verified, src untouched, index NOT updated
+            if self.audit is not None:
+                try:
+                    entry = AuditEntry(
+                        actor="curator.migrate",
+                        action="migration.copy",
+                        entity_type="file",
+                        entity_id=str(progress.curator_id),
+                        details={
+                            "src_path": progress.src_path,
+                            "dst_path": progress.dst_path,
+                            "size": progress.size,
+                            "xxhash3_128": verified_hash or src_hash,
+                            "job_id": str(progress.job_id),
+                        },
+                    )
+                    self.audit.insert(entry)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "MigrationService: audit append failed for {cid}: {e}",
+                        cid=progress.curator_id, e=e,
+                    )
+            return (MigrationOutcome.COPIED, verified_hash)
 
         # Step 6: index update (curator_id stays, source_path changes)
         entity = self.files.get(progress.curator_id)
