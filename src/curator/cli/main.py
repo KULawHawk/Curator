@@ -2666,16 +2666,20 @@ def migrate_cmd(
         )
         raise typer.Exit(code=2)
 
-    # Cross-source guard: Session B not yet shipped
+    # Cross-source guard: Session B ships cross-source via
+    # curator_source_write hook. Refuse only if the destination plugin
+    # doesn't advertise supports_write capability.
     effective_dst_source = dst_source_id or src_source_id
     if effective_dst_source != src_source_id:
-        err.print(
-            f"[red]Cross-source migration not yet supported ("
-            f"src={src_source_id!r} -> dst={effective_dst_source!r}). "
-            "Same-source only in Phase 2 Session A; Session B will add "
-            "cross-source via curator_source_write hook.[/]"
-        )
-        raise typer.Exit(code=2)
+        if not rt.migration._can_write_to_source(effective_dst_source):
+            err.print(
+                f"[red]Cross-source migration to dst_source_id={effective_dst_source!r} "
+                "is not supported: no registered plugin advertises "
+                "supports_write for that source. Run 'curator sources list' "
+                "to see what's available, or install a plugin that supports "
+                "writing to this source.[/]"
+            )
+            raise typer.Exit(code=2)
 
     ext_list: list[str] | None = None
     if extensions:

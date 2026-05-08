@@ -517,7 +517,10 @@ class TestGuardsAndErrors:
     def test_dst_source_id_different_exits_2(
         self, runner, seeded_db, tmp_path,
     ):
-        """Cross-source migration is Session B; should error cleanly."""
+        """Cross-source migration to a dst whose plugin doesn't
+        advertise supports_write should error cleanly. In the test env
+        gdrive plugin can't load PyDrive2 so it doesn't claim 'gdrive'
+        sources, so the capability check refuses."""
         db_path, src_root, files = seeded_db
         result = runner.invoke(app, [
             "--db", str(db_path),
@@ -538,3 +541,178 @@ class TestGuardsAndErrors:
         ])
         assert result.exit_code == 2
         assert "required" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# Session B: Cross-source migration via CLI (--dst-source-id)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def cross_source_seeded_db(tmp_path, monkeypatch):
+    """Like ``seeded_db`` but registers TWO local source IDs.
+
+    Both ``local`` and ``local:vault`` are owned by ``LocalPlugin`` via
+    its ``_owns()`` prefix matching, so the cross-source CLI path is
+    fully exercised through real bytes/files (no PyDrive2 or mocks).
+
+    Returns ``(db_path, src_root, files)`` -- 3 files seeded under
+    ``source_id='local'`` at ``tmp_path/library/``.
+    """
+    db_path = tmp_path / "migration_cs.db"
+    monkeypatch.setenv("CURATOR_DB", str(db_path))
+
+    # Stub safety -> SAFE for everything under tmp_path
+    from curator.services.safety import SafetyReport, SafetyService, SafetyLevel as SL
+
+    def _safe_check(self, path, **kw):
+        return SafetyReport(path=path, level=SL.SAFE)
+
+    monkeypatch.setattr(SafetyService, "check_path", _safe_check)
+
+    cfg = Config.load()
+    rt = build_runtime(
+        config=cfg, db_path_override=db_path,
+        json_output=False, no_color=True, verbosity=0,
+    )
+    for sid, name in [("local", "Local Primary"), ("local:vault", "Local Vault")]:
+        try:
+            rt.source_repo.insert(SourceConfig(
+                source_id=sid, source_type="local", display_name=name,
+            ))
+        except Exception:
+            pass
+
+    src_root = tmp_path / "library"
+    files = []
+    for name, content in [
+        ("song1.mp3", b"track1 bytes" * 100),
+        ("song2.mp3", b"track2 bytes" * 50),
+        ("Photos/img.jpg", b"jpeg bytes\xff" * 200),
+    ]:
+        p = src_root / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(content)
+        h = xxhash.xxh3_128(content).hexdigest()
+        e = FileEntity(
+            curator_id=uuid4(), source_id="local",
+            source_path=str(p), size=len(content),
+            mtime=datetime.fromtimestamp(p.stat().st_mtime),
+            extension=p.suffix.lower(),
+            xxhash3_128=h,
+        )
+        rt.file_repo.upsert(e)
+        files.append(e)
+
+    return db_path, src_root, files
+
+
+class TestCrossSourceCLI:
+    def test_cross_source_apply_moves_files_via_cli(
+        self, runner, cross_source_seeded_db, tmp_path,
+    ):
+        """--dst-source-id local:vault --apply moves files end-to-end
+        (Phase 1 path, default workers=1)."""
+        db_path, src_root, files = cross_source_seeded_db
+        dst_root = tmp_path / "vault"
+        result = runner.invoke(app, [
+            "--db", str(db_path),
+            "migrate", "local", str(src_root), str(dst_root),
+            "--apply", "--dst-source-id", "local:vault",
+        ])
+        assert result.exit_code == 0
+        # Srcs trashed, dsts present
+        for f in files:
+            rel = Path(f.source_path).relative_to(src_root)
+            assert (dst_root / rel).exists()
+
+    def test_cross_source_workers_routes_to_phase2(
+        self, runner, cross_source_seeded_db, tmp_path,
+    ):
+        """--dst-source-id + --workers > 1 creates a persistent job."""
+        db_path, src_root, files = cross_source_seeded_db
+        result = runner.invoke(app, [
+            "--json", "--db", str(db_path),
+            "migrate", "local", str(src_root), str(tmp_path / "vault"),
+            "--apply", "--dst-source-id", "local:vault",
+            "--workers", "4",
+        ])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        # Phase 2 path -> JSON includes job_id
+        assert "job_id" in payload
+        assert payload["moved"] == 3
+        # And the job exists in --list with cross-source src/dst
+        listed = runner.invoke(app, [
+            "--json", "--db", str(db_path), "migrate", "--list",
+        ])
+        jobs = json.loads(listed.stdout)
+        assert len(jobs) == 1
+        assert jobs[0]["src_source_id"] == "local"
+        assert jobs[0]["dst_source_id"] == "local:vault"
+        assert jobs[0]["files_copied"] == 3
+
+    def test_cross_source_keep_source_via_cli(
+        self, runner, cross_source_seeded_db, tmp_path,
+    ):
+        """--dst-source-id + --keep-source preserves srcs and reports
+        COPIED outcomes in JSON."""
+        db_path, src_root, files = cross_source_seeded_db
+        dst_root = tmp_path / "vault"
+        result = runner.invoke(app, [
+            "--json", "--db", str(db_path),
+            "migrate", "local", str(src_root), str(dst_root),
+            "--apply", "--dst-source-id", "local:vault",
+            "--keep-source",
+        ])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        assert payload["keep_source"] is True
+        assert payload["moved"] == 3
+        # All srcs still on disk
+        for f in files:
+            assert Path(f.source_path).exists()
+        # All dsts created
+        for f in files:
+            rel = Path(f.source_path).relative_to(src_root)
+            assert (dst_root / rel).exists()
+        # All per-file outcomes are 'copied'
+        for r in payload["results"]:
+            if r["outcome"]:
+                assert r["outcome"] == "copied"
+
+    def test_cross_source_unsupported_dst_exits_2(
+        self, runner, cross_source_seeded_db, tmp_path,
+    ):
+        """--dst-source-id pointing at a source no plugin supports for
+        write produces a capability-check error (exit 2)."""
+        db_path, src_root, _ = cross_source_seeded_db
+        result = runner.invoke(app, [
+            "--db", str(db_path),
+            "migrate", "local", str(src_root), str(tmp_path / "out"),
+            "--dst-source-id", "never_registered_source",
+        ])
+        assert result.exit_code == 2
+        # Error mentions the failed source + the supports_write capability
+        out = result.output.lower()
+        assert "never_registered_source" in out
+        assert "supports_write" in out or "supports write" in out
+
+    def test_cross_source_plan_only_shows_both_source_ids(
+        self, runner, cross_source_seeded_db, tmp_path,
+    ):
+        """Plan-only mode (no --apply) for cross-source should still
+        succeed (capability check passes) and JSON output reflects the
+        cross-source src/dst pair."""
+        db_path, src_root, _ = cross_source_seeded_db
+        result = runner.invoke(app, [
+            "--json", "--db", str(db_path),
+            "migrate", "local", str(src_root), str(tmp_path / "vault"),
+            "--dst-source-id", "local:vault",
+        ])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        assert payload["action"] == "migrate.plan"
+        assert payload["src_source_id"] == "local"
+        assert payload["dst_source_id"] == "local:vault"
+        assert payload["total"] == 3

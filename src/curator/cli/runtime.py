@@ -175,10 +175,12 @@ def build_runtime(
     )
     cleanup = CleanupService(safety, audit=audit_repo, file_repo=file_repo)
     # v1.1.0a1: Migration tool (Tracer Phase 1).
-    # v1.1.0a2: Phase 2 -- pass migration_job_repo for create_job/run_job.
+    # v1.1.0a2: Phase 2 Session A -- pass migration_job_repo for create_job/run_job.
+    # v1.1.0a3: Phase 2 Session B -- pass pm for cross-source via curator_source_write hook.
     migration = MigrationService(
         file_repo=file_repo, safety=safety, audit=audit_repo,
         migration_jobs=migration_job_repo,
+        pm=pm,
     )
 
     return CuratorRuntime(
