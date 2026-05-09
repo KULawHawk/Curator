@@ -1,6 +1,6 @@
 # `curatorplug-atrium-citation` — Design
 
-**Status:** v0.1 — DRAFT 2026-05-08. Awaiting Jake's ratification of DMs §3.
+**Status:** v0.2 — DMs RATIFIED 2026-05-08 by Jake Leese (chat reply "1c" = ratify all six DMs as recommended). Ready for repo bootstrap + P1 implementation. Awaiting GitHub repo creation at `https://github.com/KULawHawk/curatorplug-atrium-citation` (Jake to create at `github.com/new`).
 **Date:** 2026-05-08
 **Authority:** Subordinate to Atrium `CONSTITUTION.md`. Implements Constitution **Principle 3 (Citation Chain Preservation)** as a *cross-cutting verification layer* over Curator's plugin ecosystem, complementing `curatorplug-atrium-safety` (which implements Principle 2: Hash-Verify-Before-Move).
 **Companion documents:**
@@ -77,6 +77,8 @@ Compare to atrium-safety DM-1 (which ratified soft enforcement for hash mismatch
 (b) Soft enforcement is too aggressive for an observation-first invariant.
 (c) Hybrid is overengineering: a config flag we never flip is dead code.
 
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake (chat reply "1c"). Implementation cleared with advisory mode.
+
 ### DM-2 — Scope of "citation requirement"
 
 **Question.** Which writes are expected to produce lineage edges?
@@ -94,6 +96,8 @@ Rationale: A scanner ingesting a fresh folder produces hundreds of `curator_sour
 (c) requires Curator core changes to pass the flag, which is out of scope for a v0.1 plugin and shifts the burden onto Curator's API surface.
 
 The plugin can detect "cross-source" by reading `curator_source_write_post`'s `source_id` and comparing to the calling context — but actually, the post-hook only knows the *destination* source_id. To detect cross-source we'd need either (i) Curator core to pass a `cross_source: bool` flag to the post-hook, or (ii) the plugin to maintain a small state machine listening to `migration.*` audit events to know which writes were cross-source. Option (ii) is plugin-internal and doesn't require Curator core changes. **DM-2 ratification implies adding option (ii) state-machine logic in §4.**
+
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake (chat reply "1c"). Cross-source writes only; option (ii) state-machine in §4.
 
 ### DM-3 — Lineage-edge verification mechanism
 
@@ -114,6 +118,8 @@ Real-time mode can be added in v0.2+ if the deferred sweep proves insufficient �
 (a) hard-couples the plugin to LineageRepository internals; future Curator schema migrations break the plugin.
 (b/c) require Curator core changes that may not happen on the plugin's timeline.
 
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake (chat reply "1c"). Deferred sweep via `curator citation sweep` CLI subcommand for v0.1.
+
 ### DM-4 — Audit channel
 
 **Question.** When the plugin detects a citation gap (during a sweep), where does the record live?
@@ -129,6 +135,8 @@ Rationale: Same reasoning as atrium-safety DM-3 (which also ratified audit-log-o
 
 If audit-log volume becomes overwhelming (thousands of citation events from a misconfigured pipeline), DM-4 can be revisited — but the deferred-sweep model (DM-3) writes one summary entry per sweep, not one per gap, so volume should be tiny.
 
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake (chat reply "1c"). Curator's existing audit log via `actor='curatorplug.atrium_citation'`.
+
 ### DM-5 — Plugin registration mechanism
 
 **Question.** How does Curator discover this plugin?
@@ -141,6 +149,8 @@ If audit-log volume becomes overwhelming (thousands of citation events from a mi
 **Recommendation: (a) Setuptools entry point.**
 
 Rationale: Identical to atrium-safety DM-4 (ratified). Standard Python plugin pattern; pluggy + Curator already plumb for it.
+
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake (chat reply "1c"). Setuptools entry point under `[project.entry-points.curator]`.
 
 ### DM-6 — Scope vs Conclave/APEX
 
@@ -156,6 +166,8 @@ Rationale: Identical to atrium-safety DM-4 (ratified). Standard Python plugin pa
 Rationale: Constitution Article IV (Cross-Product Governance) §"Cross-product safety" notes that cross-product enforcement happens via SIP-distributed safety plugins, with the SIP itself currently at v0.1. The full mechanism for cross-product invariants ratified in the SIP isn't ready yet. Shipping Curator-only enforcement in v0.1 establishes the pattern; Phase β (after SIP v1.0) can extend.
 
 (b) and (c) couple the plugin to APEX's and Conclave's internal data structures, which violates Aim 5 (Composability — published interfaces only).
+
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake (chat reply "1c"). Curator-only for v0.1; cross-product enforcement waits for SIP v1.0.
 
 ---
 
@@ -255,7 +267,8 @@ Captured here so future revisions know what was deliberately deferred:
 ## 7. Document log
 
 * **2026-05-08 v0.1 — DRAFT.** Initial design authored after Curator v1.4.0 release + Constitution v0.1 reading. Addresses Principle 3 (Citation Chain Preservation). Companion to `curatorplug-atrium-safety\DESIGN.md` v0.4 IMPLEMENTED (Principle 2). Six DMs raised for ratification (DM-1 through DM-6). Recommended decisions are observation-first / advisory / Curator-only, deliberately conservative for v0.1. Repo bootstrap (separate from this DESIGN doc) deferred until DM ratification.
+* **2026-05-08 v0.2 — DMs RATIFIED.** Jake Leese ratified all six DMs as recommended via chat reply "1c". P1 implementation cleared. Atrium Constitution v0.2 (ratified in the same turn) added Aim 10 (Fidelity), which directly motivates this plugin's role: Citation Chain (Principle 3) is the cross-cutting fidelity invariant for derived information. The plugin now serves both Principle 3 enforcement AND Aim 10 fidelity-of-derived-information observation.
 
 ---
 
-*Awaiting Jake's affirmative ratification of DMs §3 to clear repo bootstrap + P1 implementation.*
+*DMs ratified 2026-05-08; repo bootstrap awaiting GitHub repo creation at https://github.com/new with name `curatorplug-atrium-citation`. Once created, P1 cycle begins.*

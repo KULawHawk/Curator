@@ -22,9 +22,9 @@ The Latin phrase *ad astra* — "to the stars" — captures the organizing inten
 
 | Pillar | Status | Location | Primary doc |
 |---|---|---|---|
-| **Atrium** | active, pre-ratification | `C:\Users\jmlee\Desktop\AL\Atrium\` (HEAD `35650cc`) | `CONSTITUTION.md` (5 principles) |
+| **Atrium** | **v0.2 RATIFIED** ✅ (2026-05-08) | `C:\Users\jmlee\Desktop\AL\Atrium\` (HEAD `adabcb7`) | `CONSTITUTION.md` v0.2 (Ten Aims + Five Non-Negotiable Principles); ratified by Jake Leese 2026-05-08. |
 
-Atrium is the constitutional layer. Every other tool below ultimately answers to Atrium's principles via pluggy hookspecs (in Curator's case) or by direct convention (everything else). The Constitution is currently in draft form awaiting Jake's formal ratification — when ratified, it becomes the binding governance document for all constellation work.
+Atrium is the constitutional layer. Every other tool below ultimately answers to Atrium's principles via pluggy hookspecs (in Curator's case) or by direct convention (everything else). The Constitution was ratified at v0.2 by Jake Leese on 2026-05-08, making it the binding governance document for all constellation work.
 
 ### Infrastructure pillars
 
@@ -79,17 +79,21 @@ The "indexers working together" concept lives here. Two indexers exist concurren
 
 ---
 
-## Atrium Constitution structure (corrected 2026-05-08)
+## Atrium Constitution structure (v0.2 ratified 2026-05-08)
 
-Atrium's `CONSTITUTION.md` v0.1 distinguishes between two governance categories:
+Atrium's `CONSTITUTION.md` v0.2 distinguishes between two governance categories:
 
-**Article I — Six Aims** (ordinary-amendment authority):
+**Article I — Ten Aims** (ordinary-amendment authority):
 1. Accuracy
 2. Reversibility → mapped to `curatorplug-atrium-reversibility`
 3. Self-sufficiency
 4. Auditability
 5. Composability
 6. Portability
+7. Comprehensiveness *(added in Constitution v0.2, 2026-05-08)*
+8. Validity *(added in Constitution v0.2; psychometric construct)*
+9. Reliability *(added in Constitution v0.2; psychometric construct)*
+10. Fidelity *(added in Constitution v0.2; cross-cutting with Principle 3 Citation Chain)*
 
 **Article II — Five Non-Negotiable Principles** (reinforced-amendment authority — require 7-day waiting period + amendment codeword):
 1. The MORTAL SIN Rule (no deletion of assessment-derived artifacts)
@@ -139,12 +143,13 @@ let work resume across context window boundaries.
 
 These are explicit "not now" items rather than forgotten tasks:
 
-1. **Atrium Constitution ratification** — Jake-required. Constitution exists in draft; needs formal sign-off to become binding.
-2. **curatorplug-atrium-reversibility** — local-only at `84ee978`; no GitHub remote yet. Architectural skeleton in place but implementation paused.
+1. ~~**Atrium Constitution ratification**~~ — ✅ RATIFIED 2026-05-08 at v0.2.
+2. **curatorplug-atrium-reversibility implementation** — GitHub repo created + DESIGN.md pushed at `84ee978`; P1 implementation paused awaiting Jake's prioritization.
 3. **Filesystem migration to** `C:\Users\jmlee\AdAstra\` — currently everything lives at `Desktop\AL\`. The move to a dedicated `AdAstra\` folder structure under the user profile is on the wishlist but not scheduled.
 4. **Succubus build** — design locked at `INDEXER_ARCHITECTURE.md` 2026-04-25; no implementation started.
 5. **MCP HTTP-auth** — deferred to Curator v1.5.0 per Tracer Phase 4 v0.2 RATIFIED DM-6.
-6. **Tracer Phase 2 Session B real-world demo** — Jake-required. v1.4.0 surface complete; needs gdrive OAuth + actual files to validate against real Drive responses (vs. our test mocks).
+6. **Tracer Phase 2 Session B real-world demo** — Jake-required. v1.4.0 surface complete; needs gdrive OAuth + actual files to validate against real Drive responses (vs. our test mocks). Runbook: `Curator/docs/TRACER_SESSION_B_RUNBOOK.md`.
+7. **`curatorplug-atrium-citation` repo bootstrap** — DMs ratified by Jake 2026-05-08; awaiting GitHub repo creation at `https://github.com/new` with name `curatorplug-atrium-citation`. Once created, P1 implementation can begin.
 
 ---
 
