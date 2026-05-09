@@ -141,24 +141,57 @@ foreach ($p in @($CuratorRepo, $CitationRepo, $SafetyRepo)) {
     Write-Sub "$p OK"
 }
 
-# Find a usable system Python 3.13 (need this if venv doesn't exist yet)
-$pyCandidates = @(
-    "C:\Program Files\Python313\python.exe",
-    "C:\Users\$env:USERNAME\AppData\Local\Programs\Python\Python313\python.exe",
-    "C:\Python313\python.exe"
-)
+# Defender real-time scan note (informational, not blocking)
+try {
+    $mp = Get-MpComputerStatus -ErrorAction SilentlyContinue
+    if ($mp -and $mp.RealTimeProtectionEnabled) {
+        Write-Sub "Defender real-time scan: ON (informational; can slow pip install but not blocking)"
+    }
+} catch {}
+
+# Find a usable system Python 3.11+ (need this if venv doesn't exist yet)
+# Use 'py' launcher first if available, falls back to fixed paths.
 $systemPy = $null
-foreach ($candidate in $pyCandidates) {
-    if (Test-Path $candidate) {
-        $systemPy = $candidate
-        break
+$pyLauncher = Get-Command py -ErrorAction SilentlyContinue
+if ($pyLauncher) {
+    # 'py -3.13' lookup; fall back to '-3' (highest installed 3.x)
+    foreach ($pyArg in @('-3.13', '-3.12', '-3.11', '-3')) {
+        $candidate = & py $pyArg -c "import sys; print(sys.executable)" 2>$null
+        if ($candidate -and (Test-Path $candidate)) {
+            # Verify it's >=3.11 (Curator requires tomllib in stdlib)
+            $verOk = & py $pyArg -c "import sys; print(int(sys.version_info >= (3,11)))" 2>$null
+            if ($verOk -eq "1") {
+                $systemPy = $candidate
+                Write-Sub ("system Python (via py {0}): {1}" -f $pyArg, $systemPy)
+                break
+            }
+        }
+    }
+}
+if (-not $systemPy) {
+    $pyCandidates = @(
+        "C:\Program Files\Python313\python.exe",
+        "C:\Program Files\Python312\python.exe",
+        "C:\Program Files\Python311\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+        "C:\Python313\python.exe",
+        "C:\Python312\python.exe",
+        "C:\Python311\python.exe"
+    )
+    foreach ($candidate in $pyCandidates) {
+        if (Test-Path $candidate) {
+            $systemPy = $candidate
+            Write-Sub "system Python (path search): $systemPy"
+            break
+        }
     }
 }
 if (-not $systemPy -and -not (Test-Path $VenvPy)) {
-    Write-Bad "Cannot find system Python 3.13. Install Python 3.13 or pre-create the venv."
+    Write-Bad "Cannot find system Python 3.11+. Install Python 3.11/3.12/3.13 from python.org or pre-create the venv."
     exit 1
 }
-if ($systemPy) { Write-Sub "system Python: $systemPy" }
 if (Test-Path $VenvPy) { Write-Sub "venv Python:   $VenvPy (already present)" }
 
 # Detect Claude Desktop install type — surfaces info even when not running
@@ -531,9 +564,29 @@ if ($cfg.mcpServers.curator) {
 }
 
 if ($PSCmdlet.ShouldProcess($ClaudeCfgPath, "Write updated config")) {
-    # Use UTF-8 NO BOM (Notepad-compatible, Claude Desktop-friendly)
+    # Use UTF-8 NO BOM (Notepad-compatible, Claude Desktop-friendly).
+    # Use Python's json module for clean output — PowerShell's ConvertTo-Json
+    # produces verbose padded output that's hard to read.
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-    $cfgJson = $cfg | ConvertTo-Json -Depth 20
+    $cfgRawJson = $cfg | ConvertTo-Json -Depth 20 -Compress
+    $tempIn = [System.IO.Path]::GetTempFileName()
+    [System.IO.File]::WriteAllText($tempIn, $cfgRawJson, $utf8NoBom)
+    $cfgJson = $null
+    try {
+        # python returns array of lines via PowerShell; join with LF for proper formatting
+        $cfgJsonLines = & $VenvPy -c "import json,sys; d=json.load(open(r'$tempIn','r',encoding='utf-8')); print(json.dumps(d, indent=2, ensure_ascii=False))" 2>$null
+        if ($cfgJsonLines -is [array]) {
+            $cfgJson = $cfgJsonLines -join "`n"
+        } else {
+            $cfgJson = $cfgJsonLines
+        }
+    } catch {} finally {
+        Remove-Item $tempIn -ErrorAction SilentlyContinue
+    }
+    if (-not $cfgJson) {
+        # Fall back to PowerShell ConvertTo-Json (verbose but valid JSON)
+        $cfgJson = $cfg | ConvertTo-Json -Depth 20
+    }
     [System.IO.File]::WriteAllText($ClaudeCfgPath, $cfgJson, $utf8NoBom)
 
     # Verify what we wrote
