@@ -155,6 +155,17 @@ These are explicit "not now" items rather than forgotten tasks:
 
 ---
 
+## Future Constitutional amendments under consideration
+
+Tracked future amendments to the Atrium Constitution that have been proposed and considered but deliberately deferred for later action:
+
+* **Q2 (raised 2026-05-08, deferred 2026-05-08): Promote v0.2 Aims to Article II Non-Negotiable Principles.** Considered for: Comprehensiveness, Validity, Reliability, Fidelity (currently Aims 2–5 in Article I per Constitution v0.3). Promoting them would move the four constructs from ordinary-amendment authority (Article I) to reinforced-amendment authority (Article II) requiring the codeword + 7-day waiting period AND written rationale.
+  - **Decision:** *Q2 later, all 4 eventually after testing.* (Jake Leese, 2026-05-08: "later but eventually all when we have a chance to actually test and ensure we don't neg impact ourselves".)
+  - **Reopens when:** the constellation has accumulated enough production-usage data to confirm that promoting these four to Principles wouldn't create amendment friction or unintended consequences for products outside the assessment-data path. No specific time horizon; revisit after Curator reaches a Phase 2-equivalent milestone (1.5+ feature stability) and at least one full APEX/Conclave assessment cycle has run end-to-end with the four Aims actively governing decisions.
+  - **When reopened:** drafts an Article II amendment proposal with explicit rationale per Aim, requests the codeword from Jake, observes the 7-day waiting period, then ratifies. The four Aims become Principles 6–9 (or similar; final ordering TBD at amendment time).
+
+---
+
 ## Provenance & maintenance
 
 * **This doc lives at:** `C:\Users\jmlee\Desktop\AL\AD_ASTRA_CONSTELLATION.md`
