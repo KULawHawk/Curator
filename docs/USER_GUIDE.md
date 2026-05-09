@@ -428,34 +428,51 @@ All MCP tools are **read-only**. Destructive operations (trash, migrate apply, e
 
 ## GUI guide
 
-`curator gui` opens a PySide6 desktop window titled "Curator <version>". **Read-only first ship** — none of the tabs let you trash, migrate, or change anything. They are viewers over the same data the CLI sees.
+`curator gui` opens a PySide6 desktop window titled "Curator <version>". The GUI ships **8 tabs** with read-only views of the index plus action surfaces via right-click menus and the Edit menu.
 
-### Browser tab
+### Tabs
 
-Lists every indexed file. Columns include path, source, size, hash, classification.
-- **What you do here:** filter, sort, drill into a single file's details
-- **What you do elsewhere:** to actually trash/move/etc., go to CLI
+| Tab | What you see | What you can do |
+|---|---|---|
+| **Inbox** | Pending review queue | (read-only viewer) |
+| **Browser** | Every indexed file | Right-click → "Send to Trash..." |
+| **Bundles** | All bundles + member counts | Right-click → "Dissolve" / "New" / "Edit" |
+| **Trash** | Trashed file records | Right-click → "Restore..." (often raises `RestoreImpossibleError` on Windows due to send2trash limitation; manual restore from Recycle Bin is the workaround) |
+| **Migrate** | Phase 2 migration jobs + per-file progress | View status, abort, resume |
+| **Audit Log** | Audit log table | (read-only viewer) |
+| **Settings** | Config table | (read-only viewer in v1.6) |
+| **Lineage Graph** | Visual graph of lineage edges | Pan, zoom, hover for details |
 
-### Bundles tab
+### Menus
 
-Lists every bundle and its member counts.
-- **What you do here:** see what bundles exist, see what files belong to which bundle
-- **What you do elsewhere:** create/dissolve bundles via `curator bundles`
+- **File** — Refresh, Quit
+- **Edit** — Send to Trash, Restore, Dissolve, New bundle, Edit bundle
+- **Help** — About
 
-### Trash tab
+### What the GUI is missing in v1.6 (and why)
 
-Lists every file Curator has trashed (still recoverable).
-- **What you do here:** see what's in the trash, when it was trashed, why
-- **What you do elsewhere:** restore via `curator restore`, or empty Windows Recycle Bin to make permanent
+The GUI is currently a **viewer + limited mutator**, not full CLI parity:
+- No dialogs yet for `scan`, `group`, `cleanup`, `organize`, `migrate` (Phase 1), `gdrive auth`, `watch`, `safety`, `doctor`
+- Actions are buried in right-click context menus (poor discoverability)
+- Settings tab is read-only
 
-### Why no action buttons in v1.6.1?
+**Until GUI parity ships**, two things fill the gap:
 
-The GUI surfaced this functionality intentionally as read-only first because:
-1. CLI + MCP cover all destructive actions with audit + reversibility built in
-2. A click-to-delete button without confirmation is a footgun
-3. Future versions may add staged-action panels (proposed but not built)
+1. **CLI is the primary control surface** — every command in this guide can be run from PowerShell. Activate the venv (`& .\Curator\.venv\Scripts\Activate.ps1`) and you're ready.
+2. **PowerShell batch workflows** — see `Curator/scripts/workflows/`. Five double-clickable `.bat` files cover the common multi-step operations:
+ - `01_initial_scan.bat` — register source + scan + summary
+ - `02_find_duplicates.bat` — find duplicates, report, optionally trash extras
+ - `03_cleanup_junk.bat` — find junk/empty-dirs/broken-symlinks, report, optionally trash
+ - `04_audit_summary.bat` — 24-hour read-only audit report
+ - `05_health_check.bat` — stack diagnostic dashboard
 
-For now: **CLI is your control panel; GUI is your dashboard.**
+### Roadmap to GUI parity
+
+Full design at [`docs/design/GUI_V2_DESIGN.md`](design/GUI_V2_DESIGN.md). Sequencing:
+- **v1.6.2** (patch) — discoverability fixes: Tools menu, Workflows menu (calling into the .bat scripts), first-run hints
+- **v1.7.0** — foundation parity: ScanDialog, GroupDialog, CleanupDialog, Sources tab, HealthCheck dashboard
+- **v1.8.0** — advanced parity: OrganizeDialog, MigrateDialog, Drive auth, live Watch tab, editable Settings
+- **v1.9.0** — native workflows + integration with `atrium-reversibility` (per `Atrium/design/LIFECYCLE_GOVERNANCE.md`)
 
 ---
 
