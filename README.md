@@ -8,6 +8,8 @@ Curator gives every file a stable identity, tracks relationships and lineage bet
 
 ## Documentation
 
+- **[`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — START HERE if you want to actually use Curator.** Covers every CLI subcommand, every MCP tool, the GUI tabs, configuration, common workflows (recipes), filesystem layout, and troubleshooting. v1.6.1.
+- [`installer/README.md`](installer/README.md) — single-script installer for the Curator stack on Windows. The 10-step doc with the bulletproof real-MCP-probe gate.
 - [`CHANGELOG.md`](CHANGELOG.md) — release history (v1.0.0rc1, v1.1.0a1, v1.1.0, v1.1.1, v1.1.2, v1.1.3, v1.2.0, v1.3.0, v1.4.0)
 - [`DESIGN.md`](DESIGN.md) — implementation specification (21 sections)
 - [`docs/TRACER_PHASE_2_DESIGN.md`](docs/TRACER_PHASE_2_DESIGN.md) — Migration tool (Tracer) Phase 2 design + implementation evidence
