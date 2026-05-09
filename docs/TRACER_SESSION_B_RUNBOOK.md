@@ -1,374 +1,261 @@
-# Tracer Phase 2 Session B — Real-World Demo Runbook
+# Tracer Phase 2 — Session B runbook (cross-source local → Google Drive)
 
-**Status:** v1.0 — DRAFT 2026-05-08. Authored after Curator v1.4.0 release, optimized for the full v1.4.0 surface.
-**Audience:** Jake (the only human in the loop). AI cannot execute this runbook because gdrive OAuth requires a real browser session with Google credentials.
-**Estimated time:** ~30 min start-to-finish on first run, ~5 min on subsequent runs.
-**Goal:** Validate Curator v1.4.0's cross-source migration features (Phase 2 worker pool + Phase 3 retry + Phase 4 overwrite-with-backup + rename-with-suffix) against real Google Drive responses, not mocks.
+**Status:** v2 (rewritten 2026-05-09 with correct `curator migrate` syntax + working pre-reqs).
+
+## What this runbook validates
+
+Cross-source migration of files from a local folder into Google Drive,
+end-to-end against a real Drive account. This is the v1.4.0+
+production-validation gate that test mocks can't cover. The mocks have
+been stable since Phase 4, but until you run this against actual Drive
+API responses, you only have evidence the code is correct against your
+mental model — not against Drive's real behavior.
+
+After this runbook completes successfully, you'll have evidence that:
+
+* PyDrive2 + the gdrive_source plugin successfully build a Drive
+  client from your saved credentials and refresh tokens automatically
+  (no re-auth prompts).
+* Curator's `migrate` command computes a correct cross-source plan
+  from a local source to a `gdrive` source.
+* The hash-verify-before-move pipeline correctly hashes both sides
+  (local xxhash3_128 of the source, MD5 from Drive's metadata) and
+  records both in lineage.
+* Audit log entries (`migration.move`, `migration.copy`, etc.) land
+  with correct details.
+* Phase 2 (workers > 1) writes durable migration_jobs / migration_progress
+  rows that survive an interrupt.
+* Resume after Ctrl+C picks up where it left off without duplicating files.
+
+## Prerequisites
+
+* PyDrive2 installed in Curator's venv: `pip list | findstr pydrive2`
+  should show `pydrive2-1.21.3` or later.
+* gdrive auth completed for the `src_drive` alias:
+  `curator gdrive status src_drive` should report
+  `credentials_present` with both `client_secrets.json` and
+  `credentials.json` marked `found`.
+* The PowerShell wrapper installed: `curator --version` works in any
+  fresh PowerShell window without venv activation.
+
+If any of those are missing, do those first; the runbook assumes them.
 
 ---
 
-## Why this runbook exists
+## Step 1 — Create a destination folder in Google Drive (~1 min, manual)
 
-The v1.4.0 test suite has **543/543 tests passing** — but every gdrive interaction in those tests is mocked via `SimpleNamespace` + `_FakeDriveFile(dict)` patterns. The mocks were faithful to PyDrive2's documented behavior, but documented behavior and actual API responses sometimes diverge in production (eventual consistency, query-syntax edge cases, rate limits, OAuth token refresh quirks). Session B is the validation gate that catches those divergences.
+To keep test files scoped (so you can clean up easily and don't litter
+your Drive root), create a dedicated test folder in Drive:
 
-This is the v1.4.0 equivalent of the original Tracer Phase 2 Session B that validated v1.1.0's basic cross-source plumbing.
+1. Open https://drive.google.com in your browser.
+2. Sign in if needed (same account as the gdrive auth).
+3. Right-click in My Drive → New → Folder. Name it
+   `curator_session_b_test`.
+4. Open the new folder. Look at the URL — it ends in `/folders/<ID>`.
+   Copy the `<ID>` portion. It's a long alphanumeric string.
+
+Hold on to that folder ID for the next step.
 
 ---
 
-## Pre-flight checklist (5 min)
+## Step 2 — Register the gdrive source (~30 sec, single PowerShell block)
 
-Run each of these in order. If any fails, stop and resolve before proceeding.
+Replace `PASTE_FOLDER_ID_HERE` with the ID you copied above, then run:
 
-### 1. Verify Curator install + version
 ```powershell
 cd C:\Users\jmlee\Desktop\AL\Curator
 .\.venv\Scripts\Activate.ps1
-python -c "import curator; print(curator.__version__)"
-# Expected: 1.4.0
+python scripts\setup_gdrive_source.py src_drive --folder-id PASTE_FOLDER_ID_HERE
+curator sources list
 ```
 
-### 2. Verify pyDrive2 + Google API client are installed
+Expected output: `OK: registered source 'src_drive'` plus a `sources
+list` table showing both `local` and `src_drive` enabled.
+
+If you accidentally use the wrong folder ID, re-run the same command
+with a corrected `--folder-id` — the script is idempotent and will
+update rather than fail.
+
+---
+
+## Step 3 — Prepare a small test corpus (~30 sec, single block)
+
+Use a small set of files (~10) so the test is fast and you can verify
+results manually in the Drive UI:
+
 ```powershell
-pip show pydrive2 google-api-python-client
-# Both should report a version, not 'WARNING: Package(s) not found'
+$src = "C:\Users\jmlee\Desktop\session_b_src"
+New-Item -ItemType Directory -Path $src -Force | Out-Null
+
+# Drop ~10 small text files in
+1..10 | ForEach-Object {
+    Set-Content -Path "$src\session_b_test_$_.txt" `
+        -Value "Session B test file #$_ — $(Get-Date -Format o)"
+}
+
+Get-ChildItem $src
 ```
 
-If missing:
+Expected: 10 files, each ~70 bytes.
+
+---
+
+## Step 4 — Scan the local source so Curator knows about the files (~5 sec)
+
 ```powershell
-pip install -e .[gdrive]
+curator scan local $src
 ```
 
-### 3. Verify gdrive credentials file exists
+Expected: `files seen: 10, new: 10, files hashed: 10`.
+
+---
+
+## Step 5 — Plan the cross-source migration (~5 sec, no writes yet)
+
+This shows what WOULD migrate without actually doing it:
+
 ```powershell
-$creds = Test-Path "$env:APPDATA\Curator\gdrive_credentials.json"
-$secret = Test-Path "$env:APPDATA\Curator\client_secrets.json"
-"creds: $creds, secret: $secret"
-# Both should be True. If False, see "First-time gdrive setup" below.
+curator migrate local $src "/" --dst-source-id src_drive
 ```
 
-### 4. Verify a test folder exists in your Drive
-You'll need a Drive folder dedicated to this demo so it doesn't pollute real data. Create one in the Drive web UI:
-- Open https://drive.google.com
-- New → Folder → name it `curator-session-b-demo-2026-05-08` (or any unique name)
-- Note its Drive ID from the URL: `https://drive.google.com/drive/folders/{ID_HERE}`
+Note the args:
+* `local` — the source plugin id (where files come from)
+* `$src` — the path prefix at the source (only files under here are candidates)
+* `"/"` — the destination root (relative to the gdrive source's
+  configured `root_folder_id`; "/" means "directly inside the Drive
+  folder you registered in step 2")
+* `--dst-source-id src_drive` — the destination source
 
-### 5. Verify Curator DB exists and has at least a few indexed files
+Expected output: a plan showing `SAFE: 10, CAUTION: 0, REFUSE: 0,
+Total: 10` and a list of would-move file pairs.
+
+---
+
+## Step 6 — Apply the migration (~2-10 sec depending on Drive latency)
+
 ```powershell
-curator doctor
-# Should report: integrity checks pass; if no files indexed, it'll say so.
-# Alternatively, see recent activity:
+curator migrate local $src "/" --dst-source-id src_drive --apply
+```
+
+Expected: `Migration applied in N.NNs, MOVED: 10, SKIPPED: 0,
+FAILED: 0`.
+
+If you see FAILED counts, paste the audit log:
+`curator audit --limit 30 --json` — and I'll diagnose.
+
+---
+
+## Step 7 — Verify in the Drive UI + audit log (~1 min)
+
+**Drive UI check:**
+
+1. Refresh https://drive.google.com.
+2. Open `curator_session_b_test`.
+3. Confirm all 10 `session_b_test_N.txt` files are present.
+4. Open one — content should match what was written locally.
+
+**Audit log check:**
+
+```powershell
 curator audit --limit 20
 ```
 
-If empty or you want fresh data:
+Expected: 10 `migration.move` events with `actor=curator.migrate`,
+plus the earlier `scan.start` / `scan.complete` from step 4 and
+`source.registered` from step 2.
+
+**Hash integrity check (single file):**
+
 ```powershell
-# Pick a small test folder (10-50 files)
-curator scan local C:\Users\jmlee\Desktop\AL\test_corpus
-# Or use any folder you don't mind reading
+# Pick one file, get its xxhash3 from the index
+curator status (Get-ChildItem $src | Select-Object -First 1).FullName
 ```
 
-### 6. Verify the gdrive source is registered
-```powershell
-curator sources list
-# Expected output includes a row for source_id 'gdrive' with display_name set
-```
-
-If not registered:
-```powershell
-curator sources add --source-id gdrive --type gdrive --display-name "Drive (demo)"
-```
+(After migration, that local path no longer holds the file. The `status`
+command should report it as "moved to gdrive:src_drive/session_b_test_1.txt"
+or similar with the destination + matching hash.)
 
 ---
 
-## First-time gdrive setup (skip if pre-flight #3 passed)
+## Step 8 (optional) — Resume-after-interrupt test (~3 min)
 
-If you've never set up gdrive auth on this machine:
+This validates the Phase 2 path (durable migration_jobs rows). Skip if
+step 6 succeeded and you don't need the resume guarantee tested:
 
-1. **Get OAuth client credentials** from Google Cloud Console:
-   - https://console.cloud.google.com/apis/credentials
-   - Create OAuth 2.0 Client ID → Desktop app
-   - Download the JSON, save as `%APPDATA%\Curator\client_secrets.json`
+```powershell
+# Drop another set of files
+$src2 = "C:\Users\jmlee\Desktop\session_b_src2"
+New-Item -ItemType Directory -Path $src2 -Force | Out-Null
+1..20 | ForEach-Object {
+    Set-Content -Path "$src2\resume_test_$_.txt" `
+        -Value ("Resume test #$_" + ("X" * 1000))  # padded for slower migration
+}
+curator scan local $src2
 
-2. **Run the auth flow once interactively:**
-   ```powershell
-   curator gdrive auth
-   ```
-   This will open a browser to the Google consent screen. Accept. The token gets saved to `%APPDATA%\Curator\gdrive_credentials.json` and refreshes automatically afterward.
+# Start migration with --workers 4 (forces Phase 2 persistent path)
+# IMMEDIATELY hit Ctrl+C after a few file completions land
+curator migrate local $src2 "/" --dst-source-id src_drive --apply --workers 4
+# Press Ctrl+C around 1-2 seconds in. The CLI will print partial results.
 
-3. **Test the token works:**
-   ```powershell
-   curator scan gdrive --root "{folder_id_from_step_4}" --dry-run
-   ```
-   Should list files in the folder without errors.
+# List migration jobs to find the interrupted one
+curator migrate --list
+
+# Resume it (use the job_id from --list)
+curator migrate --resume <PASTE_JOB_ID_HERE> --workers 4
+```
+
+Expected: the resume picks up only the unfinished files, no
+duplicates land in Drive.
 
 ---
 
-## Test 1 — Basic cross-source migration (validates v1.1.0 plumbing)
+## Step 9 — Cleanup (~1 min, optional)
 
-**Hypothesis:** A simple local→gdrive migration with no collisions completes successfully, indexes the dst, and emits expected audit entries.
+If you want to clear the test artifacts:
 
-### Setup
 ```powershell
-# Create a small test corpus on local
-$src = "C:\Users\jmlee\Desktop\session_b_test_src"
-mkdir $src -Force | Out-Null
-"file 1 content" | Out-File "$src\test1.txt" -Encoding utf8
-"file 2 content" | Out-File "$src\test2.txt" -Encoding utf8
-"file 3 content" | Out-File "$src\test3.txt" -Encoding utf8
+# Local test dirs
+Remove-Item C:\Users\jmlee\Desktop\session_b_src -Recurse -Force
+Remove-Item C:\Users\jmlee\Desktop\session_b_src2 -Recurse -Force -ErrorAction SilentlyContinue
 
-# Index it
-curator scan local $src
+# Drive folder: delete `curator_session_b_test` from the Drive UI manually
+# (Curator's CLI doesn't expose a destructive Drive-side operation
+# in v1.5.0, by design.)
 
-# Use the Drive folder ID from pre-flight #4
-$dstFolderId = "PASTE_YOUR_FOLDER_ID_HERE"
+# Curator index: a fresh scan on the now-empty local paths will mark
+# the file entities as deleted automatically:
+curator scan local C:\Users\jmlee\Desktop\session_b_src
 ```
 
-### Run
-```powershell
-curator migrate `
-  --src-source-id local --src-root $src `
-  --dst-source-id gdrive --dst-root $dstFolderId `
-  --max-retries 3 --on-conflict skip `
-  --apply
-```
-
-### Validate
-- [ ] CLI exit code 0
-- [ ] Output shows "moved: 3, skipped: 0, failed: 0"
-- [ ] Drive web UI shows `test1.txt`, `test2.txt`, `test3.txt` in the demo folder
-- [ ] Local files at `$src` are gone (in Recycle Bin)
-- [ ] Index reflects the move:
-  ```powershell
-  curator query --source-id gdrive | Select-String "test"
-  # Should show all 3 files with source_id=gdrive
-  ```
-- [ ] Audit log has 3 `migration.move` entries with `cross_source: True`:
-  ```powershell
-  curator audit --action migration.move --limit 10
-  ```
-
-**If any of these fail:** capture the CLI output + `curator status --verbose` output and stop. Don't proceed to Test 2.
+The `src_drive` source itself stays registered for future use; if you
+want to remove it, `curator sources remove src_drive` (will fail if
+any files still reference it; remove the file entities first or use
+the index reset).
 
 ---
 
-## Test 2 — Quota-aware retry (validates Phase 3 v1.3.0 retry decorator)
+## Reporting back
 
-**Hypothesis:** When gdrive returns a transient 429 (rate limit) or 503, the `@retry_transient_errors` decorator on `_cross_source_transfer` retries with exponential backoff and the migration eventually succeeds.
+After step 7 succeeds:
 
-This is the hardest test to trigger artificially because Google rarely throws 429s for low-volume traffic. **Two options:**
-
-### Option A — Trust Google to throttle you (passive, slower)
-Migrate ~500 small files in one batch. With `max_retries=3`, the job should complete even if Drive throws occasional 429s.
-
-```powershell
-# Create 500 small files
-$src = "C:\Users\jmlee\Desktop\session_b_test_500"
-mkdir $src -Force | Out-Null
-1..500 | ForEach-Object { "small content $_" | Out-File "$src\file_$_.txt" -Encoding utf8 }
-curator scan local $src
-
-curator migrate `
-  --src-source-id local --src-root $src `
-  --dst-source-id gdrive --dst-root $dstFolderId `
-  --max-retries 5 --workers 4 `
-  --apply --verbose
-```
-
-Watch for log lines like:
-```
-MigrationService: transient error on attempt 1/5: HttpError 429 ... retrying after 4.2s
-```
-
-### Option B — Skip if Test 1 passed (recommended)
-Test 1's clean run is reasonable evidence that the basic cross-source path works. Phase 3 retry is well-covered by unit tests with mocked transient errors. Skip Test 2 unless Test 1 surfaced something suspicious.
-
-### Validate
-- [ ] If retry triggered: CLI shows retry log lines + final outcome is `moved` not `failed`
-- [ ] Job completes with `moved + skipped >= 495` (allowing for a few permission edge cases)
-
----
-
-## Test 3 — Phase 4 overwrite-with-backup (THE main validation for v1.4.0)
-
-**Hypothesis:** When dst has a file with the same name as src, `--on-conflict=overwrite-with-backup` renames the existing dst file to `<name>.curator-backup-<UTC>.<ext>` via the new `curator_source_rename` hook, then writes the new src bytes. Outcome is `MOVED_OVERWROTE_WITH_BACKUP`.
-
-**This is the test that validates the new v1.4.0 functionality the entire Phase 4 cycle exists for.**
-
-### Setup
-```powershell
-# Create a fresh src
-$src = "C:\Users\jmlee\Desktop\session_b_test_owb"
-mkdir $src -Force | Out-Null
-"NEW VERSION content" | Out-File "$src\report.txt" -Encoding utf8
-curator scan local $src
-
-# Manually upload an OLD version of report.txt to the Drive demo folder
-# via the web UI BEFORE running migrate. Content can be anything different
-# from "NEW VERSION content".
-#
-# Confirm via web UI: dst folder has report.txt with old content.
-Read-Host "Press Enter when you've uploaded the OLD report.txt to Drive"
-```
-
-### Run
-```powershell
-curator migrate `
-  --src-source-id local --src-root $src `
-  --dst-source-id gdrive --dst-root $dstFolderId `
-  --max-retries 3 --on-conflict overwrite-with-backup `
-  --apply
-```
-
-### Validate
-- [ ] CLI exit code 0
-- [ ] Output shows `moved_overwrote_with_backup: 1`
-- [ ] Drive web UI shows TWO files in the demo folder:
-  - `report.txt` with content `NEW VERSION content`
-  - `report.curator-backup-2026-05-08T<HH-MM-SS>Z.txt` with the OLD content
-- [ ] Audit log has a `migration.conflict_resolved` entry with:
-  - `mode: overwrite-with-backup`
-  - `cross_source: true`
-  - `backup_name` ending in `.txt`
-  - `existing_file_id` (a Drive file ID)
-  ```powershell
-  curator audit --action migration.conflict_resolved --limit 5
-  ```
-- [ ] Local file at `$src\report.txt` is in Recycle Bin
-- [ ] Index now shows `report.txt` under `source_id=gdrive`
-
-**If the backup file does NOT appear** but the new dst exists: check audit for a `mode: overwrite-with-backup-degraded-cross-source` entry. The `reason` field will tell you why the gdrive plugin's `curator_source_rename` impl failed. Most likely causes: (a) Drive query syntax issue with the file title containing characters that need escaping; (b) eventual-consistency race where ListFile didn't return the colliding file. Capture the audit details + Drive web-UI screenshot and report back.
-
----
-
-## Test 4 — Phase 4 rename-with-suffix (validates the FileExistsError retry-write loop)
-
-**Hypothesis:** When dst has a file with the same name AND `--on-conflict=rename-with-suffix`, the migration writes to `<name>.curator-1.<ext>` instead of overwriting. If `.curator-1` is also taken, falls through to `.curator-2`, etc.
-
-### Setup
-```powershell
-# Fresh src
-$src = "C:\Users\jmlee\Desktop\session_b_test_rws"
-mkdir $src -Force | Out-Null
-"NEW src content" | Out-File "$src\data.bin" -Encoding utf8
-curator scan local $src
-
-# Manually upload data.bin to Drive demo folder (any content)
-# Optionally also upload data.curator-1.bin to test the retry loop
-Read-Host "Press Enter when you've uploaded data.bin (and optionally data.curator-1.bin) to Drive"
-```
-
-### Run
-```powershell
-curator migrate `
-  --src-source-id local --src-root $src `
-  --dst-source-id gdrive --dst-root $dstFolderId `
-  --on-conflict rename-with-suffix --apply
-```
-
-### Validate
-- [ ] CLI exit 0
-- [ ] Output shows `moved_renamed_with_suffix: 1`
-- [ ] Drive web UI shows:
-  - Original `data.bin` UNCHANGED (NOT overwritten)
-  - New file `data.curator-1.bin` (or `data.curator-2.bin` if you pre-seeded `data.curator-1.bin`) with the SRC content
-- [ ] Audit `migration.conflict_resolved` entry:
-  - `mode: rename-with-suffix`
-  - `cross_source: true`
-  - `suffix_n: 1` (or 2 if applicable)
-  - `original_dst` ends with `data.bin`
-  - `renamed_dst` ends with `data.curator-1.bin` (or 2)
-
----
-
-## Test 5 — Resume across interruption (validates Phase 2 persistent jobs)
-
-**Hypothesis:** A migration job interrupted mid-flight (Ctrl+C) can be resumed via `curator migrate --resume <job_id>` and completes the remaining files without re-doing the already-moved ones.
-
-### Setup
-```powershell
-$src = "C:\Users\jmlee\Desktop\session_b_test_resume"
-mkdir $src -Force | Out-Null
-1..50 | ForEach-Object { "resume test $_" | Out-File "$src\resume_$_.txt" -Encoding utf8 }
-curator scan local $src
-```
-
-### Run + interrupt
-```powershell
-curator migrate `
-  --src-source-id local --src-root $src `
-  --dst-source-id gdrive --dst-root $dstFolderId `
-  --workers 2 --apply &
-$jobPID = $!
-# Wait for ~10 files to complete (watch verbose output), then:
-Stop-Process -Id $jobPID
-```
-
-### Find the job
-```powershell
-curator migrate --list-jobs --limit 5
-# Note the job_id of the interrupted job
-$jobId = "PASTE_JOB_ID_HERE"
-```
-
-### Resume
-```powershell
-curator migrate --resume $jobId
-```
-
-### Validate
-- [ ] Resume picks up where it left off (output shows fewer remaining files than the original 50)
-- [ ] Final state: all 50 files in Drive demo folder
-- [ ] No file appears in Drive twice
-- [ ] Local files all in Recycle Bin
-
----
-
-## Cleanup
-
-```powershell
-# Empty the demo folder in Drive web UI (or via CLI)
-curator gdrive trash --folder-id $dstFolderId --confirm
-
-# Remove local test corpora
-rm -r "C:\Users\jmlee\Desktop\session_b_test_*"
-
-# Optionally truncate the test indexes from Curator's DB
-# (only do this if you're sure no other work depends on these entries)
-curator query --source-id gdrive --path-prefix $dstFolderId --json `
-  | ConvertFrom-Json | ForEach-Object { curator delete --curator-id $_.curator_id --hard }
-```
-
----
-
-## What to report back to Claude after running
-
-After Test 3 (the main v1.4.0 validation), reply with:
-
-1. **Did the backup file appear in Drive?** (Yes/No)
-2. **Did the audit log show `mode: overwrite-with-backup`** (success) or `mode: overwrite-with-backup-degraded-cross-source` (degrade with reason)?
-3. **If degraded: what was the `reason` field?**
-4. **Any unexpected CLI output, error messages, or behaviors during Tests 1-5?**
-
-That's enough signal to know whether the v1.4.0 mocks accurately captured real Drive behavior. If everything passes Tests 1, 3, 4: v1.4.0 is fully validated against real-world Drive and we can close the Phase 4 chapter.
-
----
-
-## Failure modes catalog
-
-If something goes wrong, here's where to look:
-
-| Symptom | Likely cause | Where to investigate |
-|---|---|---|
-| OAuth flow fails on first run | client_secrets.json missing or wrong type | Re-download as Desktop App OAuth client |
-| `curator gdrive auth` opens browser but Google says "redirect_uri_mismatch" | OAuth client config | Add `http://localhost:8080/` to authorized redirect URIs |
-| Test 1 fails with "supports_write=False" | gdrive plugin not registered in pm | Check `curator sources list`; restart venv |
-| Test 3 backup not appearing in Drive | `curator_source_rename` failing | Check audit log for degrade reason; capture Drive query in error |
-| Test 4 lands at `.curator-1` even when `.curator-1` exists | FileExistsError not raised by gdrive plugin's write | Drive query syntax mismatch; check `_iter_folder` query in `gdrive_source.py` |
-| Test 5 resume re-uploads already-done files | `migration_progress.outcome` not persisted before crash | Check `migration_progress` table for the interrupted job |
-| Random 429s during Test 2 | Drive rate limiting (expected) | Confirm retry decorator activates in logs; should auto-recover |
+* **`Session B done`** + paste the output of `curator audit --limit 20`
+  → I'll mark v1.4.0/v1.4.1/v1.5.0 as production-validated in
+  BUILD_TRACKER.md and constellation doc.
+* **`Step 8 done`** if you also did the resume test → adds Phase 2
+  resume guarantee to the validation record.
+* **`Failed at step N: <error>`** → paste error text and I'll diagnose.
 
 ---
 
 ## Document log
 
-* **2026-05-08 v1.0 — DRAFT.** Authored immediately after Curator v1.4.0 release ceremony. Designed to validate Phase 2 + Phase 3 + Phase 4 in a single end-to-end pass. Test 3 (overwrite-with-backup) is the primary v1.4.0 validation; Tests 1, 2, 4, 5 cover prior versions to ensure no regression. Total 5 tests, ~30 min on first run.
+* **2026-05-09 v2:** Rewritten with correct `curator migrate` CLI
+  syntax (positional `src_source_id src_root dst_root` rather than
+  the `--src/--dst` flags I previously misnamed). Added Step 2 (gdrive
+  source registration via setup_gdrive_source.py helper script — works
+  around the v1.5.0 CLI gap where `sources add` doesn't expose
+  per-source config). Added explicit prerequisite checklist. Added
+  cleanup section.
+* **2026-05-08 v1:** Initial draft. Had wrong CLI flags
+  (`--src/--dst/--alias`) and missed pydrive2 + client_secrets.json
+  prerequisites. Superseded.
