@@ -1,6 +1,6 @@
 # `curator-mcp` HTTP authentication — Design
 
-**Status:** v0.1 — DRAFT 2026-05-08. Awaiting Jake's ratification of DMs §3.
+**Status:** v0.2 — RATIFIED 2026-05-08. All six DMs ratified by Jake's affirmative reply ("1") on 2026-05-08. P1 implementation cleared to start.
 **Date:** 2026-05-08
 **Authority:** Subordinate to Atrium `CONSTITUTION.md` v0.3. Implements Aim 1 (Accuracy — auth state must be correct), Aim 8 (Auditability — auth events must be audited), and Article II Principle 4 (No Silent Failures — auth refusals must be surfaced to the caller, not dropped).
 
@@ -72,6 +72,8 @@ Options:
 
 Rationale: Bearer tokens are the standard HTTP API auth mechanism. Every HTTP client (curl, Python requests, fetch, Claude Desktop's MCP client) supports the `Authorization` header natively. Custom header names like `X-Curator-API-Key` are slightly easier to reason about ("this is a Curator-specific thing") but trade off ecosystem compatibility for negligible clarity gain. (b) is a security antipattern. (c) and (d) overshoot the use case.
 
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. Authentication is conveyed via the `Authorization: Bearer <key>` HTTP header per RFC 6750. Missing or malformed headers produce a 401 Unauthorized response.
+
 ### DM-2 — Key storage
 
 **Question.** Where do API keys live?
@@ -86,6 +88,8 @@ Options:
 **Recommendation: (a) JSON file at `~/.curator/mcp/api-keys.json`** with `0600` permissions on Unix.
 
 Rationale: Curator already uses `~/.curator/` for its config and Drive credentials, so adding `mcp/api-keys.json` under that tree is consistent with existing convention. JSON is human-inspectable (good for debugging), easy to back up (just copy the file), supports multiple keys natively (it's a list/dict), and doesn't require a new dependency. The file's permissions are the security boundary; this is the same model as SSH keys, AWS credentials, gpg keyrings, and most CLI tools. (b) couples auth to DB schema migrations unnecessarily. (c) makes inspection harder and adds a system-level dependency that complicates the install. (d) loses multi-key support which is core to the design.
+
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. API keys live in a single JSON file at `~/.curator/mcp/api-keys.json` (resolves to `C:\Users\jmlee\.curator\mcp\api-keys.json` on Windows). On Unix, file permissions are set to `0600`; on Windows, ACLs are tightened to current-user-only via `icacls`. The file stores `key_hash` (sha256 of the key), never the plaintext key.
 
 ### DM-3 — Key format
 
@@ -102,6 +106,8 @@ Options:
 
 Rationale: Format prefixing follows the established pattern of GitHub (`ghp_`), Stripe (`sk_`), OpenAI (`sk-`), Anthropic (`sk-ant-`). It costs us nothing and provides material value: secret-scanners (truffleHog, gitleaks, GitHub's own secret scanning) can be configured to flag accidentally-committed Curator MCP keys. Users grepping their own logs can identify Curator-key leaks. The prefix is not security-relevant (the entropy is in the random portion); it's identification metadata. (a) lacks identification. (b) adds two-part complexity for revocation that's already solved by storing keys server-side. (c) loses revocation, which is a hard requirement for credential management.
 
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. Keys are formatted as `curm_<40-char-random>` where the random portion is `secrets.token_urlsafe(30)` (which yields ~40 URL-safe-base64 chars, depending on stripping). Total key length is 44–46 characters.
+
 ### DM-4 — Multi-key support
 
 **Question.** How many keys can a user have?
@@ -115,6 +121,8 @@ Options:
 **Recommendation: (a) Multiple named keys** with `name`, `created_at`, `last_used_at`, optional `description`.
 
 Rationale: Per-integration keys are how every modern API works (GitHub PATs, AWS IAM keys, Stripe keys, OpenAI keys). The marginal complexity is small (a JSON dict instead of a single string), and the value is large: when a teammate's laptop is lost, the user revokes the laptop's key without breaking the home setup. Without multi-key support, revoking ANY integration breaks ALL integrations. (b) creates an obvious antipattern; (c) makes the audit log less useful (auth events would just say "key X used" with no friendly name).
+
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. The keys file holds a list of named keys; each entry has `name` (unique), `key_hash`, `created_at`, `last_used_at`, optional `description`. Names are namespaced per-user (this is single-user software); collisions on `generate` produce an error before any key material is created.
 
 ### DM-5 — Audit emission for auth events
 
@@ -131,6 +139,8 @@ Options:
 
 Rationale: Auth events are exactly the kind of activity Atrium Constitution Aim 8 (Auditability) is for — "every fact about every file at every moment in history is recoverable." The audit log already supports this kind of activity. The volume concern is real (a heavily-used MCP integration could emit thousands of auth_success events per day), but it's solvable by emitting a `mcp.auth_success` event no more than once per key per minute (the `last_used_at` field is updated continuously; the audit emission is throttled). Failed auth is always emitted (no throttling — security signal). (b) loses the "who used what when" capability that's useful both for the user (introspection) and for incident response (post-compromise auditing). (c) is too clever. (d) violates the audit-everything principle.
 
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. Both successful and failed auth attempts emit audit events under `actor='curator-mcp'`. Successful-auth events are throttled to no more than 1 per key per minute (state held in-memory; resets on server restart). Failed-auth events are NEVER throttled — they're security signals. Failed events record only the key prefix (first 10 chars) in details; full key material never reaches the audit log.
+
 ### DM-6 — Auth toggle + bypass for local development
 
 **Question.** What's the mental model for "auth required vs. not"?
@@ -145,6 +155,8 @@ Options:
 **Recommendation: (a) Auth required by default; `--no-auth` opts out (and still loopback-only).**
 
 Rationale: This is the secure-by-default convention. Users who want to bind to non-loopback are forced to have auth configured (no `--no-auth` + `--host 0.0.0.0`). The `--no-auth` flag's existence makes the choice explicit at every invocation — there's no "did I configure this securely?" ambiguity. (b) creates the foot-gun where users misconfigure their setup and don't notice the loopback restriction got bypassed silently. (c) is rigid for local development (every dev change requires the full key generation flow). (d) creates magic implicit behavior that users have to remember.
+
+**RATIFICATION STATUS:** ✅ RATIFIED 2026-05-08 by Jake. HTTP transport requires authentication by default. `curator-mcp --http` without `--no-auth` requires at least one configured key in `~/.curator/mcp/api-keys.json` and rejects unauthenticated requests with 401. `--no-auth` opts out and still applies the v1.2.0 loopback-only restriction (`--host 127.0.0.1` / `localhost` / `::1` only). Combination `--no-auth --host 0.0.0.0` exits 2 with a clear refusal message.
 
 ---
 
@@ -388,7 +400,8 @@ Three sessions, ~3.5h total:
 ## 8. Document log
 
 * **2026-05-08 v0.1 — DRAFT.** Initial design authored after reading `src/curator/mcp/server.py` v1.2.0 + the v1.2.0 design's §3 DM-5 ratification of "no auth in v1.2.0; defer to a future minor release." Six DMs raised for ratification (DM-1 through DM-6). Recommended decisions are conservative: standard Bearer auth, JSON file storage, `curm_` prefix, multi-key, audit-everything-with-throttling, secure-by-default. Implementation deferred until ratification.
+* **2026-05-08 v0.2 — RATIFIED.** Jake replied "1" affirming all six DMs as recommended. P1 implementation cleared to start. No design changes between v0.1 and v0.2 — the recommended options are now the binding decisions.
 
 ---
 
-*Awaiting Jake's affirmative ratification of DMs §3 to clear P1 implementation.*
+*All six DMs ratified 2026-05-08. P1 implementation cleared.*
