@@ -281,10 +281,17 @@ try:
     import curator
     import curatorplug.atrium_citation
     import curatorplug.atrium_safety
+    # Also probe the GUI extra so we catch PySide6 missing as a real failure
+    try:
+        import PySide6
+        gui_ok = True
+    except ImportError:
+        gui_ok = False
     print(json.dumps({
         "curator": curator.__version__,
         "citation": curatorplug.atrium_citation.__version__,
         "safety": curatorplug.atrium_safety.__version__,
+        "gui_ok": gui_ok,
     }))
 except Exception as e:
     print(json.dumps({"error": str(e)}))
@@ -304,25 +311,36 @@ except Exception as e:
         $probe = $probeJson | ConvertFrom-Json
         if (-not $probe.error -and $probe.curator -and $probe.citation -and $probe.safety) {
             Write-Good "All three packages already importable at versions: curator=$($probe.curator), citation=$($probe.citation), safety=$($probe.safety)"
-            Write-Good "Skipping pip install (would be no-op; would also hit WinError 32 with Desktop running)"
-            $skipInstall = $true
+            if ($probe.gui_ok) {
+                Write-Good "GUI extra (PySide6) also importable"
+                Write-Good "Skipping pip install (would be no-op; would also hit WinError 32 with Desktop running)"
+                $skipInstall = $true
+            } else {
+                Write-Warn "GUI extra (PySide6) NOT importable; will run install with [gui] extra"
+                $skipInstall = $false
+            }
         }
     }
 }
 
 if (-not $skipInstall) {
+    # Curator's [gui] extra brings PySide6 + networkx (needed for `curator gui`).
+    # The [mcp] extra brings the mcp package (required by curator-mcp.exe).
+    # Other extras (beta, cloud, organize, windows, dev) are not installed by
+    # default; users can opt in via separate pip install commands.
     $packages = @(
-        @{ name = "curator"; path = $CuratorRepo },
-        @{ name = "curatorplug-atrium-citation"; path = $CitationRepo },
-        @{ name = "curatorplug-atrium-safety"; path = $SafetyRepo }
+        @{ name = "curator"; path = $CuratorRepo; extras = "[gui,mcp]" },
+        @{ name = "curatorplug-atrium-citation"; path = $CitationRepo; extras = "" },
+        @{ name = "curatorplug-atrium-safety"; path = $SafetyRepo; extras = "" }
     )
     foreach ($pkg in $packages) {
-        Write-Sub ("Installing -e {0}" -f $pkg.path)
+        $installArg = if ($pkg.extras) { "$($pkg.path)$($pkg.extras)" } else { $pkg.path }
+        Write-Sub ("Installing -e {0}" -f $installArg)
         if ($PSCmdlet.ShouldProcess($pkg.name, "pip install -e")) {
             $prevEAP = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             try {
-                $output = & $VenvPy -m pip install -e $pkg.path --quiet 2>&1
+                $output = & $VenvPy -m pip install -e $installArg --quiet 2>&1
                 $exitCode = $LASTEXITCODE
             } finally {
                 $ErrorActionPreference = $prevEAP
