@@ -95,6 +95,12 @@ gdrive_app = typer.Typer(
 )
 app.add_typer(gdrive_app, name="gdrive")
 
+# v1.5.0+: MCP server management (HTTP auth keys, etc.). Defined in a
+# dedicated module per docs/CURATOR_MCP_HTTP_AUTH_DESIGN.md §4.1 to keep
+# main.py from growing further.
+from curator.cli.mcp_keys import mcp_app  # noqa: E402
+app.add_typer(mcp_app, name="mcp")
+
 
 def _version_callback(value: bool):
     if value:
