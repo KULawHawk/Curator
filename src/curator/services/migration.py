@@ -238,6 +238,33 @@ class MigrationReport:
 _HASH_CHUNK_SIZE = 64 * 1024  # 64KB chunks; same as hash_pipeline
 
 
+# Sentinel for keyword arguments whose default is "keep current setting"
+# rather than "reset to a hard-coded value." v1.4.1 fix per BUILD_TRACKER
+# v1.5.0 candidate (promoted to v1.4.1 patch).
+#
+# Used in :meth:`MigrationService.apply` and :meth:`MigrationService.run_job`
+# for the ``max_retries`` and ``on_conflict`` policy kwargs. Before v1.4.1,
+# both methods accepted ``max_retries: int = 3`` and ``on_conflict: str =
+# "skip"`` and unconditionally called ``self.set_max_retries(max_retries)`` /
+# ``self.set_on_conflict_mode(on_conflict)`` at entry, which silently
+# overwrote any prior call to ``set_max_retries()`` /
+# ``set_on_conflict_mode()`` made by library callers. v1.4.1 changes the
+# defaults to ``_UNCHANGED`` and only invokes the setter when the caller
+# explicitly passes a value, so the sequence
+#
+#     service.set_max_retries(7)
+#     service.apply(plan)
+#
+# now actually uses 7 retries during apply().
+#
+# Type annotation for parameters using this sentinel is ``Any``: type
+# checkers can't enforce ``int | _UNCHANGED`` cleanly without a custom
+# class, and ``set_max_retries`` / ``set_on_conflict_mode`` already
+# validate at runtime. The annotation is treated as documentation rather
+# than enforcement.
+_UNCHANGED: Any = object()
+
+
 def _xxhash3_128_of_file(path: Path) -> str:
     """Compute xxhash3_128 of a file as hex digest. Streaming."""
     h = xxhash.xxh3_128()
@@ -338,26 +365,19 @@ class MigrationService:
         :meth:`_cross_source_transfer`. ``n=0`` disables retry entirely
         (immediate FAILED on first transient error).
 
-        .. warning::
-           **Calling this BEFORE :meth:`apply` or :meth:`run_job`
-           does NOT stick.** Both methods accept ``max_retries`` as a
-           kwarg with default ``3`` and call ``self.set_max_retries(...)``
-           at entry, overwriting whatever this method just set. Two
-           safe patterns:
+        v1.4.1+: calling this method before :meth:`apply` or
+        :meth:`run_job` now sticks. Both methods only invoke this setter
+        when the caller explicitly passes ``max_retries=N``; if the kwarg
+        is omitted (default sentinel), the current setting is preserved.
+        Two equivalent patterns:
 
-           1. **Recommended:** pass ``max_retries=N`` directly to
-              ``apply(plan, max_retries=N)`` or
-              ``run_job(job_id, max_retries=N)``.
-           2. **Library callers** that want a sticky setting can either
-              (a) pass the same value to both ``set_max_retries`` AND
-              the apply/run_job kwarg, or (b) subclass
-              :class:`MigrationService` and override ``apply`` /
-              ``run_job`` to skip the set call when sentinel-defaulted.
-
-           Tracker: this overwrite-at-entry pattern is a candidate for
-           a sentinel-default API hardening pass in a future minor
-           release; see ``BUILD_TRACKER.md`` ``[v1.5.0 candidate]``
-           section.
+        1. **Direct kwarg (preferred for one-shot use):** pass
+           ``max_retries=N`` directly to ``apply(plan, max_retries=N)`` or
+           ``run_job(job_id, max_retries=N)``.
+        2. **Sticky setter (preferred for library callers configuring
+           the service once):** call ``service.set_max_retries(N)`` once,
+           then call ``apply()`` / ``run_job()`` with no ``max_retries``
+           kwarg; the value sticks across multiple calls.
 
         See ``docs/TRACER_PHASE_3_DESIGN.md`` v0.2 §3 DM-2.
         """
@@ -400,23 +420,11 @@ class MigrationService:
         Unknown modes raise :class:`ValueError` so the CLI can surface
         a clean error before the migration starts.
 
-        .. warning::
-           **Calling this BEFORE :meth:`apply` or :meth:`run_job`
-           does NOT stick.** Both methods accept ``on_conflict`` as a
-           kwarg with default ``'skip'`` and call
-           ``self.set_on_conflict_mode(...)`` at entry, overwriting
-           whatever this method just set. Recommended pattern: pass
-           ``on_conflict=mode`` directly to
-           ``apply(plan, on_conflict=mode)`` or
-           ``run_job(job_id, on_conflict=mode)``.
-
-           This API quirk is captured in
-           ``tests/unit/test_migration_cross_source.py::TestPhase4CrossSourceConflictResolution``
-           (which had to work around it on first run).
-
-           Tracker: candidate for sentinel-default hardening in a
-           future minor release; see ``BUILD_TRACKER.md``
-           ``[v1.5.0 candidate]`` section.
+        v1.4.1+: calling this method before :meth:`apply` or
+        :meth:`run_job` now sticks. Both methods only invoke this setter
+        when the caller explicitly passes ``on_conflict=mode``; if the
+        kwarg is omitted (default sentinel), the current setting is
+        preserved. See :meth:`set_max_retries` for the parallel pattern.
 
         See ``docs/TRACER_PHASE_3_DESIGN.md`` v0.2 §4.6 (DM-4) and
         ``docs/TRACER_PHASE_4_DESIGN.md`` v0.3 IMPLEMENTED for the
@@ -608,8 +616,8 @@ class MigrationService:
         db_path_guard: Path | None = None,
         keep_source: bool = False,
         include_caution: bool = False,
-        max_retries: int = 3,
-        on_conflict: str = "skip",
+        max_retries: Any = _UNCHANGED,
+        on_conflict: Any = _UNCHANGED,
     ) -> MigrationReport:
         """Execute the plan with hash-verify-before-move per file.
 
@@ -641,17 +649,36 @@ class MigrationService:
                 flag), CAUTION-level files are eligible for migration
                 alongside SAFE. REFUSE is always skipped regardless.
                 Default False.
+            max_retries: Per-job retry budget for transient errors
+                (clamped to ``[0, 10]``). v1.4.1+: defaults to the
+                sentinel ``_UNCHANGED``; if not explicitly passed, the
+                current ``self._max_retries`` setting (initialized in
+                ``__init__`` to ``3``, possibly modified via
+                :meth:`set_max_retries`) is preserved across the call.
+                Pass an ``int`` to override.
+            on_conflict: Destination-collision policy. Valid values:
+                ``'skip'``, ``'fail'``, ``'overwrite-with-backup'``,
+                ``'rename-with-suffix'``. v1.4.1+: defaults to the
+                sentinel ``_UNCHANGED``; if not explicitly passed, the
+                current ``self._on_conflict_mode`` setting (initialized
+                in ``__init__`` to ``'skip'``, possibly modified via
+                :meth:`set_on_conflict_mode`) is preserved across the
+                call. Pass a string to override.
 
         Returns:
             A :class:`MigrationReport` with one :class:`MigrationMove`
             per planned move (regardless of outcome).
         """
-        # Phase 3: configure retry budget for transient errors. Decorator
-        # on ``_cross_source_transfer`` reads ``self._max_retries``.
-        self.set_max_retries(max_retries)
-        # Phase 3 P2: configure conflict-resolution policy. Read by
-        # Gate 3 collision dispatch + _cross_source_transfer.
-        self.set_on_conflict_mode(on_conflict)
+        # v1.4.1: only invoke setters when the caller explicitly passes
+        # a value. The sentinel default preserves any prior call to
+        # set_max_retries() / set_on_conflict_mode() the library caller
+        # may have made -- the previous unconditional overwrite-at-entry
+        # behavior was a footgun documented in the v1.5.0 candidate entry
+        # of BUILD_TRACKER.md and now closed.
+        if max_retries is not _UNCHANGED:
+            self.set_max_retries(max_retries)
+        if on_conflict is not _UNCHANGED:
+            self.set_on_conflict_mode(on_conflict)
 
         report = MigrationReport(plan=plan)
 
@@ -2295,8 +2322,8 @@ class MigrationService:
         verify_hash: bool = True,
         keep_source: bool = False,
         on_progress: Callable[[MigrationProgress], None] | None = None,
-        max_retries: int = 3,
-        on_conflict: str = "skip",
+        max_retries: Any = _UNCHANGED,
+        on_conflict: Any = _UNCHANGED,
     ) -> MigrationReport:
         """Execute or resume a persisted job using a worker pool.
 
@@ -2353,38 +2380,59 @@ class MigrationService:
         if job is None:
             raise ValueError(f"MigrationJob {job_id} not found")
 
-        # Phase 3: configure retry budget. Prefer the parameter (CLI may
-        # have passed --max-retries explicitly); fall back to the persisted
-        # ``options['max_retries']`` so a resumed job inherits its original
-        # retry policy without the user having to re-specify the flag.
-        effective_retries: int = max_retries
-        try:
-            persisted = job.options.get("max_retries")
-            if persisted is not None and max_retries == 3:  # 3 is the default
-                effective_retries = int(persisted)
-        except (AttributeError, TypeError, ValueError):
-            pass
-        self.set_max_retries(effective_retries)
+        # v1.4.1: resolve effective retries via three-tier precedence:
+        #   1. Explicit kwarg (``max_retries=N``) -> always wins
+        #   2. Persisted ``job.options['max_retries']`` -> if no explicit kwarg
+        #   3. Current ``self._max_retries`` -> if neither of the above
+        # The sentinel default lets us distinguish "caller passed nothing"
+        # from "caller explicitly passed 3" -- the previous code couldn't
+        # tell them apart and used 3-as-magic-default for the inheritance
+        # check. Resumed jobs still inherit their original retry policy
+        # without the user having to re-specify the flag, but a fresh
+        # call without kwargs preserves any prior `set_max_retries()`.
+        if max_retries is not _UNCHANGED:
+            self.set_max_retries(max_retries)
+        else:
+            try:
+                persisted = job.options.get("max_retries") if job.options else None
+            except (AttributeError, TypeError):
+                persisted = None
+            if persisted is not None:
+                try:
+                    self.set_max_retries(int(persisted))
+                except (TypeError, ValueError):
+                    pass  # leave self._max_retries unchanged
+            # else: leave self._max_retries unchanged (sticky from set_max_retries() or __init__)
 
-        # Phase 3 P2: same pattern for on_conflict policy. Resumed jobs
-        # inherit the original mode unless the CLI explicitly overrides.
-        effective_on_conflict: str = on_conflict
-        try:
-            persisted_mode = job.options.get("on_conflict")
-            if persisted_mode is not None and on_conflict == "skip":
-                effective_on_conflict = str(persisted_mode)
-        except (AttributeError, TypeError, ValueError):
-            pass
-        try:
-            self.set_on_conflict_mode(effective_on_conflict)
-        except ValueError:
-            # Persisted options had a stale/unknown value; fall back to
-            # skip rather than refusing to resume.
-            logger.warning(
-                "MigrationService.run_job: invalid persisted on_conflict={m!r}, falling back to skip",
-                m=effective_on_conflict,
-            )
-            self.set_on_conflict_mode("skip")
+        # v1.4.1: same three-tier resolution for on_conflict.
+        if on_conflict is not _UNCHANGED:
+            try:
+                self.set_on_conflict_mode(on_conflict)
+            except ValueError:
+                # Caller passed an invalid mode; surface ValueError so
+                # the CLI can show a clean error before the migration
+                # starts (matches pre-v1.4.1 behavior).
+                raise
+        else:
+            try:
+                persisted_mode = (
+                    job.options.get("on_conflict") if job.options else None
+                )
+            except (AttributeError, TypeError):
+                persisted_mode = None
+            if persisted_mode is not None:
+                try:
+                    self.set_on_conflict_mode(str(persisted_mode))
+                except ValueError:
+                    # Persisted options had a stale/unknown value; fall
+                    # back to skip rather than refusing to resume.
+                    logger.warning(
+                        "MigrationService.run_job: invalid persisted "
+                        "on_conflict={m!r}, falling back to skip",
+                        m=persisted_mode,
+                    )
+                    self.set_on_conflict_mode("skip")
+            # else: leave self._on_conflict_mode unchanged
 
         # Already-completed jobs are no-ops; return their report.
         if job.status == "completed":

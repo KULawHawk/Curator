@@ -79,73 +79,66 @@ v0.1.0 (Beta) is the current release. v0.2.0 (cross-source filter refinement + i
 
 ---
 
-## [v1.5.0 candidate] API hardening: sentinel-default for `apply()` + `run_job()` policy kwargs
+## [v1.4.1 RELEASED] API hardening: sentinel-default for `apply()` + `run_job()` policy kwargs ✅
 
 **Discovered:** 2026-05-08 during Tracer Phase 4 P3 e2e test pass.
+**Shipped:** 2026-05-08 as v1.4.1 patch (single-session implementation).
 **Severity:** DX (developer experience) only — no functional bugs, but a real footgun.
-**Effort estimate:** ~45-60 min for the change + new tests proving sticky behavior.
+**Effort actual:** ~50 min (matched estimate).
 
-### Problem
+### Problem (resolved)
 
-``MigrationService.apply()`` and ``run_job()`` both take ``max_retries`` and ``on_conflict`` as kwargs with documented defaults (``3`` and ``'skip'`` respectively). Both call ``self.set_max_retries(...)`` and ``self.set_on_conflict_mode(...)`` at entry, which means any prior call to the corresponding ``set_*`` method is silently overwritten by the apply/run_job kwarg default if the caller doesn't explicitly pass the kwarg.
+``MigrationService.apply()`` and ``run_job()`` both took ``max_retries`` and ``on_conflict`` as kwargs with documented defaults (``3`` and ``'skip'`` respectively). Both called ``self.set_max_retries(...)`` and ``self.set_on_conflict_mode(...)`` at entry, which meant any prior call to the corresponding ``set_*`` method was silently overwritten by the apply/run_job kwarg default if the caller didn't explicitly pass the kwarg.
 
-Result: a caller who does ``svc.set_on_conflict_mode('overwrite-with-backup'); svc.apply(plan)`` gets ``skip`` semantics, not the mode they set. Surprising and quietly wrong.
+Result: a caller who did ``svc.set_on_conflict_mode('overwrite-with-backup'); svc.apply(plan)`` got ``skip`` semantics, not the mode they set. Surprising and quietly wrong.
 
-This was caught by the Phase 4 P3 e2e tests in ``tests/unit/test_migration_cross_source.py::TestPhase4CrossSourceConflictResolution`` (which originally used the ``set_*`` pattern, then were rewritten to pass ``on_conflict`` directly to ``apply()``). The mock-isolated unit tests in ``tests/unit/test_migration_phase4_cross_source_conflict.py`` couldn't catch it because they bypass ``apply()`` entirely. v1.4.0 docstrings on both setters now warn about this.
+This was caught by the Phase 4 P3 e2e tests in ``tests/unit/test_migration_cross_source.py::TestPhase4CrossSourceConflictResolution`` (which originally used the ``set_*`` pattern, then were rewritten to pass ``on_conflict`` directly to ``apply()``). v1.4.0 docstrings warned about it; v1.4.1 closes the underlying issue.
 
-### Proposed fix (sentinel default)
+### Fix shipped (sentinel default)
 
 ```python
-_UNCHANGED = object()  # module-level sentinel
+_UNCHANGED: Any = object()  # module-level sentinel
 
 def apply(
     self, plan, *, ...,
-    max_retries: int | object = _UNCHANGED,
-    on_conflict: str | object = _UNCHANGED,
+    max_retries: Any = _UNCHANGED,
+    on_conflict: Any = _UNCHANGED,
 ) -> MigrationReport:
     if max_retries is not _UNCHANGED:
         self.set_max_retries(max_retries)
     if on_conflict is not _UNCHANGED:
         self.set_on_conflict_mode(on_conflict)
-    # ... rest unchanged
-
-def run_job(
-    self, job_id, *, ...,
-    max_retries: int | object = _UNCHANGED,
-    on_conflict: str | object = _UNCHANGED,
-) -> MigrationReport:
-    # If caller passed explicit values, use them.
-    # Else if job.options has persisted values, use those.
-    # Else leave self._max_retries / self._on_conflict_mode unchanged.
-    if max_retries is _UNCHANGED:
-        persisted = (job.options or {}).get("max_retries")
-        if persisted is not None:
-            self.set_max_retries(int(persisted))
-    else:
-        self.set_max_retries(max_retries)
-    # symmetric for on_conflict
-    # ... rest unchanged
 ```
 
-### Backward-compat analysis
+``run_job()`` follows the same pattern with three-tier resolution: explicit kwarg > persisted ``job.options`` > current ``self._max_retries``/``self._on_conflict_mode``. The previous magic-default check (``max_retries == 3``) is replaced with explicit sentinel comparison.
+
+### Backward-compat verified
 
 - **CLI:** unaffected. The CLI passes both kwargs explicitly (driven by argparse defaults), so apply/run_job behavior is identical.
-- **Existing tests that pass kwargs:** unaffected (e.g. ``test_migration_phase3_conflict.py`` always passes ``on_conflict=...``).
-- **Existing tests that use the ``set_*`` pattern WITHOUT passing kwargs:** behavior changes. Any such test was relying on the buggy reset; they'd now correctly use the set value. **Risk:** tests written against the bug would fail. Audit ``tests/unit/test_migration*.py`` for these patterns before flipping.
-- **Library/agent callers:** behavior changes. The fix matches what users would expect.
+- **Existing tests that pass kwargs:** unaffected. 150/150 migration regression tests pass (was 135 + 15 new).
+- **Existing tests that use the ``set_*`` pattern WITHOUT passing kwargs:** behavior changes — they now correctly use the set value. None of the existing test suite was relying on the buggy reset, so 0 test changes were needed in pre-existing files.
+- **Library/agent callers:** behavior changes (in their favor). Sticky setters now stick.
 
-### Acceptance criteria
+### Acceptance criteria (all met)
 
-1. New unit tests prove ``set_on_conflict_mode('X'); apply(plan)`` actually uses mode X (not the default).
-2. New unit tests prove the same for ``set_max_retries`` + ``apply`` and both setters + ``run_job``.
-3. Resume semantics for ``run_job`` are preserved: a job's persisted ``options['max_retries']`` and ``options['on_conflict']`` are used when the caller doesn't pass kwargs.
-4. CHANGELOG entry under ``## [1.5.0]`` headed ``### Changed`` notes the fix as a behavior change for library callers (CLI users see no change).
-5. Docstring warnings in ``set_max_retries`` and ``set_on_conflict_mode`` are updated to describe the new sticky behavior.
-6. Full Curator regression slice green; plugin suite green.
+1. ✅ New unit tests prove ``set_on_conflict_mode('X'); apply(plan)`` actually uses mode X (not the default). See `tests/unit/test_migration_v141_sentinel_defaults.py::test_set_on_conflict_mode_persists_through_apply_when_kwarg_omitted`.
+2. ✅ Same proven for ``set_max_retries`` + ``apply``, both setters + ``run_job``. 15 total tests in the new file.
+3. ✅ Resume semantics for ``run_job`` preserved: a job's persisted ``options['max_retries']`` and ``options['on_conflict']`` are used when the caller doesn't pass kwargs. Tests `test_run_job_persisted_options_used_when_kwarg_omitted` and `test_run_job_explicit_kwarg_beats_persisted_options`.
+4. ✅ CHANGELOG entry under ``## [1.4.1]`` heads ``### Fixed`` and notes the fix as a behavior change for library callers (CLI users see no change).
+5. ✅ Docstring warnings in ``set_max_retries`` and ``set_on_conflict_mode`` removed and replaced with positive guidance describing two equivalent patterns: explicit kwarg per call, or sticky setter once.
+6. ✅ Full Curator regression slice green: 150/150 migration tests pass; preexisting `test_photo.py` PIL-import failures are unrelated environment issues.
 
-### Why deferred from v1.4.0
+### Why patch (1.4.0 → 1.4.1) and not minor
 
-v1.4.0 had already shipped + tagged when the issue was discovered during the P3 e2e test pass. Hot-fix in a v1.4.1 patch is also reasonable, but bundling with other v1.5.0 work (MCP HTTP-auth per Tracer Phase 4 v0.2 RATIFIED DM-6, plus any other API hardening) reduces release ceremony overhead.
+The change is internally a *bug fix* with no API surface modifications: method signatures still accept the same kwargs by name; explicit values still produce identical behavior; only the omitted-kwarg semantics change (and only when the user previously called ``set_*`` — a code path the v1.4.0 docstrings warned was buggy). Patch versioning is appropriate.
+
+Originally documented as a v1.5.0 candidate (alongside MCP HTTP-auth) for release-ceremony bundling, but the fix shipped on its own as v1.4.1 because it's small, self-contained, and isolating it makes the changelog cleaner.
+
+---
+
+## [v1.5.0 candidate] (no current items)
+
+Previously held the API hardening item that shipped as v1.4.1. Currently empty; future v1.5.0 work (MCP HTTP-auth per Tracer Phase 4 v0.2 RATIFIED DM-6, etc.) will populate this section as it arrives.
 
 ---
 

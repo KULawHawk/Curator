@@ -4,6 +4,44 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.4.1] — 2026-05-08 — API hardening: sentinel-default for `apply()` + `run_job()` policy kwargs
+
+**Headline:** Patch fix for an undocumented footgun in `MigrationService.apply()` and `MigrationService.run_job()`. Calling `service.set_max_retries(N)` or `service.set_on_conflict_mode(M)` before `apply()` / `run_job()` previously did NOT stick — both methods unconditionally called the setters at entry with their hard-coded defaults (3 / 'skip'), silently overwriting any prior configuration. v1.4.1 changes the kwarg defaults to a `_UNCHANGED` sentinel and only invokes the setters when the caller explicitly passes a value. Sticky setters now stick.
+
+### Fixed
+
+- **`MigrationService.apply(plan, max_retries=..., on_conflict=...)`** — default values changed from `3` / `"skip"` to a module-level `_UNCHANGED` sentinel. Setters only invoked when the caller explicitly passes a value. Bare `apply(plan)` after `set_max_retries(7)` now actually uses 7 retries.
+- **`MigrationService.run_job(job_id, max_retries=..., on_conflict=...)`** — same sentinel default change. Three-tier resolution preserved: explicit kwarg > persisted `job.options` > current `self._max_retries`/`self._on_conflict_mode`. The previous behavior of using `max_retries == 3` as a magic-default proxy for "caller didn't pass anything" is replaced with explicit sentinel comparison, which correctly distinguishes "caller passed nothing" from "caller explicitly passed 3".
+- **Docstrings on `set_max_retries()` and `set_on_conflict_mode()`** — the v1.4.0 warning paragraphs about "calling this BEFORE apply() does NOT stick" are removed and replaced with positive guidance describing the two equivalent patterns: explicit kwarg per call, or sticky setter once.
+
+### Added
+
+- `_UNCHANGED: Any = object()` sentinel constant in `src/curator/services/migration.py`. Documented as "keyword arguments whose default is 'keep current setting' rather than 'reset to a hard-coded value.'" Annotated `Any` so type checkers don't complain about `int | _UNCHANGED` impossibilities; runtime validation by `set_max_retries()` / `set_on_conflict_mode()` is preserved.
+- `tests/unit/test_migration_v141_sentinel_defaults.py` — 15 new unit tests covering:
+  - `__init__` defaults unchanged (3 / 'skip').
+  - Sticky setters persist through bare `apply()` / `run_job()`.
+  - Explicit kwargs still override sticky setters.
+  - Mixed kwargs (one explicit, one omitted) preserve the omitted-arg's sticky value.
+  - Clamping behavior preserved on explicit kwargs.
+  - `run_job()` three-tier resolution: explicit kwarg > persisted options > sticky setter > __init__ default.
+  - Invalid persisted `on_conflict` falls back to 'skip' (not crash).
+  - Invalid persisted `max_retries` (unparseable) silently preserves current `self._max_retries`.
+  - Explicit invalid `on_conflict` still raises `ValueError`.
+
+### Changed
+
+- Version bump `1.4.0` → `1.4.1` in `pyproject.toml` and `src/curator/__init__.py`.
+
+### Compatibility
+
+- **No API surface changes.** Method signatures still accept `max_retries` and `on_conflict` keyword arguments. Existing callers passing explicit values get identical behavior. Existing callers passing nothing get NEAR-identical behavior — the only observable difference is when `set_max_retries()` or `set_on_conflict_mode()` was called previously: those calls now stick instead of being silently overwritten. This is a *bug fix*, not a behavior break.
+- The previous BUILD_TRACKER `[v1.5.0 candidate]` entry for this work is closed and moved to the released list.
+
+### Test totals after v1.4.1
+
+- Migration regression slice: **150/150 passing** (was 135/135 in v1.4.0; +15 new sentinel tests). 4 skipped (preexisting; googleapiclient not installed in dev venv).
+- Full unit-test run: 737 passed, 22 preexisting failures in `test_photo.py` (PIL/Pillow not installed in dev venv), 10 skipped, 2 deselected. The PIL failures are environment-only and predate v1.4.0.
+
 ## [1.4.0] — 2026-05-08 — Tracer Phase 4 (cross-source overwrite-with-backup + rename-with-suffix)
 
 **Headline:** v1.3.0 → v1.4.0 (minor bump). Closes the cross-source simplification documented in Tracer Phase 3 v0.3 §12 P2 entry: cross-source `--on-conflict=overwrite-with-backup` and `--on-conflict=rename-with-suffix` no longer degrade to skip-with-warning. They now ship as full implementations using the new `curator_source_rename` hookspec (rename path) and the FileExistsError retry-write pattern (suffix path). Strictly additive at the user-facing surface; defaults preserve v1.3.0 behavior exactly. Plugins not implementing the new hook automatically retain the v1.3.0 degrade-to-skip behavior. See `docs/TRACER_PHASE_4_DESIGN.md` v0.3 IMPLEMENTED for the full design and per-DM implementation evidence.
