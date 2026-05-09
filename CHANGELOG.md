@@ -4,6 +4,59 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.6.0] — 2026-05-09 — `curator sources config`: native CLI for per-source plugin config
+
+**Headline:** New `curator sources config <id> [--set / --unset / --clear]` subcommand closes the v1.5.0 CLI gap that `scripts/setup_gdrive_source.py` worked around. Cloud-source registration is now a pure CLI workflow with no helper-script dependency. The helper script is kept for backwards compatibility but is no longer required for new setups.
+
+### Why this matters
+
+In v1.5.0, `curator sources add --type gdrive` registered a source's metadata (id, type, name, enabled flag) but exposed no flag for the per-plugin `config` dict that cloud plugins need (client_secrets_path, credentials_path, root_folder_id, include_shared, etc.). The Session B (2026-05-09) workflow had to use a Python helper script to build a `SourceConfig` directly and call `source_repo.upsert()`. That worked but was awkward, didn't generalize cleanly to OneDrive/Dropbox, and meant every future cross-source plugin would need a similar helper.
+
+This release adds a single subcommand that handles config for any source type, present and future:
+
+```
+curator sources config gdrive:src_drive --set root_folder_id=1abc... \
+    --set client_secrets_path=/path/to/cs.json \
+    --set credentials_path=/path/to/creds.json
+```
+
+### Added
+
+* **`curator sources config <source_id>` subcommand** in `src/curator/cli/main.py` (~180 LOC). Operations within a single invocation apply in order: `--unset` first, then `--clear` if given, then `--set`. This lets you reset-and-rewrite atomically:
+  ```
+  curator sources config gdrive:src_drive --clear \
+      --set client_secrets_path=/new/cs.json \
+      --set credentials_path=/new/creds.json \
+      --set root_folder_id=1xyz...
+  ```
+  With no flags, prints the current config (read-only; equivalent to the `config:` section of `sources show`).
+
+  Flags:
+  * `--set KEY=VALUE` (repeatable). Values are parsed as JSON first (so `true` -> `True`, `42` -> `42`, `[1,2]` -> `[1, 2]`), falling back to literal string when JSON parsing fails. Path strings, folder IDs, and other non-JSON values pass through as-is.
+  * `--unset KEY` (repeatable). Silently no-ops if the key isn't present (the audit log records nothing for no-op invocations).
+  * `--clear`. Removes ALL config keys.
+
+* **`source.config` audit event.** Every successful mutation emits an audit-log entry under `actor='cli.sources'`, `action='source.config'`, `entity_type='source'`, `entity_id=<source_id>`, with `details={"changes": [{"op": ..., "key": ...}], "config_keys_after": [...]}` for traceability. No event is emitted for pure no-ops (e.g., `--unset` on a key that wasn't there).
+
+* **18 new integration tests** in `tests/integration/test_cli_sources.py` (`TestSourcesConfig` class). Covers: read-only mode, --set with strings/booleans/ints/JSON, --set with `=` in value, --unset removing existing key, --unset missing key noop, --clear removing all, atomic --clear+--set replace, audit emission on mutation, no audit on noop, preservation of other source fields (display_name, source_type, enabled), error paths for malformed --set values.
+
+### Changed
+
+* **`docs/TRACER_SESSION_B_RUNBOOK.md`** v4 — Step 2 now shows the native CLI as the preferred path; setup_gdrive_source.py kept as compat fallback. New users follow the CLI path; existing scripts/automation using the helper continue working.
+* **Version bump:** 1.5.1 → 1.6.0 in `pyproject.toml` and `src/curator/__init__.py`.
+
+### Compatibility
+
+* **No breaking changes.** Existing `sources add / list / show / enable / disable / remove` subcommands are unchanged. The new `config` subcommand is additive.
+* **`scripts/setup_gdrive_source.py` continues to work.** It uses the same underlying `source_repo.upsert()` mechanism the new CLI uses, so the two paths are equivalent. Existing automation (Session B v3 runbook, future runbooks) doesn't need to change.
+* **41/41 existing sources CLI tests pass.** No regressions.
+
+### What's still pending for v1.7.0+
+
+* `--get KEY` for reading a single config value (current `config` with no flags prints all).
+* Plugin-side `config_schema` declaration so the CLI can validate `--set` values against expected types/required-keys for each plugin (today the CLI accepts any `--set KEY=VALUE` regardless of whether the plugin actually uses that key).
+* Long-form documentation for cloud-source registration in a tutorial doc (currently only the Session B runbook covers it).
+
 ## [1.5.1] — 2026-05-09 — gdrive plugin: SourceConfig injection + parent_id translation (production-validated cross-source)
 
 **Headline:** Two architectural bugs in the gdrive_source plugin made cross-source `local → gdrive:*` migration impossible in v1.5.0 and earlier. Both bugs were masked by the existing test suite (which used `set_drive_client()` mock injection to bypass the affected code paths). This patch fixes both bugs and validates the fix end-to-end against real Google Drive.

@@ -62,6 +62,19 @@ Hold on to that folder ID for the next step.
 
 Replace `PASTE_FOLDER_ID_HERE` with the ID you copied above, then run:
 
+**v1.6.0+ — native CLI (preferred):**
+
+```powershell
+curator sources add "gdrive:src_drive" --type gdrive --name "Google Drive (src_drive)"
+curator sources config "gdrive:src_drive" `
+    --set client_secrets_path=$env:USERPROFILE\.curator\gdrive\src_drive\client_secrets.json `
+    --set credentials_path=$env:USERPROFILE\.curator\gdrive\src_drive\credentials.json `
+    --set root_folder_id=PASTE_FOLDER_ID_HERE
+curator sources list
+```
+
+**v1.5.x compat — helper script (still supported):**
+
 ```powershell
 cd C:\Users\jmlee\Desktop\AL\Curator
 .\.venv\Scripts\Activate.ps1
@@ -69,16 +82,22 @@ python scripts\setup_gdrive_source.py src_drive --folder-id PASTE_FOLDER_ID_HERE
 curator sources list
 ```
 
-Expected output: `OK: registered source 'gdrive:src_drive'` plus a
-`sources list` table showing both `local` and `gdrive:src_drive`
+Either path produces the same result: `OK: registered source 'gdrive:src_drive'`
+plus a `sources list` table showing both `local` and `gdrive:src_drive`
 enabled. Note the `gdrive:` prefix — it's required for the
 gdrive_source plugin to claim ownership of the source. Without the
 prefix, migration to this source will fail with `no registered plugin
 advertises supports_write`.
 
-If you accidentally use the wrong folder ID, re-run the same command
-with a corrected `--folder-id` — the script is idempotent and will
-update rather than fail.
+If you accidentally use the wrong folder ID, re-point with the v1.6.0+
+CLI:
+
+```powershell
+curator sources config "gdrive:src_drive" --set root_folder_id=NEW_ID
+```
+
+Or just re-run `setup_gdrive_source.py` with `--folder-id` (it's
+idempotent and updates rather than fails).
 
 ---
 
@@ -256,6 +275,10 @@ After step 7 succeeds:
 
 ## Document log
 
+* **2026-05-09 v4:** Updated Step 2 to show v1.6.0+ native CLI
+  (`curator sources config <id> --set k=v`) as the preferred path; kept
+  setup_gdrive_source.py as compat fallback. The v1.6.0 CLI obviates
+  the need for the helper script for new setups.
 * **2026-05-09 v3:** Fixed source_id from `src_drive` to
   `gdrive:src_drive` (with the colon prefix). The gdrive_source
   plugin's `_owns()` check requires source_ids to be exactly

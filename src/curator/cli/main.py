@@ -803,6 +803,187 @@ def sources_show(
             console.print(f"    {k} = {v!r}")
 
 
+# ---------------------------------------------------------------------------
+# sources config: per-source config mutation (v1.6.0)
+# ---------------------------------------------------------------------------
+# Bridges the v1.5.0 CLI gap that scripts/setup_gdrive_source.py worked
+# around: ``sources add`` registers metadata only and offers no flag for
+# the per-source config dict that cloud plugins (gdrive, future onedrive
+# / dropbox) need. ``sources config <id> --set k=v`` fills that gap.
+#
+# Convention: --set values are parsed as JSON first (so booleans, ints,
+# floats, lists work as expected), falling back to a literal string when
+# JSON parsing fails. ``--set foo=true`` -> True; ``--set foo=hello`` ->
+# "hello"; ``--set foo='[1,2,3]'`` -> [1, 2, 3].
+#
+# All operations route through ``source_repo.update`` which preserves the
+# source row's other columns. Audit events are emitted for traceability.
+
+def _parse_set_value(raw: str) -> Any:
+    """Parse the right-hand side of ``--set KEY=VALUE``.
+
+    Tries JSON first (catches booleans, ints, floats, null, lists, dicts);
+    falls back to literal string. This matches the schema flexibility the
+    config dict needs (gdrive's ``include_shared`` is a bool, paths are
+    strings, future plugins might use lists).
+    """
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return raw
+
+
+@sources_app.command("config")
+def sources_config(
+    ctx: typer.Context,
+    source_id: str = typer.Argument(..., help="Source ID to configure."),
+    set_pairs: list[str] = typer.Option(
+        [],
+        "--set",
+        help=(
+            "KEY=VALUE pair to set. Repeatable. Values are parsed as JSON "
+            "if possible (so 'true', '42', '[1,2]' work), else used as a "
+            "literal string. Example: --set root_folder_id=1abc..."
+        ),
+    ),
+    unset_keys: list[str] = typer.Option(
+        [],
+        "--unset",
+        help="Config key to remove. Repeatable. Silently no-ops if the key isn't present.",
+    ),
+    clear: bool = typer.Option(
+        False,
+        "--clear",
+        help="Remove ALL config keys. Applied AFTER --unset and BEFORE --set in the same invocation.",
+    ),
+):
+    """View or mutate a source's per-plugin config dict (v1.6.0).
+
+    With no flags: prints the current config (read-only; equivalent to
+    the ``config:`` section of ``sources show``).
+
+    With --set / --unset / --clear: mutates the SourceConfig.config
+    dict and persists via ``source_repo.update``. Operations within a
+    single invocation apply in order: --unset first, then --clear if
+    given, then --set. This lets you reset-and-rewrite atomically:
+
+        curator sources config gdrive:src_drive --clear \\
+            --set client_secrets_path=/new/path \\
+            --set credentials_path=/new/creds \\
+            --set root_folder_id=1abc...
+
+    Replaces the helper-script workaround used in v1.5.0
+    (scripts/setup_gdrive_source.py) for cloud-source registration.
+    """
+    rt: CuratorRuntime = ctx.obj
+    src = rt.source_repo.get(source_id)
+    if src is None:
+        raise _err_exit(rt, f"No source with id: {source_id!r}")
+
+    # Read-only path: no mutation flags given
+    if not set_pairs and not unset_keys and not clear:
+        if rt.json_output:
+            _emit_json(rt, {"source_id": source_id, "config": src.config})
+            return
+        console = _console(rt)
+        console.print(f"[bold]{src.source_id}[/] config:")
+        if not src.config:
+            console.print("  [dim](empty)[/]")
+            return
+        for k, v in src.config.items():
+            console.print(f"  {k} = {v!r}")
+        return
+
+    # Mutation path: build the new config dict, then update.
+    new_config = dict(src.config)  # shallow copy so we don't mutate in place
+    changes: list[tuple[str, str, Any]] = []  # (op, key, value) for audit
+
+    # 1. --unset (remove specific keys, silent if absent)
+    for k in unset_keys:
+        if k in new_config:
+            old = new_config.pop(k)
+            changes.append(("unset", k, old))
+
+    # 2. --clear (remove everything)
+    if clear:
+        if new_config:
+            changes.append(("clear", "*", dict(new_config)))
+        new_config = {}
+
+    # 3. --set (apply each KEY=VALUE)
+    for pair in set_pairs:
+        if "=" not in pair:
+            raise _err_exit(
+                rt,
+                f"--set value {pair!r} must be in KEY=VALUE form (no '=' found)",
+            )
+        key, _, raw_value = pair.partition("=")
+        key = key.strip()
+        if not key:
+            raise _err_exit(
+                rt, f"--set value {pair!r} has empty key",
+            )
+        value = _parse_set_value(raw_value)
+        new_config[key] = value
+        changes.append(("set", key, value))
+
+    if not changes:
+        # Nothing to do (e.g., --unset a key that wasn't there)
+        if rt.json_output:
+            _emit_json(rt, {
+                "source_id": source_id,
+                "action": "no-op",
+                "config": new_config,
+            })
+        else:
+            _console(rt).print("[dim]No changes to apply.[/]")
+        return
+
+    # Persist via update() -- preserves other source fields
+    updated = SourceConfig(
+        source_id=src.source_id,
+        source_type=src.source_type,
+        display_name=src.display_name,
+        config=new_config,
+        enabled=src.enabled,
+        created_at=src.created_at,
+    )
+    rt.source_repo.update(updated)
+    rt.audit.log(
+        actor="cli.sources",
+        action="source.config",
+        entity_type="source",
+        entity_id=source_id,
+        details={
+            "changes": [
+                {"op": op, "key": k} for (op, k, _v) in changes
+            ],
+            "config_keys_after": sorted(new_config.keys()),
+        },
+    )
+
+    if rt.json_output:
+        _emit_json(rt, {
+            "source_id": source_id,
+            "action": "updated",
+            "changes": [
+                {"op": op, "key": k} for (op, k, _v) in changes
+            ],
+            "config": new_config,
+        })
+        return
+
+    console = _console(rt)
+    console.print(f"[green]\u2713[/] Updated config for [bold]{source_id}[/]:")
+    for op, key, value in changes:
+        if op == "set":
+            console.print(f"  [cyan]set[/]   {key} = {value!r}")
+        elif op == "unset":
+            console.print(f"  [yellow]unset[/] {key}")
+        elif op == "clear":
+            console.print(f"  [red]clear[/] (removed {len(value)} key(s))")
+
+
 @sources_app.command("add")
 def sources_add(
     ctx: typer.Context,
