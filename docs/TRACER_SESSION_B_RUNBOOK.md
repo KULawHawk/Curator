@@ -54,11 +54,13 @@ You'll need a Drive folder dedicated to this demo so it doesn't pollute real dat
 
 ### 5. Verify Curator DB exists and has at least a few indexed files
 ```powershell
-curator status
-# Should report: indexed files > 0, audit log entries > 0
+curator doctor
+# Should report: integrity checks pass; if no files indexed, it'll say so.
+# Alternatively, see recent activity:
+curator audit --limit 20
 ```
 
-If empty:
+If empty or you want fresh data:
 ```powershell
 # Pick a small test folder (10-50 files)
 curator scan local C:\Users\jmlee\Desktop\AL\test_corpus

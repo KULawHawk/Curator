@@ -33,7 +33,7 @@ Atrium is the constitutional layer. Every other tool below ultimately answers to
 | **Curator** | **v1.4.0 stable** ✓ (released 2026-05-08) | `C:\Users\jmlee\Desktop\AL\Curator\` (HEAD `710445f`, tag `v1.4.0`) | Content-aware artifact intelligence layer. SQLite index + plugin framework + lineage tracking + Tracer migration engine + MCP server + PySide6 GUI. The most complete pillar by lines of code and test coverage. |
 | **curatorplug-atrium-safety** | **v0.3.0** ✓ | `C:\Users\jmlee\Desktop\AL\curatorplug-atrium-safety\` (HEAD `8399318`) | Constitutional plugin enforcing Atrium **Principle 2 (Hash-Verify-Before-Move)** via the `curator_source_write_post` hook. Soft-enforcement model: refuses non-compliant writes by raising `ComplianceError`, which Curator turns into `MigrationOutcome.FAILED`. |
 | **curatorplug-atrium-reversibility** | DESIGN-only ✅ (now on GitHub) | `C:\Users\jmlee\Desktop\AL\curatorplug-atrium-reversibility\` (HEAD `84ee978`, repo `https://github.com/KULawHawk/curatorplug-atrium-reversibility`) | Constitutional plugin for Atrium **Aim 2 (Reversibility)**. Architectural skeleton in `DESIGN.md` (~28 KB); implementation paused awaiting Jake's prioritization vs other ecosystem work. |
-| **curatorplug-atrium-citation** | **DESIGN v0.1 DRAFT** 📄 | `C:\Users\jmlee\Desktop\AL\curatorplug-atrium-citation-DESIGN.md` (workspace-level draft, not yet a separate repo) | Constitutional plugin for Atrium **Principle 3 (Citation Chain Preservation)**. Verifies that cross-source writes produce corresponding `lineage_edges`. Six DMs awaiting Jake's ratification; recommended decisions are observation-first / advisory / Curator-only for v0.1. |
+| **curatorplug-atrium-citation** | **v0.1.0a0 SCAFFOLDED** ✅ (alpha; on GitHub) | `C:\Users\jmlee\Desktop\AL\curatorplug-atrium-citation\` (HEAD `e301a4f`, repo `https://github.com/KULawHawk/curatorplug-atrium-citation`) | Constitutional plugin for Atrium **Principle 3 (Citation Chain Preservation)** + **Aim 10 (Fidelity)** added in Constitution v0.2. v0.1 ships scaffolding + DM ratifications + 6/6 smoke tests passing; P1 cycle adds real verification logic (cross-source state machine, deferred sweep CLI, audit emission). |
 | **Synergy** | v0.2.2 stable | `C:\Users\jmlee\Desktop\AL\Synergy\` | Multi-drive inventory + drift detection. Scans local + Google Drive + USB drives; produces timestamped snapshots with SHA256 hashes; detects cross-drive duplicates. Per Master Scroll v0.4, Synergy is the canonical state-of-disk authority. |
 | **Tracer** | shipped *as part of Curator* | `Curator\src\curator\services\migration.py` (~2200 LOC) | Cross-source migration engine. Phase 2 (resumable jobs + workers), Phase 3 (retry + 4-mode conflict resolution), Phase 4 (cross-source overwrite-with-backup + rename-with-suffix via `curator_source_rename`). |
 
@@ -98,7 +98,7 @@ Atrium's `CONSTITUTION.md` v0.2 distinguishes between two governance categories:
 **Article II — Five Non-Negotiable Principles** (reinforced-amendment authority — require 7-day waiting period + amendment codeword):
 1. The MORTAL SIN Rule (no deletion of assessment-derived artifacts)
 2. Hash-Verify-Before-Move → enforced by `curatorplug-atrium-safety` v0.3.0
-3. Citation Chain Preservation → design drafted as `curatorplug-atrium-citation` (v0.1 DRAFT)
+3. Citation Chain Preservation → v0.1.0a0 scaffolded as `curatorplug-atrium-citation` (P1 implementation pending)
 4. No Silent Failures (behavioral / cross-cutting; not currently a separate plugin)
 5. Atomic Operations Where Atomicity Is Claimed (per-tool implementation discipline; not currently a separate plugin)
 
@@ -149,7 +149,7 @@ These are explicit "not now" items rather than forgotten tasks:
 4. **Succubus build** — design locked at `INDEXER_ARCHITECTURE.md` 2026-04-25; no implementation started.
 5. **MCP HTTP-auth** — deferred to Curator v1.5.0 per Tracer Phase 4 v0.2 RATIFIED DM-6.
 6. **Tracer Phase 2 Session B real-world demo** — Jake-required. v1.4.0 surface complete; needs gdrive OAuth + actual files to validate against real Drive responses (vs. our test mocks). Runbook: `Curator/docs/TRACER_SESSION_B_RUNBOOK.md`.
-7. **`curatorplug-atrium-citation` repo bootstrap** — DMs ratified by Jake 2026-05-08; awaiting GitHub repo creation at `https://github.com/new` with name `curatorplug-atrium-citation`. Once created, P1 implementation can begin.
+7. ~~**`curatorplug-atrium-citation` repo bootstrap**~~ — ✅ SCAFFOLDED 2026-05-08 at `e301a4f` on GitHub. P1 implementation cycle (real verification logic) is the next deliverable.
 
 ---
 

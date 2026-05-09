@@ -9,8 +9,9 @@
 ## [v0.2 candidate — ecosystem expansion] curatorplug-atrium-citation
 
 **Drafted:** 2026-05-08 during Continue iteration 2.
-**Severity:** Forward-looking ecosystem work — v0.1 DESIGN is drafted, awaiting Jake's DM ratification before bootstrap.
-**Effort estimate:** ~7h total (P1 scaffolding ~3h + P2 CLI/audit ~3h + P3 release ~1h), spread across 1–2 sessions after ratification.
+**Scaffolded:** 2026-05-08 (commit `e301a4f` on GitHub).
+**Severity:** Forward-looking ecosystem work — v0.1.0a0 alpha scaffolding shipped; P1 implementation cycle (real verification logic) is next.
+**Effort estimate remaining:** ~6h total (P1 ~3h + P2 integration tests ~3h + P3 release ~1h).
 
 ### What it is
 
@@ -20,9 +21,9 @@ DESIGN doc lives at:
 - Workspace authoritative: `C:\Users\jmlee\Desktop\AL\curatorplug-atrium-citation-DESIGN.md` (~20 KB)
 - Git-backed copy: `Curator/docs/CURATORPLUG_ATRIUM_CITATION_DESIGN.md` (identical)
 
-### Six DMs awaiting Jake's ratification
+### Six DMs ratified 2026-05-08
 
-Full text in the DESIGN doc §3. Recommendations briefly:
+Full text in the DESIGN doc §3. All ratified by Jake's chat reply "1c":
 
 | DM | Question | Recommended |
 |---|---|---|
@@ -33,19 +34,41 @@ Full text in the DESIGN doc §3. Recommendations briefly:
 | **DM-5** | Plugin registration | **Setuptools entry point** under `[project.entry-points.curator]`. Same as atrium-safety DM-4 (ratified). |
 | **DM-6** | Cross-product scope | **Curator-only for v0.1.** Cross-product enforcement waits for SIP v1.0 per Atrium Constitution Article IV. |
 
+### Bootstrap shipped 2026-05-08 (commit `e301a4f`)
+
+v0.1.0a0 alpha contains:
+
+- `pyproject.toml` with `[project.entry-points.curator]` mapping `atrium_citation = curatorplug.atrium_citation.plugin:plugin` per DM-5.
+- Namespace package layout under `src/curatorplug/atrium_citation/` matching atrium-safety so multiple curatorplug-* packages coexist.
+- `plugin.py` with `AtriumCitationPlugin` class + `curator_plugin_init` and `curator_source_write_post` hookimpl scaffolding. Methods log "P1 stub" markers; real verification logic is P1 work.
+- `exceptions.py` (empty per DM-1 advisory; placeholder for v0.2+ if soft-enforcement is later adopted).
+- `tests/unit/test_plugin.py` with 6 smoke tests — ALL PASSING. Module imports, plugin instantiation, `curator_plugin_init` pm capture, advisory contract for `curator_source_write_post` (does not raise), v0.1 exception-export emptiness.
+- `DESIGN.md` (~22 KB) with all 6 DMs marked RATIFIED.
+- `README.md` + `CHANGELOG.md` + `.gitignore`.
+
+Verified: Curator's plugin discovery picks up the new entry point via `importlib.metadata.entry_points(group="curator")`.
+
+### What's next (P1 cycle)
+
+- Cross-source detection state machine (DM-2 option ii) listening to `migration.*` audit events.
+- Deferred sweep walking `file_repo` + `lineage_repo` for gap detection.
+- `curator citation sweep` + `curator citation status` CLI subcommands.
+- Audit emission via `curator_audit_event` for `compliance.citation_sweep_started`, `compliance.citation_gap`, `compliance.citation_sweep_completed`.
+- Real unit tests beyond the scaffolding smoke tests + integration tests against Curator runtime.
+
 ### Relationship to other plugins
 
 - **`curatorplug-atrium-safety`** (v0.3.0 stable) implements Principle 2 (Hash-Verify-Before-Move). Refuses non-compliant writes.
-- **`curatorplug-atrium-reversibility`** (DESIGN-only at `84ee978`, GitHub repo not yet created) implements Aim 2 (Reversibility, an Article I aim, not an Article II principle).
-- **`curatorplug-atrium-citation`** (this entry) implements Principle 3 (Citation Chain Preservation). Observes citation gaps; advisory mode only.
+- **`curatorplug-atrium-reversibility`** (DESIGN-only at `84ee978`, on GitHub at `https://github.com/KULawHawk/curatorplug-atrium-reversibility`) implements Aim 2 (Reversibility, an Article I aim, not an Article II principle). P1 implementation paused.
+- **`curatorplug-atrium-citation`** (this entry, v0.1.0a0 SCAFFOLDED at `e301a4f`, on GitHub at `https://github.com/KULawHawk/curatorplug-atrium-citation`) implements Principle 3 (Citation Chain Preservation). Observes citation gaps; advisory mode only.
 
 The three plugins are independent: install any subset; each remains uninstallable per Aim 3 (Self-sufficiency).
 
 ### Why deferred from immediate implementation
 
-The design needs Jake's DM ratification before code is written. Recommended decisions are deliberately conservative for v0.1 (advisory mode, deferred sweep, Curator-only); aggressive options can be revisited in v0.2+ once observability data shows whether real-time enforcement is warranted.
+~~The design needs Jake's DM ratification before code is written.~~ ✅ Resolved 2026-05-08. DMs ratified, scaffolding shipped. P1 implementation is the next deliverable.
 
-Once DMs ratified, P1 cycle bootstraps the repo at the path `C:\Users\jmlee\Desktop\AL\curatorplug-atrium-citation\` matching the atrium-safety repo layout.
+Once P1 + P2 cycles complete, v0.1.0 stable can be tagged.
 
 ---
 
