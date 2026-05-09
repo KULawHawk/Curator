@@ -31,8 +31,9 @@ Atrium is the constitutional layer. Every other tool below ultimately answers to
 | Pillar | Status | Location | What it does |
 |---|---|---|---|
 | **Curator** | **v1.4.0 stable** ✓ (released 2026-05-08) | `C:\Users\jmlee\Desktop\AL\Curator\` (HEAD `710445f`, tag `v1.4.0`) | Content-aware artifact intelligence layer. SQLite index + plugin framework + lineage tracking + Tracer migration engine + MCP server + PySide6 GUI. The most complete pillar by lines of code and test coverage. |
-| **curatorplug-atrium-safety** | **v0.3.0** ✓ | `C:\Users\jmlee\Desktop\AL\curatorplug-atrium-safety\` (HEAD `8399318`) | Constitutional plugin enforcing Atrium Principle 4 (safety). Hooks into Curator's plugin contract to guard against unsafe operations. |
-| **curatorplug-atrium-reversibility** | DEFERRED | `C:\Users\jmlee\Desktop\AL\curatorplug-atrium-reversibility\` (local only at `84ee978`, no GitHub remote yet) | Constitutional plugin for Principle 1 (reversibility). Architectural skeleton in place; implementation paused. |
+| **curatorplug-atrium-safety** | **v0.3.0** ✓ | `C:\Users\jmlee\Desktop\AL\curatorplug-atrium-safety\` (HEAD `8399318`) | Constitutional plugin enforcing Atrium **Principle 2 (Hash-Verify-Before-Move)** via the `curator_source_write_post` hook. Soft-enforcement model: refuses non-compliant writes by raising `ComplianceError`, which Curator turns into `MigrationOutcome.FAILED`. |
+| **curatorplug-atrium-reversibility** | DEFERRED | `C:\Users\jmlee\Desktop\AL\curatorplug-atrium-reversibility\` (local-only at `84ee978`; remote configured but GitHub repo not yet created — Jake to create at `https://github.com/new` with name `curatorplug-atrium-reversibility`) | Constitutional plugin for Atrium **Aim 2 (Reversibility)**. Architectural skeleton in `DESIGN.md` (~28 KB); implementation paused. |
+| **curatorplug-atrium-citation** | **DESIGN v0.1 DRAFT** 📄 | `C:\Users\jmlee\Desktop\AL\curatorplug-atrium-citation-DESIGN.md` (workspace-level draft, not yet a separate repo) | Constitutional plugin for Atrium **Principle 3 (Citation Chain Preservation)**. Verifies that cross-source writes produce corresponding `lineage_edges`. Six DMs awaiting Jake's ratification; recommended decisions are observation-first / advisory / Curator-only for v0.1. |
 | **Synergy** | v0.2.2 stable | `C:\Users\jmlee\Desktop\AL\Synergy\` | Multi-drive inventory + drift detection. Scans local + Google Drive + USB drives; produces timestamped snapshots with SHA256 hashes; detects cross-drive duplicates. Per Master Scroll v0.4, Synergy is the canonical state-of-disk authority. |
 | **Tracer** | shipped *as part of Curator* | `Curator\src\curator\services\migration.py` (~2200 LOC) | Cross-source migration engine. Phase 2 (resumable jobs + workers), Phase 3 (retry + 4-mode conflict resolution), Phase 4 (cross-source overwrite-with-backup + rename-with-suffix via `curator_source_rename`). |
 
@@ -75,6 +76,29 @@ The "indexers working together" concept lives here. Two indexers exist concurren
 * **Supernatural-themed indexer family:** Vampire, Succubus (extractor entities). The theme is "draws content out of source PDFs." Discussed and ratified in past Apex hand-off sessions.
 * **subAPEX numbering:** legacy nomenclature where each pillar had a `subAPEX{N}` index alongside its codename (e.g., subAPEX1=Inkblot, subAPEX2=Vampire, subAPEX3=Succubus, subAPEX4=Latent, subAPEX5=Opus, subAPEX7=Id, subAPEX8=Cocoon, subAPEX9=Locker, subAPEX12=Synergy). Numbering was preserved across rename events. **Current direction:** Ad Astra umbrella naming supersedes APEX-specific subAPEX numbering for cross-cutting docs; pillar codenames remain in active use.
 * **Versioning across pillars:** semver where it makes sense (Curator 1.4.0, atrium-safety 0.3.0, Synergy 0.2.2). Some pillars use date-stamped versions (RCS Build Protocol v3.0). No global version is imposed.
+
+---
+
+## Atrium Constitution structure (corrected 2026-05-08)
+
+Atrium's `CONSTITUTION.md` v0.1 distinguishes between two governance categories:
+
+**Article I — Six Aims** (ordinary-amendment authority):
+1. Accuracy
+2. Reversibility → mapped to `curatorplug-atrium-reversibility`
+3. Self-sufficiency
+4. Auditability
+5. Composability
+6. Portability
+
+**Article II — Five Non-Negotiable Principles** (reinforced-amendment authority — require 7-day waiting period + amendment codeword):
+1. The MORTAL SIN Rule (no deletion of assessment-derived artifacts)
+2. Hash-Verify-Before-Move → enforced by `curatorplug-atrium-safety` v0.3.0
+3. Citation Chain Preservation → design drafted as `curatorplug-atrium-citation` (v0.1 DRAFT)
+4. No Silent Failures (behavioral / cross-cutting; not currently a separate plugin)
+5. Atomic Operations Where Atomicity Is Claimed (per-tool implementation discipline; not currently a separate plugin)
+
+Principles are stricter than Aims: amending a Principle requires the amendment codeword (proposed: `Keystone`) AND a 7-day waiting period AND written rationale. Aims are merely strongly normative and amend by ordinary process.
 
 ---
 

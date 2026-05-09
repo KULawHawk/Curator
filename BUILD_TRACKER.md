@@ -6,6 +6,49 @@
 
 ---
 
+## [v0.2 candidate — ecosystem expansion] curatorplug-atrium-citation
+
+**Drafted:** 2026-05-08 during Continue iteration 2.
+**Severity:** Forward-looking ecosystem work — v0.1 DESIGN is drafted, awaiting Jake's DM ratification before bootstrap.
+**Effort estimate:** ~7h total (P1 scaffolding ~3h + P2 CLI/audit ~3h + P3 release ~1h), spread across 1–2 sessions after ratification.
+
+### What it is
+
+A new constitutional plugin matching the structural pattern of `curatorplug-atrium-safety` v0.3.0, but enforcing Atrium **Principle 3 (Citation Chain Preservation)** instead of Principle 2 (Hash-Verify-Before-Move). Verifies that cross-source writes produce corresponding `lineage_edges` rows; surfaces gaps via a deferred `curator citation sweep` CLI subcommand.
+
+DESIGN doc lives at:
+- Workspace authoritative: `C:\Users\jmlee\Desktop\AL\curatorplug-atrium-citation-DESIGN.md` (~20 KB)
+- Git-backed copy: `Curator/docs/CURATORPLUG_ATRIUM_CITATION_DESIGN.md` (identical)
+
+### Six DMs awaiting Jake's ratification
+
+Full text in the DESIGN doc §3. Recommendations briefly:
+
+| DM | Question | Recommended |
+|---|---|---|
+| **DM-1** | Enforcement mode | **Advisory** (log + audit, allow write to proceed). Refusing on missing lineage would turn debuggability problems into user-facing failures, violating Principle 4 transitively. |
+| **DM-2** | Scope of citation requirement | **Cross-source writes only.** Same-source writes (initial scans) don't have a parent file in the index; flagging them would generate noise. |
+| **DM-3** | Verification mechanism | **Deferred sweep** (`curator citation sweep` CLI). Real-time verification would require invasive Curator core changes; sweep ships immediately and matches the Atrium `<product> status` introspection convention. |
+| **DM-4** | Audit channel | **Curator's existing audit log** via `actor='curatorplug.atrium_citation'`. Same pattern as atrium-safety DM-3 (ratified). |
+| **DM-5** | Plugin registration | **Setuptools entry point** under `[project.entry-points.curator]`. Same as atrium-safety DM-4 (ratified). |
+| **DM-6** | Cross-product scope | **Curator-only for v0.1.** Cross-product enforcement waits for SIP v1.0 per Atrium Constitution Article IV. |
+
+### Relationship to other plugins
+
+- **`curatorplug-atrium-safety`** (v0.3.0 stable) implements Principle 2 (Hash-Verify-Before-Move). Refuses non-compliant writes.
+- **`curatorplug-atrium-reversibility`** (DESIGN-only at `84ee978`, GitHub repo not yet created) implements Aim 2 (Reversibility, an Article I aim, not an Article II principle).
+- **`curatorplug-atrium-citation`** (this entry) implements Principle 3 (Citation Chain Preservation). Observes citation gaps; advisory mode only.
+
+The three plugins are independent: install any subset; each remains uninstallable per Aim 3 (Self-sufficiency).
+
+### Why deferred from immediate implementation
+
+The design needs Jake's DM ratification before code is written. Recommended decisions are deliberately conservative for v0.1 (advisory mode, deferred sweep, Curator-only); aggressive options can be revisited in v0.2+ once observability data shows whether real-time enforcement is warranted.
+
+Once DMs ratified, P1 cycle bootstraps the repo at the path `C:\Users\jmlee\Desktop\AL\curatorplug-atrium-citation\` matching the atrium-safety repo layout.
+
+---
+
 ## [v1.5.0 candidate] API hardening: sentinel-default for `apply()` + `run_job()` policy kwargs
 
 **Discovered:** 2026-05-08 during Tracer Phase 4 P3 e2e test pass.
