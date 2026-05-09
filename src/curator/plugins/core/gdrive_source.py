@@ -38,7 +38,7 @@ Curator simply doesn't claim ``gdrive:`` source_ids in that case.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 
 from loguru import logger
 
@@ -48,6 +48,9 @@ from curator.models.types import (
     SourcePluginInfo,
 )
 from curator.plugins.hookspecs import hookimpl
+
+if TYPE_CHECKING:
+    from curator.storage.repositories.source_repo import SourceRepository
 
 
 SOURCE_TYPE = "gdrive"
@@ -216,6 +219,48 @@ class Plugin:
 
     def __init__(self) -> None:
         self._client_cache: dict[str, Any] = {}
+        # v1.5.1: per-source-id config cache. Populated lazily by
+        # _resolve_config() from one of three sources (in order):
+        #   1. options['source_config'] (passed by scan via enumerate hook)
+        #   2. self._source_repo lookup (injected by build_runtime)
+        #   3. ~/.curator/gdrive/<alias>/ disk fallback
+        # See _resolve_config docstring for the full resolution order.
+        self._config_cache: dict[str, dict[str, Any]] = {}
+        # v1.5.1: source_repo for SourceConfig lookup. Injected via
+        # set_source_repo() during build_runtime; mirrors the pattern
+        # used by AuditWriterPlugin.set_audit_repo. None until injected.
+        # When None, _resolve_config falls back to disk (which loses
+        # any custom root_folder_id from the SourceConfig).
+        self._source_repo: "SourceRepository | None" = None
+
+    def set_source_repo(self, source_repo: "SourceRepository") -> None:
+        """Inject the source_repo so the plugin can look up SourceConfig
+        by source_id at hook-call time (v1.5.1).
+
+        Called by ``build_runtime`` once the source_repo is constructed.
+        Mirrors :meth:`AuditWriterPlugin.set_audit_repo`.
+
+        BEFORE injection: hooks like ``curator_source_write`` had no
+        way to retrieve the SourceConfig (the hookspec doesn't pass
+        it as an arg, and ``options={}`` was hardcoded). The plugin
+        would fail with "gdrive source config requires both
+        'client_secrets_path' and 'credentials_path'" because
+        :func:`_build_drive_client` was called with empty config.
+
+        AFTER injection: hooks call :meth:`_resolve_config` which uses
+        ``self._source_repo.get(source_id)`` as a fallback when
+        ``options`` doesn't carry a ``source_config``. The plugin can
+        now build a real Drive client without depending on the caller
+        to pass config.
+
+        See ``CURATOR_GDRIVE_PLUGIN_CONFIG_INJECTION_DESIGN.md`` for the
+        v1.5.1 architectural fix this enables.
+        """
+        self._source_repo = source_repo
+        logger.debug(
+            "gdrive_source: source_repo injected; SourceConfig lookups "
+            "now route through the index instead of disk-only fallback"
+        )
 
     # ------------------------------------------------------------------
     # Test/dev hook for injecting a pre-built or mocked client
@@ -558,7 +603,13 @@ class Plugin:
         if client is None:
             return None
 
-        target_parent = parent_id or "root"
+        # v1.5.1: translate "/" / "\\" / "" parent sentinels to the
+        # configured root_folder_id. The migration service builds
+        # parent_id from path semantics (Path(dst_path).parent), which
+        # yields "/" for top-level destinations -- not a valid Drive
+        # folder ID. _resolve_parent_id() catches the sentinels and
+        # routes them to the SourceConfig's root_folder_id.
+        target_parent = self._resolve_parent_id(source_id, parent_id)
 
         # Pre-flight existence check (Drive permits duplicate titles
         # in one folder, so we must check explicitly to honor overwrite
@@ -625,11 +676,22 @@ class Plugin:
 
         Returns None on construction failure (logged); the calling hook
         should propagate by returning None too.
+
+        v1.5.1: uses :meth:`_resolve_config` to find the SourceConfig
+        instead of relying solely on ``options.get('source_config')``
+        (which was always empty for write/read_bytes/stat/delete/rename
+        because those hooks don't carry options through the hookspec).
         """
         client = self._client_cache.get(source_id)
         if client is not None:
             return client
-        config = options.get("source_config") or options
+        config = self._resolve_config(source_id, options)
+        if not config:
+            logger.warning(
+                "gdrive: no SourceConfig resolved for {sid}; client build "
+                "refused", sid=source_id,
+            )
+            return None
         try:
             client = _build_drive_client(config)
         except (ImportError, FileNotFoundError, RuntimeError) as e:
@@ -640,6 +702,94 @@ class Plugin:
             return None
         self._client_cache[source_id] = client
         return client
+
+    def _resolve_config(
+        self,
+        source_id: str,
+        options: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Find this source's config dict, in priority order (v1.5.1).
+
+        1. ``options['source_config']`` -- passed by the scan service
+           through the enumerate hookspec. Always preferred when
+           present.
+        2. ``self._config_cache[source_id]`` -- previously resolved
+           and cached.
+        3. ``self._source_repo.get(source_id).config`` -- injected
+           via :meth:`set_source_repo`; reads from the SQLite
+           ``sources`` table. This is the production path for hooks
+           like ``curator_source_write`` that don't carry options
+           through the hookspec.
+        4. ``source_config_for_alias(alias)`` -- conventional disk
+           layout under ``~/.curator/gdrive/<alias>/``. Used when no
+           SourceConfig is available; loses any custom
+           ``root_folder_id``.
+
+        Returns None if no config resolves.
+        """
+        # 1. Caller-provided options (scan path)
+        cfg = options.get("source_config")
+        if cfg and cfg.get("client_secrets_path"):
+            self._config_cache[source_id] = cfg
+            return cfg
+        # 2. Cache from prior resolution
+        cached = self._config_cache.get(source_id)
+        if cached:
+            return cached
+        # 3. SourceRepository lookup (injected by build_runtime)
+        if self._source_repo is not None:
+            try:
+                src = self._source_repo.get(source_id)
+            except Exception as e:
+                logger.warning(
+                    "gdrive: source_repo lookup failed for {sid}: {e}",
+                    sid=source_id, e=e,
+                )
+                src = None
+            if src is not None and src.config and \
+                    src.config.get("client_secrets_path"):
+                self._config_cache[source_id] = src.config
+                return src.config
+        # 4. Disk fallback via conventional layout
+        if source_id == SOURCE_TYPE:
+            alias = "default"
+        elif source_id.startswith(f"{SOURCE_TYPE}:"):
+            alias = source_id.split(":", 1)[1]
+        else:
+            return None
+        try:
+            from curator.services.gdrive_auth import source_config_for_alias
+            cfg = source_config_for_alias(alias)
+        except Exception as e:
+            logger.warning(
+                "gdrive: disk fallback config load failed for {sid}: {e}",
+                sid=source_id, e=e,
+            )
+            return None
+        if cfg and cfg.get("client_secrets_path"):
+            self._config_cache[source_id] = cfg
+            return cfg
+        return None
+
+    def _resolve_parent_id(self, source_id: str, parent_id: str) -> str:
+        """Translate a migration-supplied ``parent_id`` to a Drive folder ID (v1.5.1).
+
+        The migration service builds parent_id from path semantics:
+        ``Path(dst_path).parent``. For dst_path=``/session_b_test_1.txt``
+        this yields ``parent_id="/"`` which is NOT a valid Drive folder
+        ID. We map a few well-known "root" sentinels to the configured
+        ``root_folder_id`` from this source's SourceConfig (or to
+        ``"root"`` as a final fallback for the user's My Drive root).
+
+        Drive folder IDs are alphanumeric strings ~28 chars long; the
+        sentinel mapping below catches the common "this means root"
+        cases without false positives on real folder IDs.
+        """
+        ROOT_SENTINELS = ("/", "\\", "", ".")
+        if parent_id in ROOT_SENTINELS or parent_id is None:
+            cfg = self._config_cache.get(source_id) or {}
+            return cfg.get("root_folder_id") or "root"
+        return parent_id
 
 
 __all__ = ["Plugin", "SOURCE_TYPE"]

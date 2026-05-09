@@ -155,6 +155,18 @@ def build_runtime(
     if audit_writer is not None:
         audit_writer.set_audit_repo(audit_repo)
 
+    # v1.5.1: inject source_repo into the gdrive_source plugin so its
+    # write/read_bytes/stat/delete/rename hooks can resolve SourceConfig
+    # by source_id at hook-call time. Mirrors the audit_writer injection
+    # above. Without this, those hooks would have no way to retrieve the
+    # OAuth credentials path or the configured root_folder_id (the
+    # hookspecs don't carry options through their signatures, and the
+    # plugin previously hardcoded options={} when calling _get_or_build_client).
+    # See plugins/core/gdrive_source.py Plugin.set_source_repo() docstring.
+    gdrive_plugin = pm.get_plugin("curator.core.gdrive_source")
+    if gdrive_plugin is not None and hasattr(gdrive_plugin, "set_source_repo"):
+        gdrive_plugin.set_source_repo(source_repo)
+
     # Services
     audit = AuditService(audit_repo)
     classification = ClassificationService(pm)

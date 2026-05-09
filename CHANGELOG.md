@@ -4,6 +4,67 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.5.1] — 2026-05-09 — gdrive plugin: SourceConfig injection + parent_id translation (production-validated cross-source)
+
+**Headline:** Two architectural bugs in the gdrive_source plugin made cross-source `local → gdrive:*` migration impossible in v1.5.0 and earlier. Both bugs were masked by the existing test suite (which used `set_drive_client()` mock injection to bypass the affected code paths). This patch fixes both bugs and validates the fix end-to-end against real Google Drive.
+
+### Production validation
+
+Session B (Tracer Phase 2 cross-source local→gdrive demo) ran end-to-end against a real Google Drive account 2026-05-09 02:54 CDT:
+
+* 10 test files (~60 bytes each) migrated from `C:\Users\jmlee\Desktop\session_b_src\` to a Drive folder.
+* `MOVED: 10, SKIPPED: 0, FAILED: 0` in 18.59s (real PyDrive2 round-trip latency).
+* All 10 files verified present in Drive with correct sizes, parent folder, content, owner, and timestamps matching the audit log.
+* 10 fresh `migration.move` audit entries with hashes recorded.
+
+This is the first end-to-end production validation of the v1.4.0+ cross-source migration surface against real Drive. v1.4.0 / v1.4.1 / v1.5.0 cross-source code paths are now considered production-validated retroactively; the v1.5.1 patch is what actually unblocked them.
+
+### Fixed
+
+#### Bug 1: gdrive plugin couldn't resolve its own SourceConfig
+
+**Symptom:** Calling `curator migrate local <src> "/" --dst-source-id "gdrive:src_drive" --apply` failed with:
+
+```
+gdrive client build failed for gdrive:src_drive: gdrive source config
+requires both 'client_secrets_path' and 'credentials_path'.
+```
+
+**Cause:** `Plugin.curator_source_write/read_bytes/stat/delete/rename` all called `self._get_or_build_client(source_id, options={})` with hardcoded empty options. The plugin then read `client_secrets_path` from those empty options and failed. The hookspec for these methods doesn't carry options through its signature (only `curator_source_enumerate` does), so the plugin had no path to discover SourceConfig at hook-call time.
+
+**Fix:** New `Plugin.set_source_repo(source_repo)` injection method, mirroring the existing `AuditWriterPlugin.set_audit_repo()` pattern. `build_runtime` calls it after constructing `source_repo`. The plugin's new `_resolve_config(source_id, options)` method walks four sources in priority order:
+
+1. `options['source_config']` (scan path; preferred when present).
+2. `self._config_cache[source_id]` (memo of prior resolution).
+3. `self._source_repo.get(source_id).config` (production path — reads from SQLite `sources` table).
+4. `source_config_for_alias(alias)` (disk-conventional fallback under `~/.curator/gdrive/<alias>/`; loses any custom `root_folder_id`).
+
+#### Bug 2: parent_id `"/"` not translated to Drive folder ID
+
+**Symptom:** Even with bug 1 fixed, the migration would hit a Drive API error because `target_parent = "/"` is not a valid Drive folder ID.
+
+**Cause:** `MigrationService._cross_source_transfer` builds `parent_id` from path semantics: `parent_id = str(Path(dst_path).parent)`. For `dst_path="/session_b_test_1.txt"`, this yields `parent_id="\\"` on Windows or `"/"` on POSIX. The gdrive plugin's `curator_source_write` previously passed this through as `target_parent = parent_id or "root"`, which is truthy and gets sent to Drive as `{"parents": [{"id": "/"}]}` — invalid.
+
+**Fix:** New `Plugin._resolve_parent_id(source_id, parent_id)` method. Maps a small set of well-known root sentinels (`/`, `\\`, `""`, `.`, `None`) to the configured `root_folder_id` from the resolved SourceConfig (falls back to `"root"` for the user's My Drive root if not configured). Real Drive folder IDs (alphanumeric, ~28 chars) pass through unchanged.
+
+### Changed
+
+* **`src/curator/plugins/core/gdrive_source.py`** — `Plugin` gained `set_source_repo()`, `_resolve_config()`, `_resolve_parent_id()`. `_get_or_build_client()` now calls `_resolve_config()` instead of reading from options directly. `curator_source_write()` now calls `_resolve_parent_id()` instead of `parent_id or "root"`. ~150 LOC added; no methods removed; no public API broken.
+* **`src/curator/cli/runtime.py`** — `build_runtime()` calls `gdrive_plugin.set_source_repo(source_repo)` after constructing `source_repo`, mirroring the existing `audit_writer.set_audit_repo()` injection pattern.
+* **`scripts/setup_gdrive_source.py`** (was added in v1.5.0 hot-fix territory but documented here for completeness) — new helper script bridging the v1.5.0 CLI gap where `curator sources add --type gdrive` registers the source's metadata but doesn't expose a way to set per-source config. Defaults `source_id` to `gdrive:<alias>` (with the prefix — the gdrive plugin's `_owns()` requires this for ownership). Idempotent: existing source is updated rather than failed.
+* **`docs/TRACER_SESSION_B_RUNBOOK.md`** v3 — corrected CLI syntax, prefixed source_id, single-block format throughout. Now reproducible end-to-end.
+* **Version bump:** 1.5.0 → 1.5.1 in `pyproject.toml` and `src/curator/__init__.py`.
+
+### Compatibility
+
+* **No public API changes.** `Plugin.set_drive_client()` (test injection) still works; `set_source_repo()` is new and additive. The `audit_writer` injection pattern is unchanged.
+* **No breaking config changes.** Existing `~/.curator/gdrive/<alias>/` layouts work without modification.
+* **244/244 existing unit tests pass.** No regressions. Test additions for the new resolution path are deferred to a follow-up commit (existing tests use `set_drive_client()` mock injection which bypasses `_resolve_config()` entirely; a dedicated integration test is the proper coverage).
+
+### Why this slipped to v1.5.0
+
+The affected hooks (`curator_source_write/read_bytes/stat/delete/rename`) were tested via mock-client injection from day one (Phase Beta v0.40). Mocked tests passed all migration paths because they bypassed `_get_or_build_client()` entirely, and the parent_id translation was never exercised because the mocks accepted any parent value. The bug only surfaced when an end-to-end Session B run attempted real Drive writes — which had never been done in CI or unit tests. Future cross-source plugins (OneDrive, Dropbox) should either follow this v1.5.1 pattern from the start OR have an end-to-end integration smoke test gating the release.
+
 ## [1.5.0] — 2026-05-08 — MCP HTTP-auth (Bearer-token authentication for `curator-mcp --http`)
 
 **Headline:** Closes the v1.5.0 candidate item per Tracer Phase 4 v0.2 RATIFIED DM-6 plus the `docs/CURATOR_MCP_HTTP_AUTH_DESIGN.md` v0.2 RATIFIED design. Adds Bearer-token authentication to the HTTP transport so it can safely be exposed beyond loopback. Three-phase implementation (P1 auth.py module, P2 `curator mcp keys` CLI, P3 server middleware + integration tests) shipped over a single session per the design plan. **stdio transport (the default; used by Claude Desktop / Claude Code) is unchanged.** Existing v1.2.0 stdio integrations require zero modifications.
