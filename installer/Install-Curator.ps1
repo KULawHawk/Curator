@@ -374,7 +374,7 @@ if ($failed) {
 }
 
 # ============================================================================
-# STEP 7: Canonical DB
+# STEP 7: Canonical DB + canonical TOML config
 # ============================================================================
 Write-Step 7 $TotalSteps "Initialize canonical DB at $CanonicalDb"
 
@@ -384,6 +384,19 @@ if (-not (Test-Path $dbDir)) {
         New-Item -ItemType Directory -Path $dbDir -Force | Out-Null
         Write-Sub "created: $dbDir"
     }
+}
+
+# Write/update the canonical curator.toml that pins curator-mcp to this DB.
+# This is what CURATOR_CONFIG env var (set in claude_desktop_config.json)
+# points at, so Claude Desktop's curator-mcp picks up the right DB without
+# needing a --db CLI flag (curator-mcp doesn't support --db; only the
+# 'curator' CLI does).
+$CanonicalToml = Join-Path $dbDir "curator.toml"
+$tomlContent = "# Canonical Curator config.`n# Loaded when CURATOR_CONFIG env var points at this file.`n# Configured by Claude Desktop's claude_desktop_config.json.`n# Auto-managed by Install-Curator.ps1 -- edit at your own risk.`n`n[curator]`ndb_path = `"$($CanonicalDb.Replace('\', '\\'))`"`nlog_path = `"auto`"`nlog_level = `"INFO`"`n"
+if ($PSCmdlet.ShouldProcess($CanonicalToml, "Write canonical curator.toml")) {
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($CanonicalToml, $tomlContent, $utf8NoBom)
+    Write-Good "wrote: $CanonicalToml"
 }
 
 $integrityScript = @"
@@ -473,10 +486,16 @@ if (-not $cfg.mcpServers) {
     $cfg | Add-Member -MemberType NoteProperty -Name mcpServers -Value (@{} | ConvertTo-Json -Depth 1 | ConvertFrom-Json) -Force
 }
 
-# Build curator entry
+# Build curator entry — uses CURATOR_CONFIG env var to point at a canonical
+# TOML config file. Cannot use --db CLI flag here because curator-mcp.exe
+# does NOT accept --db (only the 'curator' CLI does). The TOML approach is
+# the documented mechanism per src/curator/config/__init__.py docstring.
 $curatorEntry = [PSCustomObject]@{
     command = $VenvCuratorMcp
-    args = @("--db", $CanonicalDb)
+    args = @()
+    env = [PSCustomObject]@{
+        CURATOR_CONFIG = $CanonicalToml
+    }
 }
 # Set or replace
 if ($cfg.mcpServers.curator) {
