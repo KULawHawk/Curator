@@ -532,11 +532,18 @@ class TestSameSourceStillWorks:
         )
         report = rt.migration.apply(plan)
         assert report.moved_count == 1
-        # Audit entry for same-source move does NOT have cross_source marker
+        # v1.6.1: same-source migration.move events DO have cross_source
+        # marker (False) for schema parity with cross-source events.
+        # Pre-v1.6.1 contract was 'cross_source key absent for same-source';
+        # new contract is 'cross_source always present, value indicates
+        # whether it was actually cross-source'. Downstream consumers
+        # (citation plugin v0.2+) use the explicit boolean.
         entries = rt.audit_repo.query(action="migration.move", limit=5)
         assert len(entries) == 1
         details = entries[0].details or {}
-        assert "cross_source" not in details
+        assert details.get("cross_source") is False
+        assert details.get("src_source_id") == "local"
+        assert details.get("dst_source_id") == "local"
 
 
 # ===========================================================================
@@ -920,3 +927,123 @@ class TestPhase4CrossSourceConflictResolution:
         assert (dst_root / "baz.curator-1.bin").read_bytes() == b"slot 1 occupied"
 
         # Audit details (suffix_n=2 etc.) verified in unit test pass.
+
+
+# ===========================================================================
+# v1.6.1: schema-symmetric audit details (cross_source / src/dst source_id)
+# ===========================================================================
+
+class TestAuditDetailsV161Symmetry:
+    """v1.6.1: every migration.move and migration.copy audit event has
+    the same set of detail keys regardless of same-source or cross-source
+    path. Specifically: src_path, dst_path, size, xxhash3_128,
+    src_source_id, dst_source_id, cross_source.
+
+    Phase 2 paths additionally include job_id.
+
+    Pre-v1.6.1, same-source events lacked src_source_id/dst_source_id/
+    cross_source, forcing downstream consumers (citation plugin v0.2+)
+    to special-case 'absence means same-source'. Tests in this class
+    pin the new schema so future drift is caught.
+    """
+
+    def test_phase1_same_source_move_includes_full_schema(
+        self, cross_source_runtime, tmp_path,
+    ):
+        rt = cross_source_runtime
+        src_root = tmp_path / "primary"
+        dst_root = tmp_path / "primary_renamed"
+        _seed_real_file(rt, "local", src_root / "f.txt")
+        plan = rt.migration.plan(
+            src_source_id="local", src_root=str(src_root),
+            dst_source_id="local", dst_root=str(dst_root),
+        )
+        rt.migration.apply(plan)
+
+        entries = rt.audit_repo.query(action="migration.move", limit=5)
+        assert len(entries) == 1
+        details = entries[0].details or {}
+        # Required v1.6.1 keys
+        assert details["src_source_id"] == "local"
+        assert details["dst_source_id"] == "local"
+        assert details["cross_source"] is False
+        # Pre-existing keys still present
+        assert "src_path" in details
+        assert "dst_path" in details
+        assert "size" in details
+        assert "xxhash3_128" in details
+
+    def test_phase1_cross_source_move_marks_cross_source_true(
+        self, cross_source_runtime, tmp_path,
+    ):
+        rt = cross_source_runtime
+        src_root = tmp_path / "primary"
+        dst_root = tmp_path / "vault"
+        _seed_real_file(rt, "local", src_root / "f.txt")
+        plan = rt.migration.plan(
+            src_source_id="local", src_root=str(src_root),
+            dst_source_id="local:vault", dst_root=str(dst_root),
+        )
+        rt.migration.apply(plan)
+
+        entries = rt.audit_repo.query(action="migration.move", limit=5)
+        assert len(entries) == 1
+        details = entries[0].details or {}
+        assert details["src_source_id"] == "local"
+        assert details["dst_source_id"] == "local:vault"
+        assert details["cross_source"] is True
+
+    def test_phase1_same_source_copy_includes_full_schema(
+        self, cross_source_runtime, tmp_path,
+    ):
+        """keep_source path (migration.copy) gets the same v1.6.1 schema."""
+        rt = cross_source_runtime
+        src_root = tmp_path / "primary"
+        dst_root = tmp_path / "primary_archive"
+        _seed_real_file(rt, "local", src_root / "f.txt")
+        plan = rt.migration.plan(
+            src_source_id="local", src_root=str(src_root),
+            dst_source_id="local", dst_root=str(dst_root),
+        )
+        rt.migration.apply(plan, keep_source=True)
+
+        entries = rt.audit_repo.query(action="migration.copy", limit=5)
+        assert len(entries) == 1
+        details = entries[0].details or {}
+        assert details["src_source_id"] == "local"
+        assert details["dst_source_id"] == "local"
+        assert details["cross_source"] is False
+
+    def test_schema_symmetry_keys_match_across_paths(
+        self, cross_source_runtime, tmp_path,
+    ):
+        """The set of detail keys for same-source and cross-source
+        events differs only by Phase-2-specific job_id."""
+        rt = cross_source_runtime
+
+        # Same-source migration
+        same_src = tmp_path / "same_src"
+        same_dst = tmp_path / "same_dst"
+        _seed_real_file(rt, "local", same_src / "a.txt")
+        plan_same = rt.migration.plan(
+            src_source_id="local", src_root=str(same_src),
+            dst_source_id="local", dst_root=str(same_dst),
+        )
+        rt.migration.apply(plan_same)
+
+        # Cross-source migration
+        cross_src = tmp_path / "cross_src"
+        cross_dst = tmp_path / "cross_dst"
+        _seed_real_file(rt, "local", cross_src / "b.txt")
+        plan_cross = rt.migration.plan(
+            src_source_id="local", src_root=str(cross_src),
+            dst_source_id="local:vault", dst_root=str(cross_dst),
+        )
+        rt.migration.apply(plan_cross)
+
+        entries = rt.audit_repo.query(action="migration.move", limit=10)
+        assert len(entries) >= 2
+        same_keys = set((entries[-1].details or {}).keys())
+        cross_keys = set((entries[-2].details or {}).keys())
+        # Exact same key set in phase 1 (no job_id either way)
+        assert same_keys == cross_keys

@@ -810,18 +810,30 @@ class MigrationService:
                 src_source_id=src_source_id, dst_source_id=dst_source_id,
             )
             return
+        # v1.6.1: pass source_id (src == dst for same-source) so the
+        # helper-emitted audit events get a complete cross_source/source_id
+        # detail schema. Without this, phase 1 same-source events were
+        # missing the cross_source flag that downstream consumers (citation
+        # plugin v0.2+) need to filter cross-source events.
         self._execute_one_same_source(
             move, verify_hash=verify_hash, keep_source=keep_source,
+            source_id=src_source_id,
         )
 
     def _execute_one_same_source(
         self, move: MigrationMove, *, verify_hash: bool,
         keep_source: bool = False,
+        source_id: str | None = None,
     ) -> None:
         """Same-source per-file discipline (the existing Phase 1 fast path).
 
         Uses ``shutil.copy2`` for the bytes transfer and re-reads the dst
         file from the local filesystem to compute the verification hash.
+
+        v1.6.1: ``source_id`` (defaults to None for backward compat with
+        pre-Session-B callers) is passed through to the audit helpers so
+        emitted events include ``src_source_id`` / ``dst_source_id`` /
+        ``cross_source`` keys uniformly with the cross-source path.
         """
         src_p = Path(move.src_path)
         dst_p = Path(move.dst_path)
@@ -857,7 +869,11 @@ class MigrationService:
             if keep_source:
                 # keep-source: dst created+verified, src untouched, index NOT updated
                 move.outcome = MigrationOutcome.COPIED
-                self._audit_copy(move)
+                self._audit_copy(
+                    move,
+                    src_source_id=source_id,
+                    dst_source_id=source_id,
+                )
                 return
 
             # Step 6: update index (curator_id stays, source_path changes)
@@ -869,7 +885,11 @@ class MigrationService:
             move.outcome = MigrationOutcome.MOVED
 
             # Step 8: audit (only on success)
-            self._audit_move(move)
+            self._audit_move(
+                move,
+                src_source_id=source_id,
+                dst_source_id=source_id,
+            )
 
         except (OSError, shutil.Error) as e:
             # Copy failed BEFORE index update -- src is intact, dst may be partial
@@ -988,7 +1008,11 @@ class MigrationService:
 
         if keep_source:
             move.outcome = MigrationOutcome.COPIED
-            self._audit_copy(move)
+            self._audit_copy(
+                move,
+                src_source_id=src_source_id,
+                dst_source_id=dst_source_id,
+            )
             return
 
         # Step 6: update FileEntity -- BOTH source_id AND source_path change
@@ -1030,7 +1054,11 @@ class MigrationService:
             ).strip()
 
         move.outcome = final_outcome
-        self._audit_move(move)
+        self._audit_move(
+            move,
+            src_source_id=src_source_id,
+            dst_source_id=dst_source_id,
+        )
 
     def _cross_source_overwrite_with_backup(
         self,
@@ -1900,22 +1928,40 @@ class MigrationService:
         )
         return (True, None, None, None)
 
-    def _audit_move(self, move: MigrationMove) -> None:
-        """Append an audit entry for a successful move. Best-effort."""
+    def _audit_move(
+        self,
+        move: MigrationMove,
+        *,
+        src_source_id: str | None = None,
+        dst_source_id: str | None = None,
+    ) -> None:
+        """Append an audit entry for a successful move. Best-effort.
+
+        v1.6.1: emits ``src_source_id`` / ``dst_source_id`` / ``cross_source``
+        in details when source IDs are provided. ``cross_source`` is
+        derived from ``src_source_id != dst_source_id``. When both are
+        None (legacy callers), the source-related keys are omitted to
+        preserve backward compat with the pre-v1.6.1 schema.
+        """
         if self.audit is None:
             return
         try:
+            details: dict[str, Any] = {
+                "src_path": move.src_path,
+                "dst_path": move.dst_path,
+                "size": move.size,
+                "xxhash3_128": move.verified_xxhash or move.src_xxhash,
+            }
+            if src_source_id is not None and dst_source_id is not None:
+                details["src_source_id"] = src_source_id
+                details["dst_source_id"] = dst_source_id
+                details["cross_source"] = src_source_id != dst_source_id
             entry = AuditEntry(
                 actor="curator.migrate",
                 action="migration.move",
                 entity_type="file",
                 entity_id=str(move.curator_id),
-                details={
-                    "src_path": move.src_path,
-                    "dst_path": move.dst_path,
-                    "size": move.size,
-                    "xxhash3_128": move.verified_xxhash or move.src_xxhash,
-                },
+                details=details,
             )
             self.audit.insert(entry)
         except Exception as e:  # noqa: BLE001
@@ -1924,27 +1970,42 @@ class MigrationService:
                 cid=move.curator_id, e=e,
             )
 
-    def _audit_copy(self, move: MigrationMove) -> None:
+    def _audit_copy(
+        self,
+        move: MigrationMove,
+        *,
+        src_source_id: str | None = None,
+        dst_source_id: str | None = None,
+    ) -> None:
         """Append an audit entry for a successful keep-source copy. Best-effort.
 
         Distinct from :meth:`_audit_move` so audit log queries can
         differentiate ``migration.move`` (index re-pointed, src trashed)
         from ``migration.copy`` (dst created, src + index untouched).
+
+        v1.6.1: emits ``src_source_id`` / ``dst_source_id`` / ``cross_source``
+        in details when source IDs are provided (see :meth:`_audit_move`
+        docstring for backward-compat semantics).
         """
         if self.audit is None:
             return
         try:
+            details: dict[str, Any] = {
+                "src_path": move.src_path,
+                "dst_path": move.dst_path,
+                "size": move.size,
+                "xxhash3_128": move.verified_xxhash or move.src_xxhash,
+            }
+            if src_source_id is not None and dst_source_id is not None:
+                details["src_source_id"] = src_source_id
+                details["dst_source_id"] = dst_source_id
+                details["cross_source"] = src_source_id != dst_source_id
             entry = AuditEntry(
                 actor="curator.migrate",
                 action="migration.copy",
                 entity_type="file",
                 entity_id=str(move.curator_id),
-                details={
-                    "src_path": move.src_path,
-                    "dst_path": move.dst_path,
-                    "size": move.size,
-                    "xxhash3_128": move.verified_xxhash or move.src_xxhash,
-                },
+                details=details,
             )
             self.audit.insert(entry)
         except Exception as e:  # noqa: BLE001
@@ -2707,8 +2768,11 @@ class MigrationService:
                 progress, verify_hash=verify_hash, keep_source=keep_source,
                 src_source_id=src_source_id, dst_source_id=dst_source_id,
             )
+        # v1.6.1: pass source_id (src == dst for same-source) for the
+        # same audit-detail symmetry as phase 1; see _execute_one_same_source.
         return self._execute_one_persistent_same_source(
             progress, verify_hash=verify_hash, keep_source=keep_source,
+            source_id=src_source_id,
         )
 
     def _execute_one_persistent_same_source(
@@ -2717,11 +2781,17 @@ class MigrationService:
         *,
         verify_hash: bool,
         keep_source: bool = False,
+        source_id: str | None = None,
     ) -> tuple[MigrationOutcome, str | None]:
         """Same-source persistent path (existing Phase 2 fast path).
 
         Uses ``shutil.copy2`` for the bytes transfer and re-reads the dst
         file from the local filesystem to compute the verification hash.
+
+        v1.6.1: ``source_id`` (defaults to None for backward compat) is
+        included in inline audit emissions so phase 2 same-source events
+        carry the same ``cross_source`` / ``src_source_id`` /
+        ``dst_source_id`` keys that phase 2 cross-source events do.
         """
         src_p = Path(progress.src_path)
         dst_p = Path(progress.dst_path)
@@ -2777,18 +2847,26 @@ class MigrationService:
             # keep-source: dst created+verified, src untouched, index NOT updated
             if self.audit is not None:
                 try:
+                    details: dict[str, Any] = {
+                        "src_path": progress.src_path,
+                        "dst_path": progress.dst_path,
+                        "size": progress.size,
+                        "xxhash3_128": verified_hash or src_hash,
+                        "job_id": str(progress.job_id),
+                    }
+                    if source_id is not None:
+                        # v1.6.1: same-source events carry src/dst source_id
+                        # (both equal) and cross_source=False for schema parity
+                        # with phase 2 cross-source emissions.
+                        details["src_source_id"] = source_id
+                        details["dst_source_id"] = source_id
+                        details["cross_source"] = False
                     entry = AuditEntry(
                         actor="curator.migrate",
                         action="migration.copy",
                         entity_type="file",
                         entity_id=str(progress.curator_id),
-                        details={
-                            "src_path": progress.src_path,
-                            "dst_path": progress.dst_path,
-                            "size": progress.size,
-                            "xxhash3_128": verified_hash or src_hash,
-                            "job_id": str(progress.job_id),
-                        },
+                        details=details,
                     )
                     self.audit.insert(entry)
                 except Exception as e:  # noqa: BLE001
@@ -2820,18 +2898,24 @@ class MigrationService:
         # Step 8: audit (with job_id in details for cross-reference)
         if self.audit is not None:
             try:
+                details: dict[str, Any] = {
+                    "src_path": progress.src_path,
+                    "dst_path": progress.dst_path,
+                    "size": progress.size,
+                    "xxhash3_128": verified_hash or src_hash,
+                    "job_id": str(progress.job_id),
+                }
+                if source_id is not None:
+                    # v1.6.1: see _audit_move/_audit_copy v1.6.1 docstring
+                    details["src_source_id"] = source_id
+                    details["dst_source_id"] = source_id
+                    details["cross_source"] = False
                 entry = AuditEntry(
                     actor="curator.migrate",
                     action="migration.move",
                     entity_type="file",
                     entity_id=str(progress.curator_id),
-                    details={
-                        "src_path": progress.src_path,
-                        "dst_path": progress.dst_path,
-                        "size": progress.size,
-                        "xxhash3_128": verified_hash or src_hash,
-                        "job_id": str(progress.job_id),
-                    },
+                    details=details,
                 )
                 self.audit.insert(entry)
             except Exception as e:  # noqa: BLE001

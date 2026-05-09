@@ -4,6 +4,47 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.6.1] — 2026-05-09 — schema-symmetric migration audit details (`cross_source` / `src_source_id` / `dst_source_id` on every event)
+
+**Headline:** Every `migration.move` and `migration.copy` audit event now carries `cross_source`, `src_source_id`, and `dst_source_id` keys regardless of which code path emitted it. Pre-1.6.1 only the cross-source phase 2 path emitted these fields; phase 1 same-source, phase 1 cross-source, and phase 2 same-source emissions all lacked them. This forced downstream consumers (citation plugin v0.2+, audit query tools) to special-case 'absence means same-source.' Now the schema is uniform.
+
+### Why this matters
+
+The atrium-citation plugin v0.2 design (in progress) needs to filter migration audit events by whether they're genuinely cross-source. Pre-1.6.1, only the phase 2 cross-source code path emitted `cross_source: True`; the other three migration code paths (phase 1 same-source, phase 1 cross-source via `_audit_move`/`_audit_copy` helpers, phase 2 same-source inline emission) emitted no marker. Consumers had to interpret missing key as same-source—awkward and error-prone. v1.6.1 makes the schema uniform across all four paths.
+
+This is also the kind of latent inconsistency that causes test-suite drift: the existing `test_same_source_apply_uses_fast_path` test had asserted `'cross_source' not in details` to pin the pre-1.6.1 contract. That test was protecting an asymmetry that needed to change. v1.6.1 inverts the assertion (`details.get('cross_source') is False`) and adds three new tests pinning the new schema.
+
+### Added
+
+* **`src_source_id`, `dst_source_id`, `cross_source`** keys in `details` on all four migration audit emission paths:
+  * Phase 1 same-source via `_audit_move` / `_audit_copy` (lines 1903 / 1927)
+  * Phase 1 cross-source via `_audit_move` / `_audit_copy` (lines 991 / 1033 — these helpers were shared but didn't get the source IDs through; now they do)
+  * Phase 2 same-source inline (lines 2780, 2820)
+  * Phase 2 cross-source inline (lines 2965, 3015 — already had these; unchanged)
+* **4 new regression tests** in `tests/unit/test_migration_cross_source.py` (`TestAuditDetailsV161Symmetry` class):
+  * `test_phase1_same_source_move_includes_full_schema` — same-source `migration.move` has all v1.6.1 keys including `cross_source: False`
+  * `test_phase1_cross_source_move_marks_cross_source_true` — cross-source `migration.move` has `cross_source: True` plus distinct src/dst source IDs
+  * `test_phase1_same_source_copy_includes_full_schema` — keep-source variant (`migration.copy`) gets the same schema
+  * `test_schema_symmetry_keys_match_across_paths` — explicit assertion that the detail key set is identical between same-source and cross-source phase 1 events
+
+### Changed
+
+* **`_audit_move` / `_audit_copy`** in `services/migration.py` gained `src_source_id` and `dst_source_id` kwargs (both optional, default `None` for backward compat with any pre-Session-B caller; in practice all internal callers now pass them).
+* **`_execute_one_same_source` / `_execute_one_persistent_same_source`** gained a `source_id` kwarg. Same-source dispatchers pass `src_source_id` (which equals `dst_source_id` for these paths).
+* **`test_same_source_apply_uses_fast_path`** updated: previously asserted `'cross_source' not in details`; now asserts `details.get('cross_source') is False` plus the new src/dst source_id keys.
+* **Version bump:** 1.6.0 → 1.6.1 in `pyproject.toml` and `src/curator/__init__.py`.
+
+### Compatibility
+
+* **Schema is additive.** Pre-1.6.1 consumers that only checked for the keys they needed (e.g., `src_path`, `dst_path`, `size`, `xxhash3_128`) still work; those keys are unchanged.
+* **Pre-1.6.1 consumers handling missing `cross_source` as 'same-source'** still work, but they're now strictly redundant: the field is always present.
+* **The `_audit_move` / `_audit_copy` signature change** is internal-only; both methods are private (`_`-prefixed) and have no external callers.
+* **319/319 migration + sources + gdrive + runtime + scan tests pass.** No regressions outside the deliberately-updated test that pinned the pre-1.6.1 schema.
+
+### What this unblocks
+
+The atrium-citation plugin can now filter migration audit events by `cross_source` directly without special-casing missing keys. This is a prerequisite for citation plugin v0.2's cross-source-only filter mode (skip same-source moves where lineage is preserved trivially via curator_id constancy; flag genuine cross-source events that warrant deeper provenance review).
+
 ## [1.6.0] — 2026-05-09 — `curator sources config`: native CLI for per-source plugin config
 
 **Headline:** New `curator sources config <id> [--set / --unset / --clear]` subcommand closes the v1.5.0 CLI gap that `scripts/setup_gdrive_source.py` worked around. Cloud-source registration is now a pure CLI workflow with no helper-script dependency. The helper script is kept for backwards compatibility but is no longer required for new setups.
