@@ -68,8 +68,12 @@ def main() -> int:
         "--source-id",
         default=None,
         help=(
-            "Curator source_id to register. Defaults to the alias name "
-            "(e.g. 'src_drive')."
+            "Curator source_id to register. Defaults to 'gdrive:<alias>' "
+            "(e.g. 'gdrive:src_drive'). The 'gdrive:' prefix is REQUIRED "
+            "for the gdrive_source plugin to claim ownership of the source "
+            "-- without the prefix, migration to this source will fail with "
+            "'no registered plugin advertises supports_write'. Override "
+            "only if you have a strong reason and the prefix is preserved."
         ),
     )
     parser.add_argument(
@@ -92,7 +96,22 @@ def main() -> int:
         )
         return 2
 
-    source_id = args.source_id or args.alias
+    # Plugin ownership requires source_id to be 'gdrive' or start with
+    # 'gdrive:' (see Plugin._owns in plugins/core/gdrive_source.py).
+    # Default to 'gdrive:<alias>' so migrations work out of the box.
+    source_id = args.source_id or f"gdrive:{args.alias}"
+    if source_id != "gdrive" and not source_id.startswith("gdrive:"):
+        print(
+            f"ERROR: source_id {source_id!r} does not match the gdrive "
+            f"plugin's ownership pattern. The plugin only claims source_ids "
+            f"that are 'gdrive' or start with 'gdrive:'. Without ownership, "
+            f"the source advertises no capabilities and migration to it "
+            f"fails with 'no registered plugin advertises supports_write'. "
+            f"Re-run with --source-id 'gdrive:{args.alias}' (or omit "
+            f"--source-id to use the default).",
+            file=sys.stderr,
+        )
+        return 2
     display_name = args.display_name or f"Google Drive ({args.alias})"
 
     # Build the config dict that the gdrive_source plugin expects.

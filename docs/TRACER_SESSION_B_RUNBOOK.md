@@ -69,8 +69,12 @@ python scripts\setup_gdrive_source.py src_drive --folder-id PASTE_FOLDER_ID_HERE
 curator sources list
 ```
 
-Expected output: `OK: registered source 'src_drive'` plus a `sources
-list` table showing both `local` and `src_drive` enabled.
+Expected output: `OK: registered source 'gdrive:src_drive'` plus a
+`sources list` table showing both `local` and `gdrive:src_drive`
+enabled. Note the `gdrive:` prefix — it's required for the
+gdrive_source plugin to claim ownership of the source. Without the
+prefix, migration to this source will fail with `no registered plugin
+advertises supports_write`.
 
 If you accidentally use the wrong folder ID, re-run the same command
 with a corrected `--folder-id` — the script is idempotent and will
@@ -115,16 +119,19 @@ Expected: `files seen: 10, new: 10, files hashed: 10`.
 This shows what WOULD migrate without actually doing it:
 
 ```powershell
-curator migrate local $src "/" --dst-source-id src_drive
+curator migrate local $src "/" --dst-source-id "gdrive:src_drive"
 ```
 
 Note the args:
 * `local` — the source plugin id (where files come from)
-* `$src` — the path prefix at the source (only files under here are candidates)
+* `$src` — the path prefix at the source (only files under here are
+  candidates)
 * `"/"` — the destination root (relative to the gdrive source's
   configured `root_folder_id`; "/" means "directly inside the Drive
   folder you registered in step 2")
-* `--dst-source-id src_drive` — the destination source
+* `--dst-source-id "gdrive:src_drive"` — the destination source.
+  Quote it because the colon can confuse some shells, and remember
+  the `gdrive:` prefix is required.
 
 Expected output: a plan showing `SAFE: 10, CAUTION: 0, REFUSE: 0,
 Total: 10` and a list of would-move file pairs.
@@ -134,7 +141,7 @@ Total: 10` and a list of would-move file pairs.
 ## Step 6 — Apply the migration (~2-10 sec depending on Drive latency)
 
 ```powershell
-curator migrate local $src "/" --dst-source-id src_drive --apply
+curator migrate local $src "/" --dst-source-id "gdrive:src_drive" --apply
 ```
 
 Expected: `Migration applied in N.NNs, MOVED: 10, SKIPPED: 0,
@@ -194,7 +201,7 @@ curator scan local $src2
 
 # Start migration with --workers 4 (forces Phase 2 persistent path)
 # IMMEDIATELY hit Ctrl+C after a few file completions land
-curator migrate local $src2 "/" --dst-source-id src_drive --apply --workers 4
+curator migrate local $src2 "/" --dst-source-id "gdrive:src_drive" --apply --workers 4
 # Press Ctrl+C around 1-2 seconds in. The CLI will print partial results.
 
 # List migration jobs to find the interrupted one
@@ -249,6 +256,13 @@ After step 7 succeeds:
 
 ## Document log
 
+* **2026-05-09 v3:** Fixed source_id from `src_drive` to
+  `gdrive:src_drive` (with the colon prefix). The gdrive_source
+  plugin's `_owns()` check requires source_ids to be exactly
+  `'gdrive'` or start with `'gdrive:'`; without the prefix the plugin
+  doesn't claim the source and migration fails with `no registered
+  plugin advertises supports_write`. Updated all migrate commands +
+  setup_gdrive_source.py default + helper-script error message.
 * **2026-05-09 v2:** Rewritten with correct `curator migrate` CLI
   syntax (positional `src_source_id src_root dst_root` rather than
   the `--src/--dst` flags I previously misnamed). Added Step 2 (gdrive
