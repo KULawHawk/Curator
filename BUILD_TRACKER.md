@@ -6,12 +6,12 @@
 
 ---
 
-## [v0.2 candidate — ecosystem expansion] curatorplug-atrium-citation
+## [v0.1.0 RELEASED] curatorplug-atrium-citation ✅
 
 **Drafted:** 2026-05-08 during Continue iteration 2.
 **Scaffolded:** 2026-05-08 (commit `e301a4f` on GitHub).
-**Severity:** Forward-looking ecosystem work — v0.1.0a0 alpha scaffolding shipped; P1 implementation cycle (real verification logic) is next.
-**Effort estimate remaining:** ~6h total (P1 ~3h + P2 integration tests ~3h + P3 release ~1h).
+**P1 SHIPPED:** 2026-05-08 (commit `f472006`, tag `v0.1.0` on GitHub).
+**Severity:** Functional Beta release — sweep + CLI + audit emission all implemented; 34/34 unit tests passing. v0.2 work captured under Known limitations below.
 
 ### What it is
 
@@ -34,41 +34,48 @@ Full text in the DESIGN doc §3. All ratified by Jake's chat reply "1c":
 | **DM-5** | Plugin registration | **Setuptools entry point** under `[project.entry-points.curator]`. Same as atrium-safety DM-4 (ratified). |
 | **DM-6** | Cross-product scope | **Curator-only for v0.1.** Cross-product enforcement waits for SIP v1.0 per Atrium Constitution Article IV. |
 
-### Bootstrap shipped 2026-05-08 (commit `e301a4f`)
+### Bootstrap (v0.1.0a0, commit `e301a4f`)
 
-v0.1.0a0 alpha contains:
+Scaffolded 2026-05-08. `pyproject.toml` with entry-point declaration, namespace-package layout matching atrium-safety, `plugin.py` with hookimpl scaffolding (methods log "P1 stub" markers), `exceptions.py` empty per DM-1 advisory, 6 smoke tests, DESIGN.md/README.md/CHANGELOG/.gitignore. Curator auto-discovery verified.
 
-- `pyproject.toml` with `[project.entry-points.curator]` mapping `atrium_citation = curatorplug.atrium_citation.plugin:plugin` per DM-5.
-- Namespace package layout under `src/curatorplug/atrium_citation/` matching atrium-safety so multiple curatorplug-* packages coexist.
-- `plugin.py` with `AtriumCitationPlugin` class + `curator_plugin_init` and `curator_source_write_post` hookimpl scaffolding. Methods log "P1 stub" markers; real verification logic is P1 work.
-- `exceptions.py` (empty per DM-1 advisory; placeholder for v0.2+ if soft-enforcement is later adopted).
-- `tests/unit/test_plugin.py` with 6 smoke tests — ALL PASSING. Module imports, plugin instantiation, `curator_plugin_init` pm capture, advisory contract for `curator_source_write_post` (does not raise), v0.1 exception-export emptiness.
-- `DESIGN.md` (~22 KB) with all 6 DMs marked RATIFIED.
-- `README.md` + `CHANGELOG.md` + `.gitignore`.
+### P1 (v0.1.0, commit `f472006`, tag `v0.1.0`)
 
-Verified: Curator's plugin discovery picks up the new entry point via `importlib.metadata.entry_points(group="curator")`.
+Shipped 2026-05-08, ~4h after scaffolding. Three new modules + 28 new tests:
 
-### What's next (P1 cycle)
+- **`sweep.py`** — `CitationSweep` class with `run() -> SweepReport`. Walks `audit_repo` for `migration.move` + `migration.copy` events, queries `lineage_repo.get_edges_to(curator_id)` for each, records `CitationGap` entries for files with no inbound edges. Stateless and side-effect-free; the CLI handles audit emission separately. Records errors per-event rather than aborting.
+- **`audit.py`** — `emit_sweep_started` / `emit_gap` / `emit_sweep_completed` helpers + `emit_full_sweep` convenience. All emissions actor=`curatorplug.atrium_citation` per DM-4 RATIFIED. All emissions best-effort: exceptions logged but never raised per DM-1 advisory mode.
+- **`cli.py`** — Typer-based CLI exposed as `curator-citation` console script. Three subcommands: `sweep` (flags `--db`, `--limit`, `--quiet`, `--no-audit`), `status`, `version`. Exit codes: 0 (clean), 1 (gaps found), 2 (errors). Per DM-3 RATIFIED, ships as separate console script rather than `curator citation` subcommand because Curator's CLI doesn't yet have a plugin-extension hook.
 
-- Cross-source detection state machine (DM-2 option ii) listening to `migration.*` audit events.
-- Deferred sweep walking `file_repo` + `lineage_repo` for gap detection.
-- `curator citation sweep` + `curator citation status` CLI subcommands.
-- Audit emission via `curator_audit_event` for `compliance.citation_sweep_started`, `compliance.citation_gap`, `compliance.citation_sweep_completed`.
-- Real unit tests beyond the scaffolding smoke tests + integration tests against Curator runtime.
+Configuration: `pyproject.toml` version `0.1.0a0` → `0.1.0`, Dev Status `Alpha` → `Beta`, added `[project.scripts]` for `curator-citation`, added `typer>=0.9` (transitively present via Curator). `__init__.py` version bumped accordingly.
+
+Tests: 13 sweep tests + 8 audit-emission tests + 7 CLI tests + 6 existing smoke tests = **34/34 passing in 0.36s**. CLI verified manually: `curator-citation version` returns `0.1.0`; `--help` displays subcommand listing; `sweep --help` shows full option set.
+
+### Conservative scope decision (documented for v0.2 refinement)
+
+DM-2 RATIFIED says "cross-source writes only" should require lineage. However, Curator's `migration.move`/`migration.copy` audit details only contain `src_path`, `dst_path`, `size`, `xxhash3_128` — NOT a `cross_source` flag. Determining cross-source-ness retroactively from audit logs would require correlating each path against registered source root paths, which is brittle. **For v0.1, the sweep flags every migration event lacking a lineage edge** (slightly broader than DM-2's stated scope). May produce false positives for legitimate same-source moves. Documented in `sweep.py` docstring + CHANGELOG known-limitations. v0.2 can refine once Curator's audit log carries the flag explicitly.
+
+### What's pending (v0.2+ candidates)
+
+- Cross-source detection refinement (filter to true cross-source events once Curator's audit log carries the flag).
+- Real-time enforcement option (toggle, default off). v0.1's `curator_source_write_post` hook is scaffolding only; v0.2 may add observation recording for live citation-state tracking.
+- Cross-product enforcement. Per DM-6 RATIFIED, this waits for SIP v1.0.
+- Curator subcommand integration. When Curator's CLI gains a plugin-extension API, the citation CLI can register as `curator citation sweep` rather than the standalone `curator-citation sweep`.
+- P2 cycle: integration tests against a real Curator runtime (vs. the P1 unit tests' StubAuditRepo / StubLineageRepo).
 
 ### Relationship to other plugins
 
 - **`curatorplug-atrium-safety`** (v0.3.0 stable) implements Principle 2 (Hash-Verify-Before-Move). Refuses non-compliant writes.
 - **`curatorplug-atrium-reversibility`** (DESIGN-only at `84ee978`, on GitHub at `https://github.com/KULawHawk/curatorplug-atrium-reversibility`) implements Aim 2 (Reversibility, an Article I aim, not an Article II principle). P1 implementation paused.
-- **`curatorplug-atrium-citation`** (this entry, v0.1.0a0 SCAFFOLDED at `e301a4f`, on GitHub at `https://github.com/KULawHawk/curatorplug-atrium-citation`) implements Principle 3 (Citation Chain Preservation). Observes citation gaps; advisory mode only.
+- **`curatorplug-atrium-citation`** (this entry, **v0.1.0 RELEASED** at `f472006`, tag `v0.1.0` on GitHub at `https://github.com/KULawHawk/curatorplug-atrium-citation`) implements Principle 3 (Citation Chain Preservation). Observes citation gaps via deferred sweep; advisory mode only.
 
 The three plugins are independent: install any subset; each remains uninstallable per Aim 3 (Self-sufficiency).
 
 ### Why deferred from immediate implementation
 
-~~The design needs Jake's DM ratification before code is written.~~ ✅ Resolved 2026-05-08. DMs ratified, scaffolding shipped. P1 implementation is the next deliverable.
+~~The design needs Jake's DM ratification before code is written.~~ ✅ Resolved 2026-05-08. DMs ratified.
+~~Scaffolding shipped. P1 implementation is the next deliverable.~~ ✅ Resolved 2026-05-08. P1 shipped same day at tag `v0.1.0`.
 
-Once P1 + P2 cycles complete, v0.1.0 stable can be tagged.
+v0.1.0 (Beta) is the current release. v0.2.0 (cross-source filter refinement + integration tests) is the next milestone but not on the immediate roadmap; it depends on Curator carrying the cross-source flag in audit details (Curator-side change, separate work).
 
 ---
 
