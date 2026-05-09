@@ -161,6 +161,30 @@ if (-not $systemPy -and -not (Test-Path $VenvPy)) {
 if ($systemPy) { Write-Sub "system Python: $systemPy" }
 if (Test-Path $VenvPy) { Write-Sub "venv Python:   $VenvPy (already present)" }
 
+# Detect Claude Desktop install type — surfaces info even when not running
+Write-Sub ""
+$claudeStoreFingerprint = "WindowsApps"
+$claudeProcCheck = Get-Process -Name claude -ErrorAction SilentlyContinue | Select-Object -First 1
+$claudeInstallNote = $null
+if ($claudeProcCheck -and $claudeProcCheck.Path) {
+    if ($claudeProcCheck.Path -match $claudeStoreFingerprint) {
+        $claudeInstallNote = "STORE version (sandboxed). MCP via claude_desktop_config.json IS supported as of late 2025; verified working today."
+    } else {
+        $claudeInstallNote = "standalone .exe install."
+    }
+    Write-Sub ("Claude Desktop: {0}" -f $claudeInstallNote)
+} else {
+    # Probe install paths even when not running
+    $storeDir = "C:\Program Files\WindowsApps"
+    $hasStore = (Test-Path $storeDir) -and (Get-ChildItem $storeDir -Filter "Claude_*" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1)
+    $exeDir1 = "$env:LOCALAPPDATA\AnthropicClaude"
+    $exeDir2 = "$env:LOCALAPPDATA\Programs\Claude"
+    $hasExe = (Test-Path $exeDir1) -or (Test-Path $exeDir2)
+    if ($hasStore) { Write-Sub "Claude Desktop: STORE version detected (not currently running)" }
+    elseif ($hasExe) { Write-Sub "Claude Desktop: .exe install detected (not currently running)" }
+    else { Write-Warn "Claude Desktop: not detected. Config will be written but cannot be verified live." }
+}
+
 # ============================================================================
 # STEP 2: File-lock guard
 # ============================================================================
@@ -533,25 +557,122 @@ if ($PSCmdlet.ShouldProcess($ClaudeCfgPath, "Write updated config")) {
 }
 
 # ============================================================================
-# STEP 9: curator doctor against canonical DB
+# STEP 9: REAL MCP probe — replicates Claude Desktop's launch + verifies tools
 # ============================================================================
-Write-Step 9 $TotalSteps "Stack health check via curator doctor"
+Write-Step 9 $TotalSteps "Verify Claude Desktop's launch path: spawn curator-mcp with same command+args+env"
 
 if ($WhatIfPreference) {
-    Write-Sub "(skipped in dry-run mode; DB doesn't exist yet)"
+    Write-Sub "(skipped in dry-run mode)"
 } else {
-    $env:CURATOR_LOG_LEVEL = "ERROR"
+    # This is the bulletproof check: we replicate exactly what Claude Desktop
+    # will do at startup — spawn curator-mcp.exe with empty args and CURATOR_CONFIG
+    # in the env, send MCP initialize + tools/list, assert >=9 tools come back.
+    # If this fails, the installer caught the bug BEFORE Claude Desktop sees it.
+
+    $probeScript = @"
+import subprocess, json, os, sys
+
+env = os.environ.copy()
+env['CURATOR_CONFIG'] = r'$CanonicalToml'
+env['CURATOR_LOG_LEVEL'] = 'ERROR'
+
+proc = subprocess.Popen(
+    [r'$VenvCuratorMcp'],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    text=True, bufsize=1, env=env,
+)
+
+def send(req):
+    proc.stdin.write(json.dumps(req) + '\n')
+    proc.stdin.flush()
+
+def read_one():
+    return proc.stdout.readline()
+
+try:
+    send({'jsonrpc':'2.0','id':0,'method':'initialize',
+          'params':{'protocolVersion':'2025-06-18','capabilities':{},
+                    'clientInfo':{'name':'installer-probe','version':'0'}}})
+    init_resp = read_one()
+    if not init_resp:
+        raise RuntimeError('no initialize response (process likely crashed)')
+    init_data = json.loads(init_resp)
+    if 'error' in init_data:
+        raise RuntimeError('initialize returned error: ' + json.dumps(init_data['error']))
+
+    send({'jsonrpc':'2.0','method':'notifications/initialized'})
+    send({'jsonrpc':'2.0','id':1,'method':'tools/list'})
+    tools_resp = read_one()
+    if not tools_resp:
+        raise RuntimeError('no tools/list response')
+    tools_data = json.loads(tools_resp)
+    tools = tools_data.get('result',{}).get('tools',[])
+
+    send({'jsonrpc':'2.0','id':2,'method':'tools/call',
+          'params':{'name':'health_check','arguments':{}}})
+    health_resp = read_one()
+    health_data = json.loads(health_resp) if health_resp else {}
+    structured = health_data.get('result',{}).get('structuredContent',{}) if health_resp else {}
+
+    print(json.dumps({
+        'ok': True,
+        'tools_count': len(tools),
+        'tool_names': [t['name'] for t in tools],
+        'health_check': structured,
+    }))
+except Exception as e:
+    err_text = ''
+    try:
+        proc.stdin.close()
+        err_text = proc.stderr.read() if proc.stderr else ''
+    except: pass
+    print(json.dumps({'ok': False, 'error': str(e), 'stderr_first_500': err_text[:500]}))
+finally:
+    try:
+        proc.terminate()
+        proc.wait(timeout=2)
+    except: pass
+"@
+    $tempProbe = [System.IO.Path]::GetTempFileName() + ".py"
+    [System.IO.File]::WriteAllText($tempProbe, $probeScript, (New-Object System.Text.UTF8Encoding $false))
+
     $prevEAP = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        $doctorOut = & $VenvCurator --db $CanonicalDb doctor 2>$null
+        $resultJson = & $VenvPy $tempProbe 2>$null
     } finally {
         $ErrorActionPreference = $prevEAP
+        Remove-Item $tempProbe -ErrorAction SilentlyContinue
     }
-    if ($doctorOut) {
-        $doctorOut -split "`n" | Select-Object -First 18 | ForEach-Object { Write-Sub $_ }
+
+    try {
+        $result = $resultJson | ConvertFrom-Json
+    } catch {
+        Write-Bad "MCP probe returned malformed output. Restoring config backup."
+        Copy-Item $cfgBackup -Destination $ClaudeCfgPath -Force
+        exit 1
+    }
+
+    if ($result.ok) {
+        Write-Good ("MCP probe SUCCESS: {0} tools advertised" -f $result.tools_count)
+        if ($result.tools_count -lt 9) {
+            Write-Warn ("Expected >=9 tools but got {0}; plugins may not all be loading." -f $result.tools_count)
+        }
+        Write-Sub ("Tools: {0}" -f ($result.tool_names -join ', '))
+        if ($result.health_check) {
+            Write-Sub ("health_check: curator_version={0}, plugin_count={1}" -f $result.health_check.curator_version, $result.health_check.plugin_count)
+            Write-Sub ("db_path: {0}" -f $result.health_check.db_path)
+        }
     } else {
-        Write-Warn "curator doctor returned no output"
+        Write-Bad ("MCP probe FAILED: {0}" -f $result.error)
+        if ($result.stderr_first_500) {
+            Write-Sub "stderr from curator-mcp:"
+            ($result.stderr_first_500 -split "`n") | Select-Object -First 8 | ForEach-Object { Write-Sub "  $_" }
+        }
+        Write-Bad "Restoring config from backup since curator-mcp failed real-launch test."
+        Copy-Item $cfgBackup -Destination $ClaudeCfgPath -Force
+        Write-Bad "Config restored. Re-run installer after fixing the underlying issue."
+        exit 1
     }
 }
 
