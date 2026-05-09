@@ -3,14 +3,29 @@
 v1.2.0+. Loads ``CuratorRuntime`` and exposes the read-only tools
 defined in :mod:`curator.mcp.tools` over stdio (default) or HTTP.
 
-See ``Curator/docs/CURATOR_MCP_SERVER_DESIGN.md`` v0.2 §4 for the
-specification this implements.
+v1.5.0+ adds Bearer-token authentication for HTTP transport per
+``docs/CURATOR_MCP_HTTP_AUTH_DESIGN.md`` v0.2 RATIFIED:
+
+* Default behavior: ``curator-mcp --http`` requires authentication.
+  Connections without a valid API key receive 401 Unauthorized.
+* ``--no-auth`` opts out of authentication; in that mode the server
+  still refuses to bind to non-loopback addresses (matches the
+  v1.2.0 hard restriction).
+* Non-loopback binding is allowed when auth is configured.
+
+stdio transport (the default; used by Claude Desktop / Claude Code)
+is unchanged from v1.2.0.
+
+See ``Curator/docs/CURATOR_MCP_SERVER_DESIGN.md`` v0.2 \u00a74 for the
+v1.2.0 design and ``Curator/docs/CURATOR_MCP_HTTP_AUTH_DESIGN.md``
+v0.2 for the v1.5.0 auth additions.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -19,6 +34,9 @@ if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
     from curator.cli.runtime import CuratorRuntime
+
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 def create_server(runtime: "CuratorRuntime") -> "FastMCP":
@@ -30,7 +48,7 @@ def create_server(runtime: "CuratorRuntime") -> "FastMCP":
 
     Args:
         runtime: The ``CuratorRuntime`` whose repos and services the
-            tools will read from. Read-only — no tool in v1.2.0 mutates
+            tools will read from. Read-only -- no tool in v1.2.0 mutates
             runtime state.
 
     Returns:
@@ -59,6 +77,17 @@ def create_server(runtime: "CuratorRuntime") -> "FastMCP":
     return mcp
 
 
+def _has_configured_keys(keys_file: Path) -> bool:
+    """Check whether the keys file has at least one entry."""
+    from curator.mcp.auth import load_keys, KeyFileError
+    try:
+        return len(load_keys(keys_file)) > 0
+    except KeyFileError:
+        # Corrupt file -- treat as no keys; CLI's ``mcp keys list`` will
+        # surface the actual error to the user with better diagnostics.
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     """Console entry point for ``curator-mcp``.
 
@@ -66,9 +95,8 @@ def main(argv: list[str] | None = None) -> int:
     server, runs over the selected transport.
 
     Defaults to stdio transport (the canonical mode for Claude Desktop
-    and Claude Code). HTTP transport is opt-in via ``--http``; see
-    DESIGN.md §4.4 for the rationale and §3 DM-5 for the
-    no-authentication-yet caveat.
+    and Claude Code). HTTP transport is opt-in via ``--http``; v1.5.0+
+    requires authentication for HTTP unless ``--no-auth`` is passed.
 
     Returns:
         Process exit code (0 = success, non-zero = error). The function
@@ -86,9 +114,18 @@ def main(argv: list[str] | None = None) -> int:
         "--http",
         action="store_true",
         help=(
-            "Use HTTP transport instead of stdio (default). HTTP binds "
-            "to 127.0.0.1 by default; v1.2.0 has NO authentication for "
-            "HTTP -- use only for local-network development."
+            "Use HTTP transport instead of stdio (default). HTTP requires "
+            "authentication unless --no-auth is also passed; see "
+            "'curator mcp keys generate' to create a key."
+        ),
+    )
+    parser.add_argument(
+        "--no-auth",
+        action="store_true",
+        help=(
+            "Disable authentication for HTTP transport. ONLY valid with "
+            "--host pointing at a loopback address (127.0.0.1 / localhost / "
+            "::1). Use only for local development."
         ),
     )
     parser.add_argument(
@@ -105,8 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         default="127.0.0.1",
         help=(
             "Host/interface for HTTP transport (default: 127.0.0.1). "
-            "Binding to non-loopback addresses is strongly discouraged "
-            "until v1.3.0 adds API key auth."
+            "Non-loopback binding requires authentication (no --no-auth)."
         ),
     )
     args = parser.parse_args(argv)
@@ -128,28 +164,107 @@ def main(argv: list[str] | None = None) -> int:
     server = create_server(runtime)
 
     if args.http:
-        # DM-5 ratified: HTTP without auth is a v1.2.0-acceptable
-        # development mode but warns loudly. v1.3.0 will add API keys.
-        logger.warning(
-            "curator-mcp HTTP transport in v1.2.0 has NO authentication. "
-            "Bound to {host}:{port}. Do NOT expose to untrusted networks.",
-            host=args.host, port=args.port,
-        )
-        if args.host not in ("127.0.0.1", "localhost", "::1"):
+        return _run_http(server, runtime, args)
+
+    logger.debug("curator-mcp starting in stdio mode")
+    server.run(transport="stdio")
+    return 0
+
+
+def _run_http(server: "FastMCP", runtime: "CuratorRuntime", args) -> int:
+    """Run the FastMCP server over HTTP with auth enforcement.
+
+    Returns the process exit code. Separate from ``main`` to keep the
+    auth wiring + transport selection contained.
+    """
+    from curator.mcp.auth import default_keys_file
+    from curator.mcp.middleware import (
+        BearerAuthMiddleware,
+        make_audit_emitter,
+    )
+
+    keys_file = default_keys_file()
+    is_loopback = args.host in _LOOPBACK_HOSTS
+
+    # ---- Auth gating ----
+
+    if args.no_auth:
+        # --no-auth is the explicit "I want unauthenticated HTTP" path.
+        # Only legal for loopback. Combination with non-loopback is a
+        # configuration error worth refusing loudly.
+        if not is_loopback:
             logger.error(
-                "Refusing to bind to non-loopback address {host} without "
-                "authentication. Use --host 127.0.0.1 for local development "
-                "or wait for v1.3.0 API key support.",
+                "Refusing to bind to non-loopback address {host} with "
+                "--no-auth. Either remove --no-auth (and configure a key "
+                "via 'curator mcp keys generate') or use --host 127.0.0.1.",
                 host=args.host,
             )
             return 2
-        # FastMCP exposes streamable-http as the canonical HTTP transport.
-        server.run(transport="streamable-http", host=args.host, port=args.port)
-    else:
-        logger.debug("curator-mcp starting in stdio mode")
-        server.run(transport="stdio")
+        logger.warning(
+            "curator-mcp HTTP transport with --no-auth has NO authentication. "
+            "Bound to {host}:{port}. Do NOT expose to untrusted networks.",
+            host=args.host, port=args.port,
+        )
+        # No middleware wrapping; behave like v1.2.0.
+        server.run(
+            transport="streamable-http", host=args.host, port=args.port,
+        )
+        return 0
 
+    # Auth-required path: must have at least one configured key.
+    if not _has_configured_keys(keys_file):
+        logger.error(
+            "HTTP transport requires authentication. No API keys found at "
+            "{kf}. Generate one with 'curator mcp keys generate <name>' "
+            "first, or pass --no-auth (loopback-only) for unauthenticated "
+            "local-development use.",
+            kf=keys_file,
+        )
+        return 2
+
+    # Build the audit emitter (ties into Curator's audit log)
+    audit_emitter = (
+        make_audit_emitter(runtime.audit) if runtime.audit else None
+    )
+
+    # Wrap the FastMCP Starlette app with our auth middleware
+    # before handing it to uvicorn.
+    asgi_app = server.streamable_http_app()
+    asgi_app.add_middleware(
+        BearerAuthMiddleware,
+        keys_file=keys_file,
+        audit_emitter=audit_emitter,
+    )
+
+    if is_loopback:
+        logger.info(
+            "curator-mcp HTTP starting on loopback {host}:{port} "
+            "with Bearer auth ({n} key(s) loaded).",
+            host=args.host, port=args.port,
+            n=len(_load_keys_safe(keys_file)),
+        )
+    else:
+        logger.info(
+            "curator-mcp HTTP starting on {host}:{port} with Bearer auth "
+            "({n} key(s) loaded). Non-loopback binding -- ensure your "
+            "network position is appropriate.",
+            host=args.host, port=args.port,
+            n=len(_load_keys_safe(keys_file)),
+        )
+
+    import uvicorn
+
+    uvicorn.run(asgi_app, host=args.host, port=args.port, log_level="warning")
     return 0
+
+
+def _load_keys_safe(keys_file: Path) -> list:
+    """Load keys for the startup log message; return empty list on error."""
+    from curator.mcp.auth import load_keys, KeyFileError
+    try:
+        return load_keys(keys_file)
+    except KeyFileError:
+        return []
 
 
 if __name__ == "__main__":

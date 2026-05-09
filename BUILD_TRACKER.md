@@ -79,6 +79,84 @@ v0.1.0 (Beta) is the current release. v0.2.0 (cross-source filter refinement + i
 
 ---
 
+## [v1.5.0 RELEASED] MCP HTTP-auth (Bearer-token authentication for `curator-mcp --http`) ✅
+
+**Drafted:** 2026-05-08 (`docs/CURATOR_MCP_HTTP_AUTH_DESIGN.md` v0.1).
+**Ratified:** 2026-05-08 (Jake replied "1" affirming all 6 DMs; design v0.2 RATIFIED).
+**P1 SHIPPED:** 2026-05-08 (`721af2b`) — auth.py module + 42 unit tests.
+**P2 SHIPPED:** 2026-05-08 (`e793f8b`) — `curator mcp keys` CLI (4 subcommands) + 24 tests.
+**P3 SHIPPED:** 2026-05-08 — BearerAuthMiddleware + server.py wiring + 23 integration tests; v1.5.0 tagged.
+**Severity:** Minor release — HTTP transport auth is a real API change for non-stdio users; stdio integrations untouched.
+**Effort actual:** ~3.5h across the three phases (matched the design estimate).
+
+### What it is
+
+Bearer-token authentication for `curator-mcp --http`. Adds:
+
+* `~/.curator/mcp/api-keys.json` storage (sha256 hashes; plaintext shown once at generate time).
+* `curator mcp keys generate / list / revoke / show` CLI for management.
+* `BearerAuthMiddleware` (Starlette) that validates `Authorization: Bearer <key>` against the keys file.
+* Audit emission for both successful and failed auth attempts under `actor='curator-mcp'`.
+* `--no-auth` opt-out (loopback-only) for local development.
+* Removes the v1.2.0 hard-refusal of non-loopback `--host`; non-loopback now allowed when auth is configured.
+
+stdio transport (the default for Claude Desktop / Claude Code) is unchanged.
+
+### Six DMs ratified 2026-05-08
+
+All six recommended options ratified by Jake's affirmative reply ("1"). Full text in `docs/CURATOR_MCP_HTTP_AUTH_DESIGN.md` §3.
+
+| DM | Decision |
+|---|---|
+| DM-1 | `Authorization: Bearer <key>` (RFC 6750 standard) |
+| DM-2 | JSON file at `~/.curator/mcp/api-keys.json`, 0600 (Unix) / ACL inheritance (Windows) |
+| DM-3 | `curm_<40-char-random>` format-prefixed keys |
+| DM-4 | Multiple named keys with metadata, individually revocable |
+| DM-5 | Both successful + failed audit emission; successful throttled to 1/key/minute |
+| DM-6 | Auth required by default; `--no-auth` opts out (loopback-only) |
+
+### Three-phase implementation (per DESIGN §6)
+
+**P1 (auth module, ~90 min, commit `721af2b`):**
+* `src/curator/mcp/auth.py` (~340 LOC): constants, `default_mcp_dir()` / `default_keys_file()` honoring `CURATOR_HOME`, `generate_key()` via `secrets.token_urlsafe(30)`, `hash_key()` via SHA-256, `StoredKey` dataclass, `KeyFileError` + `DuplicateNameError`, `_now_iso()`, `_set_secure_permissions()` (Unix 0600), atomic `save_keys()` via tempfile-then-rename, `load_keys()` with corrupt/schema-mismatch handling, `add_key`/`remove_key`/`validate_key`/`update_last_used`.
+* `tests/unit/test_mcp_auth.py` (42 tests, 1 skip).
+* All 7 DESIGN §5.1 acceptance criteria met.
+
+**P2 (CLI, ~75 min, commit `e793f8b`):**
+* `src/curator/cli/mcp_keys.py` (~310 LOC): `mcp_app` typer group with `keys` subgroup; four subcommands (`generate`/`list`/`revoke`/`show`) honoring `--json` and using Rich tables for non-JSON output.
+* `src/curator/cli/main.py`: imports + registers `mcp_app`.
+* `tests/unit/test_mcp_keys_cli.py` (24 tests).
+* Smoke-tested: `curator mcp --help` shows the `keys` subgroup; `curator mcp keys --help` shows all 4 subcommands.
+
+**P3 (middleware + server wiring, ~75 min):**
+* `src/curator/mcp/middleware.py` (~280 LOC): `BearerAuthMiddleware` (Starlette `BaseHTTPMiddleware`) extracts header, validates token, returns 401 + `WWW-Authenticate: Bearer` on failure, forwards on success. In-memory throttling for successful auth events. `make_audit_emitter(audit_repo)` factory bridges middleware events to Curator's `AuditRepository.log()`.
+* `src/curator/mcp/server.py` rewrite: split `main()` and `_run_http()`; new `--no-auth` flag with loopback-only enforcement; `--host` non-loopback now legal when auth configured; `_has_configured_keys()` gate; wraps `streamable_http_app()` with middleware before handing to `uvicorn.run`.
+* `tests/unit/test_mcp_http_auth.py` (23 integration tests).
+* CHANGELOG `[1.5.0]` entry under Added/DM-trace/Test-coverage/Compatibility/Why-minor sections.
+* Version bump 1.4.1 → 1.5.0 in `pyproject.toml` and `__init__.py`.
+* Git tag `v1.5.0` pushed.
+
+### Acceptance criteria (all met)
+
+1. ✅ HTTP request with valid Bearer key returns the tool result. (`TestSuccessfulAuth.test_valid_key_returns_200`)
+2. ✅ HTTP request with invalid Bearer key returns 401. (`TestHeaderRejections.test_invalid_key_returns_401`)
+3. ✅ HTTP request without Authorization header returns 401. (`TestHeaderRejections.test_missing_authorization_header_returns_401`)
+4. ✅ HTTP request with malformed Authorization header returns 401. (`TestHeaderRejections.test_wrong_scheme_returns_401`, `test_empty_bearer_token_returns_401`)
+5. ✅ Auth events land in audit log under `actor='curator-mcp'`. (`TestMakeAuditEmitter.test_emitter_calls_audit_repo_log`)
+6. ✅ Successful-auth audit emission throttling works. (`TestAuditEmission.test_success_throttled`)
+7. ✅ Failed-auth audit emission is NOT throttled. (`TestAuditEmission.test_failure_never_throttled`)
+8. ✅ `--no-auth --host 0.0.0.0` exits 2 with refusal. (`TestRunHttpArgValidation.test_no_auth_with_non_loopback_exits_2`)
+9. ✅ `--no-auth --host 127.0.0.1` works without auth (loopback dev mode preserved). (`TestRunHttpArgValidation.test_no_auth_with_loopback_runs`)
+
+### What's pending (v1.6.0+ candidates)
+
+* TLS termination guidance (currently users put nginx/Caddy in front for HTTPS). v1.5.0 ships HTTP-with-auth; HTTPS is an infrastructure concern.
+* Per-key scopes (read-only key vs. future write-tool key). v1.5.0 is single-permission.
+* Key rotation automation. v1.5.0 ships generate/list/revoke; rotation is manual.
+* Windows ACL hardening via `icacls` (currently relies on home-dir ACL inheritance). Documented as a known v1.5.0 limitation.
+
+---
+
 ## [v1.4.1 RELEASED] API hardening: sentinel-default for `apply()` + `run_job()` policy kwargs ✅
 
 **Discovered:** 2026-05-08 during Tracer Phase 4 P3 e2e test pass.
@@ -136,9 +214,9 @@ Originally documented as a v1.5.0 candidate (alongside MCP HTTP-auth) for releas
 
 ---
 
-## [v1.5.0 candidate] (no current items)
+## [v1.6.0 candidate] (no current items)
 
-Previously held the API hardening item that shipped as v1.4.1. Currently empty; future v1.5.0 work (MCP HTTP-auth per Tracer Phase 4 v0.2 RATIFIED DM-6, etc.) will populate this section as it arrives.
+Future candidate items (TLS guidance for MCP HTTP, per-key scopes, key rotation automation, Windows ACL hardening) will populate this section as they arrive.
 
 ---
 

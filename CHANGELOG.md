@@ -4,6 +4,55 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.5.0] — 2026-05-08 — MCP HTTP-auth (Bearer-token authentication for `curator-mcp --http`)
+
+**Headline:** Closes the v1.5.0 candidate item per Tracer Phase 4 v0.2 RATIFIED DM-6 plus the `docs/CURATOR_MCP_HTTP_AUTH_DESIGN.md` v0.2 RATIFIED design. Adds Bearer-token authentication to the HTTP transport so it can safely be exposed beyond loopback. Three-phase implementation (P1 auth.py module, P2 `curator mcp keys` CLI, P3 server middleware + integration tests) shipped over a single session per the design plan. **stdio transport (the default; used by Claude Desktop / Claude Code) is unchanged.** Existing v1.2.0 stdio integrations require zero modifications.
+
+### Added
+
+- **`src/curator/mcp/auth.py`** — Key generation (`secrets.token_urlsafe(30)` with `curm_` format prefix per DM-3 RATIFIED), SHA-256 storage (no plaintext persisted), atomic file I/O via `tempfile.mkstemp` + `os.replace`, validation (returns `StoredKey` or `None`), and `update_last_used` for the audit trail. Honors `CURATOR_HOME` env var like `gdrive_auth`.
+- **`curator mcp keys generate <name> [--description TEXT]`** — Generate a new API key. Prints the plaintext to stdout once; subsequent operations only see the hash.
+- **`curator mcp keys list`** — Show registered keys (name, created, last used, description). No hashes or plaintext shown. Honors `--json`.
+- **`curator mcp keys revoke <name> [--yes]`** — Revoke a key. Prompts for confirmation unless `--yes`. Other keys preserved.
+- **`curator mcp keys show <name>`** — Show metadata for one key. No hashes or plaintext shown.
+- **`src/curator/mcp/middleware.py`** — `BearerAuthMiddleware` (Starlette `BaseHTTPMiddleware`) extracts `Authorization: Bearer <key>`, validates against the keys file, returns 401 + `WWW-Authenticate: Bearer` on failure, forwards on success. `make_audit_emitter(audit_repo)` factory bridges middleware events to Curator's audit log under `actor='curator-mcp'`.
+- **`src/curator/mcp/server.py` `--no-auth` flag** — Opt out of authentication. Only legal with loopback `--host`. Default behavior is now auth-required.
+- **Audit emission for auth events** — `mcp.auth_success` (throttled to 1/key/minute per DM-5 RATIFIED) and `mcp.auth_failure` (never throttled — security signal). Failed events record only the first 10 chars of the rejected key for forensics; full key never appears in audit.
+- **Non-loopback HTTP binding now allowed when auth is configured.** Previously v1.2.0 hard-refused any `--host` other than loopback. v1.5.0 allows non-loopback iff at least one key is configured AND `--no-auth` is not passed.
+
+### Per-DM ratification trace (all DMs RATIFIED 2026-05-08)
+
+| DM | Decision | Implemented as |
+|---|---|---|
+| DM-1 | `Authorization: Bearer <key>` (RFC 6750) | `BearerAuthMiddleware.dispatch` extracts header, returns 401 + `WWW-Authenticate: Bearer` on fail |
+| DM-2 | JSON file at `~/.curator/mcp/api-keys.json` with 0600 (Unix) | `default_keys_file()` + `_set_secure_permissions()` in auth.py |
+| DM-3 | `curm_<40-char-random>` format-prefixed | `generate_key()` returns `f"curm_{secrets.token_urlsafe(30)}"` |
+| DM-4 | Multiple named keys with `name`/`created_at`/`last_used_at`/`description` | `StoredKey` dataclass + `add_key`/`remove_key` operations |
+| DM-5 | Both successful + failed; successful throttled to 1/key/minute | `BearerAuthMiddleware._emit_success` (throttled) + `_emit_failure` (never throttled) |
+| DM-6 | Auth required by default; `--no-auth` opts out (loopback-only) | `_run_http()` in server.py: requires keys unless `--no-auth`; refuses `--no-auth` + non-loopback |
+
+### Test coverage
+
+* **`tests/unit/test_mcp_auth.py`** — 42 tests covering key generation, hashing, file I/O round-trip, atomic write, validation, last_used updates, default-paths, dataclass serialization. 1 Unix-only skip (0600 permission test).
+* **`tests/unit/test_mcp_keys_cli.py`** — 24 tests covering all four CLI subcommands' happy paths + error paths + JSON output, including no-secrets-leaked verification.
+* **`tests/unit/test_mcp_http_auth.py`** — 23 integration tests covering header rejections (5 variants), successful auth (3 variants), audit emission (7 variants including throttling for both success and failure), `make_audit_emitter` factory (3 variants), and `_run_http` arg validation (5 variants including the non-loopback + `--no-auth` refusal).
+* **MCP-auth subsystem total: 89 passed, 1 skipped.**
+* **Migration regression: 144/144 passing** (no impact on Tracer).
+
+### Compatibility
+
+* **stdio transport: zero changes.** Claude Desktop / Claude Code integrations using `curator-mcp` (no flags) are byte-for-byte identical to v1.2.0–1.4.1.
+* **HTTP transport without `--no-auth` previously had no auth.** Existing v1.2.0–1.4.1 callers using `curator-mcp --http` now need to either generate a key (`curator mcp keys generate <name>`) and present it as `Authorization: Bearer <key>`, OR pass `--no-auth` to keep the old (loopback-only) unauthenticated behavior.
+* **HTTP transport with non-loopback host previously exited 2.** Now allowed if a key is configured.
+
+### New optional dependencies
+
+* `mcp>=1.20` — already present from v1.2.0 (the `[mcp]` extra). v1.5.0 uses FastMCP's `streamable_http_app()` plus Starlette/uvicorn (transitively pulled by `mcp`).
+
+### Why minor (1.4.1 → 1.5.0) not patch
+
+The HTTP transport's auth requirement is a real public-API change — callers using `curator-mcp --http` without auth need to update. Patch versioning would be dishonest. Minor bump is appropriate per semver: backward-incompatible behavior change in a feature that was explicitly documented as beta-status (the v1.2.0 `"v1.2.0 has NO authentication for HTTP"` warning made clear auth was coming). stdio behavior is fully preserved.
+
 ## [1.4.1] — 2026-05-08 — API hardening: sentinel-default for `apply()` + `run_job()` policy kwargs
 
 **Headline:** Patch fix for an undocumented footgun in `MigrationService.apply()` and `MigrationService.run_job()`. Calling `service.set_max_retries(N)` or `service.set_on_conflict_mode(M)` before `apply()` / `run_job()` previously did NOT stick — both methods unconditionally called the setters at entry with their hard-coded defaults (3 / 'skip'), silently overwriting any prior configuration. v1.4.1 changes the kwarg defaults to a `_UNCHANGED` sentinel and only invokes the setters when the caller explicitly passes a value. Sticky setters now stick.
