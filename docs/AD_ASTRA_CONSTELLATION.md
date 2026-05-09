@@ -22,9 +22,9 @@ The Latin phrase *ad astra* — "to the stars" — captures the organizing inten
 
 | Pillar | Status | Location | Primary doc |
 |---|---|---|---|
-| **Atrium** | **v0.2 RATIFIED** ✅ (2026-05-08) | `C:\Users\jmlee\Desktop\AL\Atrium\` (HEAD `adabcb7`) | `CONSTITUTION.md` v0.2 (Ten Aims + Five Non-Negotiable Principles); ratified by Jake Leese 2026-05-08. |
+| **Atrium** | **v0.3 RATIFIED** ✅ (2026-05-08) | `C:\Users\jmlee\Desktop\AL\Atrium\` (HEAD `c397fe3`) | `CONSTITUTION.md` v0.3 (Ten Aims reordered — measurement-quality aims at 2–5, operational at 6–10 + Five Non-Negotiable Principles); ratified by Jake Leese 2026-05-08. |
 
-Atrium is the constitutional layer. Every other tool below ultimately answers to Atrium's principles via pluggy hookspecs (in Curator's case) or by direct convention (everything else). The Constitution was ratified at v0.2 by Jake Leese on 2026-05-08, making it the binding governance document for all constellation work.
+Atrium is the constitutional layer. Every other tool below ultimately answers to Atrium's principles via pluggy hookspecs (in Curator's case) or by direct convention (everything else). The Constitution was ratified at v0.3 by Jake Leese on 2026-05-08, making it the binding governance document for all constellation work. Three same-day ratifications (v0.1 base, v0.2 added four Aims, v0.3 reordered them); future amendments follow Article V process.
 
 ### Infrastructure pillars
 
@@ -79,23 +79,25 @@ The "indexers working together" concept lives here. Two indexers exist concurren
 
 ---
 
-## Atrium Constitution structure (v0.2 ratified 2026-05-08)
+## Atrium Constitution structure (v0.3 ratified 2026-05-08)
 
-Atrium's `CONSTITUTION.md` v0.2 distinguishes between two governance categories:
+Atrium's `CONSTITUTION.md` v0.3 distinguishes between two governance categories:
 
-**Article I — Ten Aims** (ordinary-amendment authority):
-1. Accuracy
-2. Reversibility → mapped to `curatorplug-atrium-reversibility`
-3. Self-sufficiency
-4. Auditability
-5. Composability
-6. Portability
-7. Comprehensiveness *(added in Constitution v0.2, 2026-05-08)*
-8. Validity *(added in Constitution v0.2; psychometric construct)*
-9. Reliability *(added in Constitution v0.2; psychometric construct)*
-10. Fidelity *(added in Constitution v0.2; cross-cutting with Principle 3 Citation Chain)*
+**Article I — Ten Aims** (ordinary-amendment authority; conflicts resolved by listed order, earlier wins):
+1. Accuracy *(original v0.1; position unchanged across all revisions)*
+2. **Comprehensiveness** *(added v0.2 at position 7; promoted to position 2 in v0.3)*
+3. **Validity** *(added v0.2 at position 8; promoted to position 3 in v0.3; psychometric construct)*
+4. **Reliability** *(added v0.2 at position 9; promoted to position 4 in v0.3; psychometric construct)*
+5. **Fidelity** *(added v0.2 at position 10; promoted to position 5 in v0.3; cross-cutting with Principle 3 Citation Chain)*
+6. Reversibility → mapped to `curatorplug-atrium-reversibility` *(was Aim 2 in v0.1–v0.2; demoted to position 6 in v0.3)*
+7. Self-sufficiency *(was Aim 3 in v0.1–v0.2)*
+8. Auditability *(was Aim 4 in v0.1–v0.2)*
+9. Composability *(was Aim 5 in v0.1–v0.2)*
+10. Portability *(was Aim 6 in v0.1–v0.2)*
 
-**Article II — Five Non-Negotiable Principles** (reinforced-amendment authority — require 7-day waiting period + amendment codeword):
+The v0.3 reordering is a substantive change, not cosmetic: Article I's conflict-resolution rule says earlier-listed aims win when two conflict. v0.3 ensures measurement-quality aims (the data IS what it claims) outrank operational-quality aims (the system DOES what it should with data) when they collide.
+
+**Article II — Five Non-Negotiable Principles** (reinforced-amendment authority — require 7-day waiting period + amendment codeword; unchanged across v0.1→v0.2→v0.3):
 1. The MORTAL SIN Rule (no deletion of assessment-derived artifacts)
 2. Hash-Verify-Before-Move → enforced by `curatorplug-atrium-safety` v0.3.0
 3. Citation Chain Preservation → v0.1.0a0 scaffolded as `curatorplug-atrium-citation` (P1 implementation pending)
