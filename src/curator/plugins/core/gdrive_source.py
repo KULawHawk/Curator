@@ -758,7 +758,19 @@ class Plugin:
         else:
             return None
         try:
-            from curator.services.gdrive_auth import source_config_for_alias
+            from curator.services.gdrive_auth import (
+                paths_for_alias,
+                source_config_for_alias,
+            )
+            # Verify the alias has the auth files actually present on
+            # disk before returning a config that points at them. Without
+            # this check, the disk fallback would return a path-only
+            # config that fails later in _build_drive_client with a
+            # less helpful error. v1.5.1: short-circuit here for a
+            # cleaner failure mode.
+            paths = paths_for_alias(alias)
+            if not paths.client_secrets.is_file():
+                return None
             cfg = source_config_for_alias(alias)
         except Exception as e:
             logger.warning(
