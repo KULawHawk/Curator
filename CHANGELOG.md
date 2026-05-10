@@ -4,6 +4,34 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.6.3] — 2026-05-09 — patch bundle: workflow JSON parsing + installer extras + USER_GUIDE corrections + test green
+
+**Headline:** Patch release bundling all the cleanup-pass fixes after v1.6.2 went out. Test suite is now fully green (1438 passed, 0 failed, 9 skipped — every skip has a documented reason). Workflow scripts and USER_GUIDE.md examples now use correct CLI syntax. Installer pulls in `[organize]` extra by default.
+
+### Fixes
+
+- **`scripts/workflows/01_initial_scan.ps1`** — Removed the broken `sources add` step. Curator's `sources add` doesn't take a path positional; the path is passed at scan time via `curator scan SOURCE_ID ROOT`. The local plugin auto-registers source_id='local', so `curator scan local <path>` is the correct one-liner.
+- **`scripts/workflows/02_find_duplicates.ps1`** — Fixed JSON shape assumption. `curator --json group` returns `{groups: [...], would_trash: N}`, not a flat array. Old script iterated the wrapper object and mis-counted.
+- **`scripts/workflows/03_cleanup_junk.ps1`** — Switched from text-output regex parsing to `--json` output. The CLI's text format is summary-only ("Found: N (X B)"), not the line-per-item format the old regex assumed. Now reliably extracts `plan.count` and `plan.items` for each cleanup category.
+- **`docs/USER_GUIDE.md`** — Corrected wrong `sources add` syntax in 4 places (Quick start + Sources reference + Recipe 1 + Recipe 4). Added v1.6 caveat about custom source IDs not being plugin-dispatched.
+- **`installer/Install-Curator.ps1`** — Default editable install is now `curator[gui,mcp,organize]` (was `[gui,mcp]`). The `[organize]` extra brings mutagen + Pillow + piexif + pypdf + psutil for music/photo/document organize features. Step 4's import-probe checks both extras separately and reports each. Step 8 JSON output preserved as clean 30-line file via venv Python's json.dumps.
+- **`src/curator/gui/main_window.py`** — `_slot_run_workflow` now uses `os.startfile` (Win32 ShellExecute) instead of `cmd.exe /c start cmd.exe /k <bat>` chain. Cleaner, single-syscall, identical user experience.
+- **`tests/integration/test_cli_migrate.py`** — `test_dst_source_id_different_exits_2` now skips when PyDrive2 IS installed. The test asserts the gdrive plugin can't dispatch cross-source migration when PyDrive2 is missing; when PyDrive2 IS available (which is the realistic install state given Drive functionality), the test's premise no longer holds. Now skipped via `@pytest.mark.skipif(importlib.util.find_spec("pydrive2") is not None, ...)` with full reason text.
+- **`docs/AD_ASTRA_CONSTELLATION.md`** — Synced from workspace `AL/AD_ASTRA_CONSTELLATION.md`. Reflects v1.6.2/v1.6.3 (workflow scripts + GUI menus).
+
+### Documented as known issues (not blockers)
+
+- Curator's source plugin SDK only auto-dispatches scans to the source TYPE's default source_id. Custom source_ids registered via `curator sources add my_id --type local` are tracked in the DB but the plugin won't pick them up. Users should use `local` / `gdrive` as source IDs and pass paths to `scan`. Documented in USER_GUIDE.md.
+- The default-location DB at `%LOCALAPPDATA%\curator\curator\curator.db` was corrupt at session start (timestamp 13:13:42 today). Quarantined to `.corrupt-quarantine-2026-05-09-tests`. Cause unknown; possibly an interrupted write. Tests now use isolated tmp DBs and don't hit this path. Canonical DB at `$RepoRoot/.curator/curator.db` is independent and integrity-clean.
+
+### Verified
+
+- All 6 workflow .ps1 files pass `[Parser]::ParseFile` syntax check.
+- All 5 underlying CLI calls return correctly-shaped data (validated against actual JSON output).
+- End-to-end smoke test: `curator scan local <docs>` indexed 28 files in 2.2s; `curator inspect` returned full metadata; `curator audit` captured scan.start + scan.complete events.
+- `pytest tests/` finishes in ~118s with 1438 passed, 0 failed, 9 skipped, 9 deselected.
+- Installer Step 9 (real-MCP-probe) still passes; 9 tools advertised; in-chat curator tools surface to Claude Desktop.
+
 ## [1.6.2] — 2026-05-09 — GUI discoverability patch (Tools menu + Workflows menu)
 
 **Headline:** The GUI now exposes a **Tools** menu (placeholders for v1.7 native dialogs) and a **Workflows** menu that launches the PowerShell batch scripts shipped at `Curator/scripts/workflows/`. Closes the discoverability gap from v1.6.1: actions that previously lived only in right-click context menus are now visible in the menu bar, and common multi-step operations (initial scan, find duplicates, cleanup junk, audit summary, health check) are one click from inside the GUI.

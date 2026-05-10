@@ -14,6 +14,7 @@ they explicitly verify the CAUTION-skip behavior.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from datetime import datetime
 from pathlib import Path
@@ -514,6 +515,18 @@ class TestPlanFilters:
 
 
 class TestGuardsAndErrors:
+    @pytest.mark.skipif(
+        importlib.util.find_spec("pydrive2") is not None,
+        reason=(
+            "This test asserts that the gdrive plugin cannot dispatch a "
+            "cross-source migration when PyDrive2 is missing (exit code 2 "
+            "+ 'cross-source' message). When PyDrive2 IS installed (e.g. via "
+            "the [cloud] extra, or transitively via Curator's own deps), the "
+            "capability check legitimately succeeds and the migration runs. "
+            "Skipping to avoid false negatives in environments where Drive "
+            "functionality is intentionally available."
+        ),
+    )
     def test_dst_source_id_different_exits_2(
         self, runner, seeded_db, tmp_path,
     ):
