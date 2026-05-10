@@ -32,7 +32,8 @@ implementation roadmap.
 
 from __future__ import annotations
 
-import subprocess
+import os
+import subprocess  # noqa: F401  (kept for compat with downstream patches)
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -1414,15 +1415,12 @@ class CuratorMainWindow(QMainWindow):
             )
             return
 
-        # Spawn the .bat as a separate console window so it doesn't block the GUI.
-        # CREATE_NEW_CONSOLE = 0x00000010 on Windows.
+        # Spawn the .bat as Windows would on double-click — os.startfile
+        # is the proper Win32 ShellExecute path. The .bat opens its own
+        # console window so the GUI stays responsive and the user can
+        # interact with the workflow's prompts.
         try:
-            subprocess.Popen(
-                ["cmd.exe", "/c", "start", "", "cmd.exe", "/k",
-                 str(script_path)],
-                cwd=str(script_path.parent),
-                shell=False,
-            )
+            os.startfile(str(script_path))  # type: ignore[attr-defined]
         except Exception as e:  # noqa: BLE001
             QMessageBox.warning(
                 self, "Workflow launch failed",
