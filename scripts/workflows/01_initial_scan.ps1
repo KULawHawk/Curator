@@ -1,22 +1,27 @@
 <#
 .SYNOPSIS
     Workflow: Initial scan of a folder.
-    Registers a source if not present, scans it, reports what was indexed.
+    Indexes all files under a chosen path against the default 'local' source.
 
 .DESCRIPTION
-    Use this to start tracking a new folder. Cautious by default — reports
-    what's there before scanning, asks for confirmation, and shows a summary
-    after.
+    Cautious by default — reports what's there before scanning, asks for
+    confirmation, and shows a summary after.
+
+    NOTE on source IDs: Curator's local source plugin auto-registers as
+    source_id='local'. Custom source IDs are not first-class in v1.6 (they
+    can be created via 'curator sources add' but the plugin won't dispatch
+    scans to them). The cautious recommendation is to use 'local' for all
+    local-filesystem scans; the 'root' parameter to scan() determines what
+    actually gets indexed.
 
 .EXAMPLE
     .\01_initial_scan.ps1
-    .\01_initial_scan.ps1 -Path "C:\Users\jmlee\Documents" -SourceId local
+    .\01_initial_scan.ps1 -Path "C:\Users\jmlee\Documents"
 #>
 
 [CmdletBinding()]
 param(
-    [string]$Path,
-    [string]$SourceId
+    [string]$Path
 )
 
 $ErrorActionPreference = "Stop"
@@ -51,26 +56,6 @@ if ($fileCount -gt 50000) {
     Write-Host "  [WARN] Large folder ($fileCount files). Scan may take a while." -ForegroundColor Yellow
 }
 
-# ---- Source ID ----
-if (-not $SourceId) {
-    Write-Host ""
-    Write-Host "Source ID for this folder (e.g., 'local', 'local:vault')"
-    Write-Host "[default: local]"
-    $SourceId = Read-Host "Source ID"
-    if (-not $SourceId) { $SourceId = "local" }
-}
-
-# Check if source already exists
-Show-Section "Source registration"
-$existing = Invoke-CuratorJson sources show $SourceId
-if ($existing) {
-    Write-Host "  Source '$SourceId' already exists." -ForegroundColor Green
-} else {
-    Write-Host "  Registering new source '$SourceId' -> $Path"
-    Invoke-Curator sources add $SourceId $Path
-    Write-Host "  Registered." -ForegroundColor Green
-}
-
 # ---- Confirm before scan ----
 if (-not (Read-Confirmation "Scan $fileCount files now?" -Default "yes")) {
     Write-Host "Skipped." -ForegroundColor Yellow
@@ -79,11 +64,15 @@ if (-not (Read-Confirmation "Scan $fileCount files now?" -Default "yes")) {
 
 # ---- Scan ----
 Show-Section "Scanning"
+Write-Host "  Source: local (Curator's default local-filesystem source)"
+Write-Host "  Root:   $Path"
 Write-Host "  This populates the index, computes hashes, detects lineage..."
 Write-Host "  (Stay patient; large folders can take a few minutes)"
+Write-Host ""
 $started = Get-Date
-Invoke-Curator scan $SourceId $Path
+Invoke-Curator scan local $Path
 $elapsed = (Get-Date) - $started
+Write-Host ""
 Write-Host "  Scan complete in $([Math]::Round($elapsed.TotalSeconds, 1))s." -ForegroundColor Green
 
 # ---- Summary ----
@@ -98,6 +87,6 @@ Write-Host ""
 Write-Host "Next steps you might want:"
 Write-Host "  - Find duplicates:  scripts\workflows\02_find_duplicates.bat"
 Write-Host "  - Cleanup junk:     scripts\workflows\03_cleanup_junk.bat"
-Write-Host "  - View in GUI:      curator gui"
+Write-Host "  - View in GUI:      curator gui  (or Workflows menu)"
 Write-Host ""
 Read-Host "Press Enter to close"

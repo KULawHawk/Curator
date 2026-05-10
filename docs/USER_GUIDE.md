@@ -40,20 +40,18 @@ Assumes you ran `Install-Curator.bat` successfully and have Claude Desktop resta
 # 1. Confirm the stack is healthy
 curator doctor
 
-# 2. Register a source for a real folder you want to track
-curator sources add local "C:\Users\jmlee\Desktop\AL\Curator"
-
-# 3. Scan it (indexes files, computes hashes, detects lineage)
+# 2. Scan a real folder you want to track. Curator's local source plugin
+#    auto-registers as source_id='local'; the path comes at scan time.
 curator scan local "C:\Users\jmlee\Desktop\AL\Curator"
 
-# 4. See what was indexed
-curator audit --action scan.complete -n 1
+# 3. See what was indexed
+curator audit --since-hours 1 -n 5
 curator inspect "C:\Users\jmlee\Desktop\AL\Curator\README.md"
 
-# 5. Find duplicates (read-only preview)
+# 4. Find duplicates (read-only preview)
 curator group
 
-# 6. Open the GUI to browse what's there
+# 5. Open the GUI to browse what's there
 curator gui
 ```
 
@@ -155,18 +153,22 @@ Reports: config source, DB path, log path, registered plugins, vendored dependen
 Source registration and toggling.
 
 ```powershell
-curator sources list                                    # all registered
-curator sources show local                              # detail for one
-curator sources add local "C:\path\to\folder"           # register
-curator sources add gdrive --config-key parent_id --config-value "<drive-folder-id>"
-curator sources config local --get root                 # read one config key
-curator sources config local --set root --value "C:\new\path"  # mutate
-curator sources enable local                            # re-enable
-curator sources disable local                           # disable (keep data)
-curator sources remove local                            # delete (fails if files reference it)
+curator sources list                                            # all registered
+curator sources show local                                      # detail for one
+curator sources add work_drive --type local --name "Work"       # register a new source row
+#   (NOTE in v1.6: only the source TYPE's default source_id is
+#    automatically scannable. Custom source IDs are tracked in
+#    the DB but the plugin SDK doesn't yet dispatch scans to them.
+#    For now use the default 'local' / 'gdrive' source IDs only.)
+curator sources add gdrive_work --type gdrive
+curator sources config local --get root                         # read one config key
+curator sources config local --set root --value "C:\new\path"   # mutate
+curator sources enable local                                    # re-enable
+curator sources disable local                                   # disable (keep data)
+curator sources remove local --apply                            # delete (fails if files reference it)
 ```
 
-**When to use:** every time you want to start tracking a new folder or Drive.
+**When to use:** for v1.6, mostly just leave the auto-registered sources alone. The path you scan is passed to `curator scan`, not stored on the source.
 
 ### `curator scan`
 
@@ -478,12 +480,11 @@ Full design at [`docs/design/GUI_V2_DESIGN.md`](design/GUI_V2_DESIGN.md). Sequen
 
 ## Common workflows (recipes)
 
-### Recipe 1 — Initial index of a new folder
+### Recipe 1 — Initial index of a folder
 
 ```powershell
 & C:\Users\jmlee\Desktop\AL\Curator\.venv\Scripts\Activate.ps1
-curator sources add local "C:\path\to\folder"
-curator scan local "C:\path\to\folder"
+curator scan local "C:\path\to\folder"            # uses the auto-registered 'local' source
 curator doctor                                    # confirm files indexed
 ```
 
@@ -516,13 +517,10 @@ curator cleanup broken-symlinks "C:\path" --apply
 ### Recipe 4 — Migrate folder local → Drive
 
 ```powershell
-# One-time: register a Drive alias and authenticate
+# One-time: authenticate the Drive alias
 curator gdrive auth gdrive:home
 
-# Register Drive as a source (point at a specific Drive folder)
-curator sources add gdrive --config-key parent_id --config-value "<drive-folder-id>"
-
-# Plan the migration
+# Plan the migration (no moves yet)
 curator migrate local "C:\to-archive" gdrive
 
 # Apply with 4 workers (resumable Phase 2)
@@ -532,6 +530,8 @@ curator migrate local "C:\to-archive" gdrive --apply --workers 4
 curator migrate --list
 curator migrate --status <job_id>
 ```
+
+**v1.6 caveat:** the `gdrive` source uses its plugin-assigned source_id (also `gdrive`). For multiple Drive accounts you'd need plugin-side support that doesn't ship in v1.6.
 
 ### Recipe 5 — Audit query for the past day
 
