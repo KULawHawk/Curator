@@ -4,6 +4,31 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.6.2] — 2026-05-09 — GUI discoverability patch (Tools menu + Workflows menu)
+
+**Headline:** The GUI now exposes a **Tools** menu (placeholders for v1.7 native dialogs) and a **Workflows** menu that launches the PowerShell batch scripts shipped at `Curator/scripts/workflows/`. Closes the discoverability gap from v1.6.1: actions that previously lived only in right-click context menus are now visible in the menu bar, and common multi-step operations (initial scan, find duplicates, cleanup junk, audit summary, health check) are one click from inside the GUI.
+
+### What's new
+
+- **Tools menu** with 5 placeholder items: Scan folder, Find duplicates, Cleanup junk, Sources manager, Health check. Each surfaces a 'coming in v1.7' dialog explaining what the dialog will do and pointing at the closest CLI / Workflows alternative usable today.
+- **Workflows menu** with 5 launchers that spawn the corresponding `.bat` from `scripts/workflows/` as a separate console window: `01_initial_scan.bat`, `02_find_duplicates.bat`, `03_cleanup_junk.bat`, `04_audit_summary.bat`, `05_health_check.bat`. Each has a help dialog explaining the workflow's safety rails (plan-mode preview, explicit confirmation, recycle-bin reversibility).
+- **Updated `curator gui` docstring** to accurately reflect the actual GUI surface (8 tabs, 5 menus, with right-click mutations). Previous docstring said 'Read-only first ship. Three tabs' which was wrong since v0.35.
+- **About dialog** updated to mention v1.6.2 additions.
+
+### What's NOT in this patch (planned for v1.7)
+
+- Native PySide6 dialogs replacing the Tools-menu placeholders
+- Sources tab in the main window
+- editable Settings tab
+- Live Watch tab
+- See `docs/design/GUI_V2_DESIGN.md` for the full v1.7 / v1.8 / v1.9 roadmap.
+
+### Tech notes
+
+- Workflow scripts launch via `subprocess.Popen` with `cmd.exe /c start ... cmd.exe /k <bat>` so they open in a separate console window and the GUI stays responsive.
+- Script path is resolved relative to the curator package source tree (`__file__`-based), so editable installs and packaged installs both find the scripts.
+- Friendly error dialogs surface if scripts directory is missing (e.g., shallow clone) or launch fails.
+
 ## [1.6.1] — 2026-05-09 — schema-symmetric migration audit details (`cross_source` / `src_source_id` / `dst_source_id` on every event)
 
 **Headline:** Every `migration.move` and `migration.copy` audit event now carries `cross_source`, `src_source_id`, and `dst_source_id` keys regardless of which code path emitted it. Pre-1.6.1 only the cross-source phase 2 path emitted these fields; phase 1 same-source, phase 1 cross-source, and phase 2 same-source emissions all lacked them. This forced downstream consumers (citation plugin v0.2+, audit query tools) to special-case 'absence means same-source.' Now the schema is uniform.

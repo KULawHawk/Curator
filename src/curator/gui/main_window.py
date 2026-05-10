@@ -1,30 +1,40 @@
-"""Curator GUI main window (v0.34 + v0.35 mutations).
+"""Curator GUI main window (v0.34 → v1.6.2).
 
-Single :class:`QMainWindow` with three tabs (Browser / Bundles / Trash),
-a status bar showing DB info + row counts, an Edit menu with mutation
-actions (Trash / Restore / Dissolve), and per-row context menus.
+Single :class:`QMainWindow` with **8 tabs** (Inbox / Browser / Bundles /
+Trash / Migrate / Audit Log / Settings / Lineage Graph), a status bar
+showing DB info + row counts, and **5 menus** (File / Edit / Tools /
+Workflows / Help).
 
-v0.34 shipped read-only views. v0.35 adds three mutations:
+v0.34 shipped read-only views. v0.35 added three mutations
+(trash / restore / dissolve via right-click menus and Edit menu).
+v0.43 added bundle creation/editing dialogs.
 
-  * **Browser** -- right-click a file -> "Send to Trash..." -> confirm
-    -> :meth:`TrashService.send_to_trash`.
-  * **Trash** -- right-click a record -> "Restore..." -> confirm
-    -> :meth:`TrashService.restore`. On Windows this typically raises
-    :class:`RestoreImpossibleError` because ``send2trash`` doesn't
-    return the Recycle Bin location; the dialog explains and points
-    users at manual restoration.
-  * **Bundles** -- right-click -> "Dissolve bundle..." -> confirm
-    -> :meth:`BundleService.dissolve`. Members preserved.
+v1.6.2 (this release) adds discoverability:
+
+  * **Tools menu** — placeholder items for the upcoming v1.7 dialogs
+    (Scan, Find Duplicates, Cleanup Junk, Sources Manager, Health
+    Check). Today these surface a 'coming in v1.7' notice; in v1.7
+    they will open native PySide6 dialogs.
+  * **Workflows menu** — launches the PowerShell batch workflows
+    shipped at ``Curator/scripts/workflows/`` as separate console
+    windows. Click-to-run interface for common multi-step operations
+    (initial scan, find duplicates, cleanup junk, audit summary,
+    health check) until v1.7's native dialogs ship.
 
 Mutation logic is factored into ``_perform_*`` methods that NEVER raise
 and return ``(success: bool, message: str)``. The slots just show the
 message in a dialog. This makes the methods unit-testable without an
 event loop.
+
+See ``docs/design/GUI_V2_DESIGN.md`` for the full v1.7 / v1.8 / v1.9
+implementation roadmap.
 """
 
 from __future__ import annotations
 
+import subprocess
 import threading
+from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -137,6 +147,37 @@ class CuratorMainWindow(QMainWindow):
         self._act_bundle_edit.setShortcut(QKeySequence(Qt.Modifier.CTRL | Qt.Key.Key_E))
         self._act_bundle_edit.triggered.connect(self._slot_bundle_edit_selected)
         menu_edit.addAction(self._act_bundle_edit)
+
+        # v1.6.2: Tools menu — placeholders for v1.7 native dialogs.
+        menu_tools = self.menuBar().addMenu("&Tools")
+        for label, key in [
+            ("&Scan folder...", "scan"),
+            ("Find &duplicates...", "group"),
+            ("&Cleanup junk...", "cleanup"),
+            ("&Sources manager...", "sources"),
+            ("&Health check", "health"),
+        ]:
+            act = QAction(label, self)
+            act.triggered.connect(lambda checked=False, k=key: self._slot_tools_placeholder(k))
+            menu_tools.addAction(act)
+
+        # v1.6.2: Workflows menu — spawns the PowerShell .bat scripts
+        # shipped at scripts/workflows/ as separate console windows.
+        menu_wf = self.menuBar().addMenu("&Workflows")
+        for label, script in [
+            ("&Initial scan...",            "01_initial_scan.bat"),
+            ("Find &duplicates...",         "02_find_duplicates.bat"),
+            ("Cleanup &junk...",            "03_cleanup_junk.bat"),
+            ("&Audit summary (24h)",        "04_audit_summary.bat"),
+            ("&Health check",               "05_health_check.bat"),
+        ]:
+            act = QAction(label, self)
+            act.triggered.connect(lambda checked=False, s=script: self._slot_run_workflow(s))
+            menu_wf.addAction(act)
+        menu_wf.addSeparator()
+        act_wf_about = QAction("&About these workflows...", self)
+        act_wf_about.triggered.connect(self._show_workflows_about)
+        menu_wf.addAction(act_wf_about)
 
         menu_help = self.menuBar().addMenu("&Help")
         act_about = QAction("&About Curator", self)
@@ -1287,8 +1328,121 @@ class CuratorMainWindow(QMainWindow):
             "<p>Content-aware artifact intelligence layer for files.</p>"
             "<p>v0.34 read-only GUI; v0.35 adds Trash / Restore / Dissolve "
             "mutations via right-click context menu or the Edit menu. "
-            "v0.43 adds bundle creation + editing via the Bundles tab.</p>"
+            "v0.43 adds bundle creation + editing via the Bundles tab. "
+            "v1.6.2 adds Tools and Workflows menus for discoverability.</p>"
             "<p>See BUILD_TRACKER.md and DESIGN.md for details.</p>",
+        )
+
+    # ------------------------------------------------------------------
+    # v1.6.2: Tools menu placeholders + Workflows menu launchers
+    # ------------------------------------------------------------------
+
+    def _slot_tools_placeholder(self, key: str) -> None:
+        """Show 'coming in v1.7' notice for a Tools menu item.
+
+        Each Tools menu action will be replaced with a real PySide6
+        dialog in v1.7 per docs/design/GUI_V2_DESIGN.md. Until then,
+        this surfaces what the dialog will do and points the user at
+        the closest CLI / Workflows alternative they can use today.
+        """
+        guidance = {
+            "scan": (
+                "<b>Scan folder</b> dialog will let you pick a source + folder + ignore"
+                " globs and watch progress. Coming in v1.7.<br><br>"
+                "<b>Today:</b> use Workflows → Initial scan, or run"
+                " <code>curator scan &lt;source&gt; &lt;folder&gt;</code> in PowerShell."
+            ),
+            "group": (
+                "<b>Find duplicates</b> dialog will show a duplicate-set browser with"
+                " --keep strategy picker + apply. Coming in v1.7.<br><br>"
+                "<b>Today:</b> use Workflows → Find duplicates."
+            ),
+            "cleanup": (
+                "<b>Cleanup</b> dialog will let you pick categories"
+                " (junk / empty-dirs / broken-symlinks) and preview before applying."
+                " Coming in v1.7.<br><br>"
+                "<b>Today:</b> use Workflows → Cleanup junk."
+            ),
+            "sources": (
+                "<b>Sources Manager</b> dialog will let you add / enable / disable / remove"
+                " sources and edit their config. Coming in v1.7.<br><br>"
+                "<b>Today:</b> use <code>curator sources add|list|show|enable|disable|remove</code>"
+                " in PowerShell."
+            ),
+            "health": (
+                "<b>Health Check</b> dialog will show a live green/red dashboard."
+                " Coming in v1.7.<br><br>"
+                "<b>Today:</b> use Workflows → Health check."
+            ),
+        }
+        msg = guidance.get(key, "This dialog is planned for v1.7.")
+        QMessageBox.information(self, "Coming in v1.7", msg)
+
+    def _slot_run_workflow(self, script_name: str) -> None:
+        """Spawn a workflow .bat from scripts/workflows/ as a separate console window.
+
+        Resolves the script path relative to the curator package source
+        tree (works in both editable installs and packaged installs).
+        Falls back to a friendly error dialog if the script can't be
+        found, or if launching fails.
+
+        The .bat opens its own console window so the GUI stays responsive
+        and the user can interact with the workflow's prompts.
+        """
+        # Resolve scripts/workflows/ relative to the curator source tree.
+        # In an editable install this is curator/<repo>/scripts/workflows.
+        try:
+            import curator as _curator_pkg
+            pkg_root = Path(_curator_pkg.__file__).resolve().parent
+            # pkg_root = .../src/curator; repo root is .../  (two up from src)
+            repo_root = pkg_root.parent.parent
+            script_path = repo_root / "scripts" / "workflows" / script_name
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(
+                self, "Workflow launch failed",
+                f"Could not locate workflow scripts directory: {e}",
+            )
+            return
+
+        if not script_path.exists():
+            QMessageBox.warning(
+                self, "Workflow not found",
+                f"Expected workflow script at:<br><code>{script_path}</code><br><br>"
+                "This usually means the Curator install is incomplete or the"
+                " repo wasn't cloned with the scripts directory. Re-run the"
+                " installer:<br><code>installer\\Install-Curator.bat</code>",
+            )
+            return
+
+        # Spawn the .bat as a separate console window so it doesn't block the GUI.
+        # CREATE_NEW_CONSOLE = 0x00000010 on Windows.
+        try:
+            subprocess.Popen(
+                ["cmd.exe", "/c", "start", "", "cmd.exe", "/k",
+                 str(script_path)],
+                cwd=str(script_path.parent),
+                shell=False,
+            )
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(
+                self, "Workflow launch failed",
+                f"Could not launch <code>{script_name}</code>:<br>{e}",
+            )
+
+    def _show_workflows_about(self) -> None:
+        """About-dialog for the Workflows menu."""
+        QMessageBox.information(
+            self,
+            "About workflows",
+            "<h3>Curator batch workflows</h3>"
+            "<p>Each workflow combines several <code>curator</code> CLI commands"
+            " into one click. They live as PowerShell .bat scripts at:</p>"
+            "<p><code>Curator/scripts/workflows/</code></p>"
+            "<p>Every destructive workflow is cautious-by-default: plan-mode preview,"
+            " explicit user confirmation before any changes, and everything routes"
+            " through the OS Recycle Bin (reversible).</p>"
+            "<p>Native PySide6 dialogs replacing these scripts are planned for v1.7."
+            " See <code>docs/design/GUI_V2_DESIGN.md</code>.</p>",
         )
 
 
