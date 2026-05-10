@@ -23,11 +23,15 @@ Show-Banner "Curator workflow: Find duplicates"
 Show-Section "Phase 1 - Discover (read-only)"
 Write-Host "  Running 'curator group --json'..."
 $started = Get-Date
-$groups = Invoke-CuratorJson group
+$response = Invoke-CuratorJson group
 $elapsed = (Get-Date) - $started
 Write-Host ("  Done in {0}s." -f [Math]::Round($elapsed.TotalSeconds, 1)) -ForegroundColor Green
 
-if (-not $groups -or $groups.Count -eq 0) {
+# Curator returns {groups: [...], would_trash: N} — NOT a flat array
+$groups = if ($response -and $response.groups) { @($response.groups) } else { @() }
+$wouldTrash = if ($response -and $response.would_trash) { $response.would_trash } else { 0 }
+
+if ($groups.Count -eq 0) {
     Write-Host ""
     Write-Host "  No duplicate groups found." -ForegroundColor Green
     Write-Host "  (Either nothing scanned, or no duplicates exist.)"

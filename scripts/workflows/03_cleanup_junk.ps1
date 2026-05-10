@@ -4,6 +4,7 @@
 .DESCRIPTION
     Runs all 3 cleanup categories under a chosen root, summarizes what's there,
     asks for confirmation before any destructive action, then trashes (Recycle Bin).
+    Uses --json output for reliable parsing.
 #>
 [CmdletBinding()]
 param(
@@ -26,23 +27,41 @@ if (-not (Test-Path $Path)) {
     exit 1
 }
 
+# Helper: run cleanup --json and return parsed plan
+function Invoke-CleanupPlan {
+    param([string]$Subcommand, [string]$ScanPath)
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $raw = & $CuratorCli --json cleanup $Subcommand $ScanPath 2>$null
+        if ($raw) {
+            $parsed = $raw | ConvertFrom-Json
+            return $parsed.plan
+        }
+        return $null
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+}
+
 # ---- Discover (dry-run) ----
 Show-Section "Discover (dry-run, no files moved)"
 $started = Get-Date
 
 Write-Host "  Looking for junk files (Thumbs.db, .DS_Store, ~`$*, etc.)..."
-$junkLines = & $CuratorCli cleanup junk $Path 2>$null | Where-Object { $_ -match "\S" }
-$junkCount = ($junkLines | Where-Object { $_ -match "^\s*-" }).Count
-Write-Host "    Found: $junkCount junk files"
+$junkPlan = Invoke-CleanupPlan -Subcommand "junk" -ScanPath $Path
+$junkCount = if ($junkPlan) { $junkPlan.count } else { 0 }
+$junkBytes = if ($junkPlan -and $junkPlan.size_bytes) { $junkPlan.size_bytes } else { 0 }
+Write-Host "    Found: $junkCount junk files ($([Math]::Round($junkBytes / 1KB, 1)) KB)"
 
 Write-Host "  Looking for empty directories..."
-$emptyLines = & $CuratorCli cleanup empty-dirs $Path 2>$null | Where-Object { $_ -match "\S" }
-$emptyCount = ($emptyLines | Where-Object { $_ -match "^\s*-" }).Count
+$emptyPlan = Invoke-CleanupPlan -Subcommand "empty-dirs" -ScanPath $Path
+$emptyCount = if ($emptyPlan) { $emptyPlan.count } else { 0 }
 Write-Host "    Found: $emptyCount empty directories"
 
 Write-Host "  Looking for broken symlinks..."
-$symLines = & $CuratorCli cleanup broken-symlinks $Path 2>$null | Where-Object { $_ -match "\S" }
-$symCount = ($symLines | Where-Object { $_ -match "^\s*-" }).Count
+$symPlan = Invoke-CleanupPlan -Subcommand "broken-symlinks" -ScanPath $Path
+$symCount = if ($symPlan) { $symPlan.count } else { 0 }
 Write-Host "    Found: $symCount broken symlinks"
 
 $elapsed = (Get-Date) - $started
@@ -59,17 +78,18 @@ if ($totalItems -eq 0) {
 
 # ---- Show samples ----
 Show-Section "Sample of items found"
-if ($junkCount -gt 0) {
-    Write-Host "  Junk file examples (showing 5):"
-    $junkLines | Where-Object { $_ -match "^\s*-" } | Select-Object -First 5 | ForEach-Object { Write-Host "    $_" }
-}
-if ($emptyCount -gt 0) {
-    Write-Host "  Empty dir examples (showing 5):"
-    $emptyLines | Where-Object { $_ -match "^\s*-" } | Select-Object -First 5 | ForEach-Object { Write-Host "    $_" }
-}
-if ($symCount -gt 0) {
-    Write-Host "  Broken symlink examples (showing 5):"
-    $symLines | Where-Object { $_ -match "^\s*-" } | Select-Object -First 5 | ForEach-Object { Write-Host "    $_" }
+foreach ($pair in @(
+    @{ name = "junk file"; plan = $junkPlan; count = $junkCount },
+    @{ name = "empty dir"; plan = $emptyPlan; count = $emptyCount },
+    @{ name = "broken symlink"; plan = $symPlan; count = $symCount }
+)) {
+    if ($pair.count -gt 0 -and $pair.plan -and $pair.plan.items) {
+        Write-Host ("  {0} examples (showing 5 of {1}):" -f $pair.name, $pair.count)
+        @($pair.plan.items) | Select-Object -First 5 | ForEach-Object {
+            $itemPath = if ($_.path) { $_.path } else { $_ }
+            Write-Host "    - $itemPath"
+        }
+    }
 }
 
 # ---- Apply ----
@@ -84,21 +104,20 @@ if (-not (Read-Confirmation "Clean up $totalItems items now?" -Default "no")) {
 }
 
 Write-Host ""
-$results = @{}
 if ($junkCount -gt 0) {
     Write-Host "  Cleaning junk files..." -NoNewline
-    try { Invoke-Curator cleanup junk $Path --apply | Out-Null; Write-Host " done." -ForegroundColor Green; $results.junk = "ok" }
-    catch { Write-Host " FAILED" -ForegroundColor Red; $results.junk = "fail" }
+    try { Invoke-Curator cleanup junk $Path --apply | Out-Null; Write-Host " done." -ForegroundColor Green }
+    catch { Write-Host " FAILED" -ForegroundColor Red }
 }
 if ($emptyCount -gt 0) {
     Write-Host "  Cleaning empty directories..." -NoNewline
-    try { Invoke-Curator cleanup empty-dirs $Path --apply | Out-Null; Write-Host " done." -ForegroundColor Green; $results.empty = "ok" }
-    catch { Write-Host " FAILED" -ForegroundColor Red; $results.empty = "fail" }
+    try { Invoke-Curator cleanup empty-dirs $Path --apply | Out-Null; Write-Host " done." -ForegroundColor Green }
+    catch { Write-Host " FAILED" -ForegroundColor Red }
 }
 if ($symCount -gt 0) {
     Write-Host "  Cleaning broken symlinks..." -NoNewline
-    try { Invoke-Curator cleanup broken-symlinks $Path --apply | Out-Null; Write-Host " done." -ForegroundColor Green; $results.sym = "ok" }
-    catch { Write-Host " FAILED" -ForegroundColor Red; $results.sym = "fail" }
+    try { Invoke-Curator cleanup broken-symlinks $Path --apply | Out-Null; Write-Host " done." -ForegroundColor Green }
+    catch { Write-Host " FAILED" -ForegroundColor Red }
 }
 
 Write-Host ""
