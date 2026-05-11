@@ -219,6 +219,35 @@ def _err_exit(rt: CuratorRuntime, message: str, code: int = 1) -> "typer.Exit":
     return typer.Exit(code=code)
 
 
+def _check_csv_dialect(rt: CuratorRuntime, dialect: str) -> None:
+    """Validate the --csv-dialect value at the CLI layer.
+
+    v1.7.38: keeps the deeper :func:`curator.cli.util.build_csv_writer`
+    ValueError behavior intact (defensive coding at the helper layer
+    stays useful for library callers) while ensuring CLI users see a
+    typer-style ``error: --csv-dialect must be 'csv' or 'tsv'`` instead
+    of a Rich traceback when they pass an invalid value.
+
+    Called from every ``if csv_output:`` branch BEFORE
+    :func:`build_csv_writer` is invoked. The two-layer validation
+    (CLI-side + helper-side) is intentional:
+
+    * The CLI side gives a clean user-facing error for the typical
+      ``--csv-dialect xyz`` typo case.
+    * The helper side defends against programmatic misuse (a library
+      caller passing an unknown dialect from code).
+
+    Both raise; the CLI side raises :class:`typer.Exit` with code 1
+    via :func:`_err_exit`, while the helper side raises
+    :class:`ValueError`.
+    """
+    if dialect not in ("csv", "tsv"):
+        raise _err_exit(
+            rt,
+            f"--csv-dialect must be 'csv' or 'tsv'; got {dialect!r}",
+        )
+
+
 # ===========================================================================
 # inspect
 # ===========================================================================
@@ -532,6 +561,7 @@ def lineage(
 
     # v1.7.36: CSV output -- one row per lineage edge
     if csv_output:
+        _check_csv_dialect(rt, csv_dialect)
         writer = build_csv_writer(sys.stdout, csv_dialect)
         if not no_header:
             writer.writerow([
@@ -616,6 +646,7 @@ def bundles_list(
 
     # v1.7.36: CSV output -- one row per bundle
     if csv_output:
+        _check_csv_dialect(rt, csv_dialect)
         writer = build_csv_writer(sys.stdout, csv_dialect)
         if not no_header:
             writer.writerow([
@@ -833,6 +864,7 @@ def sources_list(
     # (v1.7.29) for symmetry with `sources config` read-only output. The
     # config dict is JSON-encoded for the cell.
     if csv_output:
+        _check_csv_dialect(rt, csv_dialect)
         writer = build_csv_writer(sys.stdout, csv_dialect)
         if not no_header:
             writer.writerow([
@@ -1435,6 +1467,7 @@ def audit(
     # is dict-shaped; JSON-encode it for the cell so downstream tools
     # can re-parse if needed.
     if csv_output:
+        _check_csv_dialect(rt, csv_dialect)
         writer = build_csv_writer(sys.stdout, csv_dialect)
         if not no_header:
             writer.writerow([
@@ -3600,6 +3633,7 @@ def forecast_cmd(
 
     # v1.7.33: CSV output -- one row per drive
     if csv_output:
+        _check_csv_dialect(rt, csv_dialect)
         writer = build_csv_writer(sys.stdout, csv_dialect)
         if not no_header:
             writer.writerow([
@@ -3961,6 +3995,7 @@ def scan_pii_cmd(
     # one row per file. Mirrors v1.7.19's audit-summary --csv pattern.
     if csv_output:
         import sys as _sys
+        _check_csv_dialect(rt, csv_dialect)
         writer = build_csv_writer(_sys.stdout, csv_dialect)
         if show_matches:
             # Per-match rows: lets users grep / sort / pivot by pattern
@@ -4200,6 +4235,7 @@ def export_clean_cmd(
 
     # v1.7.33: CSV output -- one row per file result
     if csv_output:
+        _check_csv_dialect(rt, csv_dialect)
         writer = build_csv_writer(sys.stdout, csv_dialect)
         if not no_header:
             writer.writerow([
@@ -4458,6 +4494,7 @@ def tier_cmd(
 
     # v1.7.33: CSV output -- one row per candidate
     if csv_output:
+        _check_csv_dialect(rt, csv_dialect)
         writer = build_csv_writer(sys.stdout, csv_dialect)
         if not no_header:
             writer.writerow([
@@ -4869,6 +4906,7 @@ def audit_summary_cmd(
     # never reach this branch when --json was set).
     if csv_output:
         import sys as _sys
+        _check_csv_dialect(rt, csv_dialect)
         writer = build_csv_writer(_sys.stdout, csv_dialect)
         # v1.7.20: --no-header suppresses the header row
         if not no_header:

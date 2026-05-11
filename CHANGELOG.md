@@ -4,6 +4,108 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.38] — 2026-05-11 — Clean error for invalid `--csv-dialect` (closes v1.7.37 limitation)
+
+**Headline:** New `_check_csv_dialect()` helper in `cli/main.py` catches the v1.7.37 `--csv-dialect xyz` typo case at the CLI layer and surfaces a clean typer-style error message instead of letting `build_csv_writer`'s `ValueError` propagate as a Rich traceback. Two-layer validation preserved: helper-side defends library callers; CLI-side polishes the user experience.
+
+### Why this matters
+
+v1.7.37's TSV dialect ship documented a limitation: `--csv-dialect xyz` produced a Python traceback rather than a clean CLI error. The bug was rare-path polish, not a correctness issue — valid inputs always worked. But traceback-on-typo is a poor user experience and made the CLI feel half-finished. v1.7.38 closes that polish gap.
+
+Before v1.7.38:
+```
+$ curator audit --csv --csv-dialect xyz
+┌─ Traceback (most recent call last) ───────────────────────────────┐
+│ ... 30 lines of Python internals ...                              │
+│ ValueError: unknown csv dialect: 'xyz'. Valid: 'csv', 'tsv'        │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+After v1.7.38:
+```
+$ curator audit --csv --csv-dialect xyz
+error: --csv-dialect must be 'csv' or 'tsv'; got 'xyz'
+$ echo $?
+1
+```
+
+### What's new
+
+**New helper** `_check_csv_dialect(rt, dialect)` in `src/curator/cli/main.py` (~16 lines):
+  * Validates the dialect string against the canonical (`csv`, `tsv`) set
+  * Raises `typer.Exit(code=1)` via the existing `_err_exit` helper if invalid
+  * Called from every `if csv_output:` branch BEFORE invoking `build_csv_writer`
+  * Coexists with the helper-layer `ValueError` defense — both are intentional:
+    - CLI side: clean error for typical typo case
+    - Helper side: defends library callers passing dialect from code
+
+**9 call sites updated** (one line each):
+```python
+# Before v1.7.38:
+if csv_output:
+    writer = build_csv_writer(sys.stdout, csv_dialect)
+    ...
+
+# After v1.7.38:
+if csv_output:
+    _check_csv_dialect(rt, csv_dialect)
+    writer = build_csv_writer(sys.stdout, csv_dialect)
+    ...
+```
+
+Applied to all 9 stdout-CSV commands: audit-summary, scan-pii, forecast, export-clean, tier, audit, lineage, bundles list, sources list.
+
+**3 new tests** in `tests/integration/test_cli_csv_dialect.py`:
+  * `test_invalid_csv_dialect_gives_clean_error` — verifies exit 1 + no Traceback + error message structure
+  * `test_invalid_csv_dialect_clean_error_across_commands` — spot-checks audit/bundles/sources for uniform behavior
+  * `test_helper_validation_still_raises_valueerror` — verifies the helper-layer ValueError defense is preserved (library callers unaffected)
+
+### Files changed
+
+- `src/curator/cli/main.py` — +30 lines (new helper + 9 × 1-line call insert)
+- `tests/integration/test_cli_csv_dialect.py` — +71 lines (3 new tests)
+- `CHANGELOG.md` — v1.7.38 entry
+- `docs/releases/v1.7.38.md` — release notes
+
+### Verification
+
+- **All 16 CSV-dialect tests pass** (13 from v1.7.37 + 3 new v1.7.38) in 21.17s
+- **Full pytest baseline**: ✅ **1489 passed**, 9 skipped, 0 failed in 171s (was 1486 at v1.7.37; +3 new tests, all passing)
+- **CLI smoke**: `audit --csv --csv-dialect invalid` returns exit 1 with clean error `error: --csv-dialect must be 'csv' or 'tsv'; got 'invalid'`, no Python traceback
+- **Back-compat smoke**: `sources list --csv --csv-dialect tsv` still produces correct tab-delimited output
+- **Helper-layer preserved**: `build_csv_writer(io.StringIO(), 'xml')` still raises ValueError for library callers (test_helper_validation_still_raises_valueerror)
+- **Lesson #50 lint**: still passing on every commit
+
+### Authoritative-principle catches (this turn)
+
+**0 production bugs caught.** The implementation was a straightforward layered-validation pattern. The two-layer approach (CLI-side `_check_csv_dialect` + helper-side `ValueError` in `build_csv_writer`) is intentional and tested by both UI and unit tests.
+
+**1 design choice: layered validation.** Rather than removing the helper-side `ValueError` defense, kept it AND added the CLI-side helper. This means:
+  * **CLI users** get the polished error path: clean message, no traceback, exit 1
+  * **Library callers** (anyone using `build_csv_writer` programmatically) still get the defensive ValueError
+  * **Testability** improved: the helper's behavior can be tested in isolation (test_helper_validation_still_raises_valueerror), separately from the CLI surface (test_invalid_csv_dialect_*)
+
+The pattern is reusable: anywhere a util helper raises a clean exception, the CLI layer can add a thin validation step that surfaces it as typer.Exit. We already follow this pattern in a few places (e.g., audit-export's `--format` validation), so v1.7.38 makes it consistent for `--csv-dialect` too.
+
+**No new lesson codified.** The pattern (layered validation: helper raises, CLI catches) is well-established CLI design. Not novel enough to capture as a lesson.
+
+### Limitations
+
+- **Helper still uses string comparison, not Enum.** `_check_csv_dialect` validates against the tuple `("csv", "tsv")` rather than using a typed Enum. The tradeoff: simpler typer Option declaration (no extra Enum import or callback), at the cost of a magic-string list maintained in two places (helper + helper). If a third dialect is ever added, both spots need updating. Acceptable for the current size (2 dialects); reconsider if it grows.
+- **No tab-completion for the dialect value.** Typer can offer shell completion for fixed sets via Enum-backed options. v1.7.38 stayed with `str` for the simpler declaration. Users wanting tab completion can run `--help`.
+- **The check fires only when `--csv` is also passed.** Without `--csv`, the `--csv-dialect` value is unused and uvalidated. This is correct (no behavior to validate) but means typos like `--csv-dialect tcv` (no `--csv`) silently pass. Acceptable since `--csv-dialect` alone has no effect anyway.
+
+### Cumulative arc state (after v1.7.38)
+
+- **38 ships**, all tagged, all baselines green
+- **pytest**: 1489 / 9 / 0 (+3 from v1.7.37)
+- **CLI commands with CSV/TSV output**: 10 (unchanged)
+- **CSV/TSV writers using `build_csv_writer()` helper**: 10 (unchanged)
+- **CLI-side dialect validation**: 9 commands (NEW v1.7.38)
+- **Defensive layers for lesson #50**: 4 (code, tests, docs, git hook) — unchanged
+- **Lessons in commit-message corpus**: #46–#56 — no new lesson this ship
+- **v1.7.37 limitation 1**: closed
+
 ## [1.7.37] — 2026-05-11 — TSV dialect option (closes v1.7.33 + v1.7.36 limitations)
 
 **Headline:** New `--csv-dialect csv|tsv` flag on all 9 stdout-CSV commands, plus `tsv` as a third value for `audit-export --format`. The TSV dialect emits tab-separated output instead of comma-separated — useful for tools that prefer tabs (awk pipelines, some database imports, spreadsheets that don't auto-parse commas correctly). All CSV/TSV writers now share a single helper (`build_csv_writer` in `cli/util.py`), so the v1.7.36 `lineterminator='\n'` fix and the new dialect parameter stay centralized in one place.

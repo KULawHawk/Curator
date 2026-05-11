@@ -192,6 +192,77 @@ def test_csv_default_dialect_unchanged(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# v1.7.38: clean error for invalid --csv-dialect
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_csv_dialect_gives_clean_error(tmp_path):
+    """v1.7.38: --csv-dialect xyz produces typer-style error, not traceback.
+
+    Closes the v1.7.37 limitation where the helper-layer ValueError
+    propagated as a Rich traceback. The v1.7.38 _check_csv_dialect()
+    helper in main.py catches it CLI-side and surfaces a clean message.
+    """
+    db = tmp_path / "v1738_invalid.db"
+    code, stdout, stderr = _run_curator(
+        ["audit", "--limit", "1", "--csv", "--csv-dialect", "invalid"], db,
+    )
+    # Exit 1 (clean user error), NOT exit 2 (typer parsing) or other
+    assert code == 1, f"Expected clean exit 1; got {code}"
+    # No Python traceback in output
+    combined = stdout + stderr
+    assert "Traceback" not in combined, (
+        f"Should not show Python traceback; got: {combined[:300]!r}"
+    )
+    # Error message should mention the valid options + the invalid value
+    assert "csv" in combined and "tsv" in combined and "invalid" in combined, (
+        f"Error should mention 'csv', 'tsv', and 'invalid'; got: {combined[:300]!r}"
+    )
+
+
+def test_invalid_csv_dialect_clean_error_across_commands(tmp_path):
+    """The clean-error path applies uniformly to every --csv-dialect command.
+
+    Spot-check three commands (audit, bundles list, sources list) to
+    verify they all behave the same way for an invalid dialect value.
+    """
+    db = tmp_path / "v1738_uniform.db"
+    cmds = [
+        ["audit", "--limit", "1", "--csv", "--csv-dialect", "xml"],
+        ["bundles", "list", "--csv", "--csv-dialect", "yaml"],
+        ["sources", "list", "--csv", "--csv-dialect", "weird"],
+    ]
+    for cmd in cmds:
+        code, stdout, stderr = _run_curator(cmd, db)
+        combined = stdout + stderr
+        assert code == 1, (
+            f"{cmd[0]}: expected exit 1; got {code}"
+        )
+        assert "Traceback" not in combined, (
+            f"{cmd[0]}: should not show Python traceback; got: {combined[:200]!r}"
+        )
+        # Each error must mention the dialect name we passed
+        invalid_value = cmd[-1]
+        assert invalid_value in combined, (
+            f"{cmd[0]}: error should mention {invalid_value!r}; got: {combined[:200]!r}"
+        )
+
+
+def test_helper_validation_still_raises_valueerror():
+    """v1.7.38: build_csv_writer's ValueError behavior preserved for library callers.
+
+    The CLI-side _check_csv_dialect catches the dialect before the
+    helper is invoked, but library callers (programmatic users of
+    build_csv_writer) still get the original ValueError defense.
+    Both layers of validation remain useful.
+    """
+    from curator.cli.util import build_csv_writer
+    out = io.StringIO()
+    with pytest.raises(ValueError, match="unknown csv dialect"):
+        build_csv_writer(out, "xml")
+
+
+# ---------------------------------------------------------------------------
 # audit-export --format tsv
 # ---------------------------------------------------------------------------
 
