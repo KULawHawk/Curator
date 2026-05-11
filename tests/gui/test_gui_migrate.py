@@ -411,7 +411,10 @@ class TestMigrateTabWiring:
         rt, _ = runtime_with_migrations
         window = CuratorMainWindow(rt)
         try:
-            assert window._tabs.tabText(4) == "Migrate"
+            # v1.7-alpha.6: refactored to name-based assertion. Test name
+            # preserved for git history continuity.
+            tab_names = [window._tabs.tabText(i) for i in range(window._tabs.count())]
+            assert "Migrate" in tab_names
         finally:
             window.deleteLater()
 

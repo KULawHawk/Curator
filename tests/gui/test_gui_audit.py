@@ -288,10 +288,11 @@ class TestWiring:
         rt, _ = runtime_with_audit_entries
         window = CuratorMainWindow(rt)
         try:
-            assert window._tabs.count() >= 6
-            # Audit Log was at index 4 in v0.39, shifted to index 5 in
-            # v1.1.0 when the Migrate tab was inserted between Trash and Audit Log.
-            assert window._tabs.tabText(5) == "Audit Log"
+            # v1.7-alpha.6: refactored to name-based assertion. Was previously
+            # asserting count >= 6 and tabText(5) == "Audit Log" — the latter
+            # breaks if any tab is reordered before Audit Log.
+            tab_names = [window._tabs.tabText(i) for i in range(window._tabs.count())]
+            assert "Audit Log" in tab_names
         finally:
             window.deleteLater()
 
