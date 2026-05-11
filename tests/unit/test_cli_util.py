@@ -20,9 +20,9 @@ import curator.cli.util as util_module
 # ---------------------------------------------------------------------------
 
 def test_all_8_constants_exported() -> None:
-    """The 8 glyph constants must exist as module attributes."""
+    """The 9 glyph constants must exist as module attributes (v1.7.33: +SUPER2)."""
     for name in ("CHECK", "CROSS", "ARROW", "LARROW", "ELLIPSIS",
-                "BLOCK", "TIMES", "WARN"):
+                "BLOCK", "TIMES", "WARN", "SUPER2"):
         assert hasattr(util_module, name), f"missing constant: {name}"
         value = getattr(util_module, name)
         assert isinstance(value, str), f"{name} must be str; got {type(value)}"
@@ -44,6 +44,7 @@ def test_fallback_table_covers_all_constants() -> None:
         "\u2588": "BLOCK",
         "\u00d7": "TIMES",
         "\u26a0": "WARN",
+        "\u00b2": "SUPER2",
     }
     for glyph, const_name in glyph_to_const_name.items():
         assert glyph in util_module._GLYPH_FALLBACKS, \
@@ -293,6 +294,7 @@ def test_no_literal_glyphs_in_cli_outside_util() -> None:
         "\u2026": "ELLIPSIS",
         "\u00d7": "TIMES",
         "\u26a0": "WARN",
+        "\u00b2": "SUPER2",
     }
 
     # Locate src/curator/cli/ relative to this test file

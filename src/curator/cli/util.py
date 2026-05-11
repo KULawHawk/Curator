@@ -83,6 +83,7 @@ _GLYPH_FALLBACKS: dict[str, str] = {
     "\u2026": "...",   # HORIZONTAL ELLIPSIS -- "and N more" tails
     "\u00d7": "x",     # MULTIPLICATION SIGN -- dimensions/multiplication
     "\u26a0": "!",     # WARNING SIGN -- inline warnings (v1.7.30 audit)
+    "\u00b2": "^2",    # SUPERSCRIPT TWO -- forecast R^2 (v1.7.33 audit, 6th strike)
 }
 
 
@@ -137,3 +138,4 @@ ELLIPSIS = _const("\u2026")   # "\u2026" or "..."
 BLOCK = _const("\u2588")      # "\u2588" or "#"
 TIMES = _const("\u00d7")      # "\u00d7" or "x"
 WARN = _const("\u26a0")       # "\u26a0" or "!"   (v1.7.30)
+SUPER2 = _const("\u00b2")     # "\u00b2" or "^2"  (v1.7.33, R-squared)

@@ -54,7 +54,7 @@ from rich.table import Table
 
 from curator import __version__
 from curator.cli.runtime import CuratorRuntime, build_runtime
-from curator.cli.util import CHECK, CROSS, ARROW, LARROW, ELLIPSIS, BLOCK, WARN, safe_glyphs
+from curator.cli.util import CHECK, CROSS, ARROW, LARROW, ELLIPSIS, BLOCK, WARN, SUPER2, safe_glyphs
 from curator.config import Config
 from curator.models import LineageKind, SourceConfig
 from curator.services import (
@@ -3375,6 +3375,15 @@ def forecast_cmd(
         help="Drive mount point (e.g. 'C:\\' on Windows, '/' on Unix). "
              "Omit to forecast every mounted fixed disk.",
     ),
+    csv_output: bool = typer.Option(
+        False, "--csv",
+        help="Emit CSV instead of the pretty display or JSON. One row "
+             "per drive. Mutually exclusive with --json (JSON wins).",
+    ),
+    no_header: bool = typer.Option(
+        False, "--no-header",
+        help="Suppress the CSV header row. Only meaningful with --csv.",
+    ),
 ) -> None:
     """Predict when local drives reach capacity.
 
@@ -3425,6 +3434,37 @@ def forecast_cmd(
         typer.echo(json.dumps(payload, indent=2))
         return
 
+    # v1.7.33: CSV output -- one row per drive
+    if csv_output:
+        import csv as _csv
+        writer = _csv.writer(sys.stdout)
+        if not no_header:
+            writer.writerow([
+                "drive_path", "current_used_gb", "current_total_gb",
+                "current_free_gb", "current_pct", "slope_gb_per_day",
+                "fit_r_squared", "days_to_95pct", "days_to_99pct",
+                "eta_95pct", "eta_99pct", "status", "status_message",
+            ])
+        for f in forecasts:
+            writer.writerow([
+                f.drive_path,
+                f"{f.current_used_gb:.2f}",
+                f"{f.current_total_gb:.2f}",
+                f"{f.current_free_gb:.2f}",
+                f"{f.current_pct:.1f}",
+                (f"{f.slope_gb_per_day:.3f}"
+                 if f.slope_gb_per_day is not None else ""),
+                (f"{f.fit_r_squared:.3f}"
+                 if f.fit_r_squared is not None else ""),
+                f.days_to_95pct if f.days_to_95pct is not None else "",
+                f.days_to_99pct if f.days_to_99pct is not None else "",
+                f.eta_95pct.isoformat() if f.eta_95pct else "",
+                f.eta_99pct.isoformat() if f.eta_99pct else "",
+                f.status,
+                f.status_message,
+            ])
+        return
+
     for f in forecasts:
         # Color-code by status
         status_colors = {
@@ -3446,7 +3486,7 @@ def forecast_cmd(
         if f.slope_gb_per_day is not None:
             console.print(
                 f"  Rate:  {f.slope_gb_per_day:>8.3f} GB/day"
-                f"  (R²={f.fit_r_squared:.3f})"
+                f"  (R{SUPER2}={f.fit_r_squared:.3f})"
             )
 
         console.print(f"  [{color}]{f.status_message}[/]")
@@ -3896,6 +3936,15 @@ def export_clean_cmd(
         False, "--show-files",
         help="Print per-file outcome (every file). Default: only summary + failures.",
     ),
+    csv_output: bool = typer.Option(
+        False, "--csv",
+        help="Emit CSV instead of the pretty summary or JSON. One row per "
+             "file result. Mutually exclusive with --json (JSON wins).",
+    ),
+    no_header: bool = typer.Option(
+        False, "--no-header",
+        help="Suppress the CSV header row. Only meaningful with --csv.",
+    ),
 ) -> None:
     """Strip embedded metadata from files during export (T-B07, v1.7.7).
 
@@ -3975,6 +4024,32 @@ def export_clean_cmd(
             ],
         }
         typer.echo(_json.dumps(payload, indent=2))
+        return
+
+    # v1.7.33: CSV output -- one row per file result
+    if csv_output:
+        import csv as _csv
+        writer = _csv.writer(sys.stdout)
+        if not no_header:
+            writer.writerow([
+                "source", "destination", "outcome",
+                "bytes_in", "bytes_out",
+                "metadata_fields_removed", "error",
+            ])
+        for r in report.results:
+            # metadata_fields_removed is a list; pipe-delimit for CSV cell
+            fields = "|".join(r.metadata_fields_removed or [])
+            writer.writerow([
+                r.source,
+                r.destination,
+                r.outcome.value,
+                r.bytes_in if r.bytes_in is not None else "",
+                r.bytes_out if r.bytes_out is not None else "",
+                fields,
+                r.error or "",
+            ])
+        if report.failed_count > 0:
+            raise typer.Exit(code=1)
         return
 
     # Rich pretty-print
@@ -4084,6 +4159,16 @@ def tier_cmd(
         help="Skip the confirmation prompt before --apply executes. "
              "Useful for automation; dangerous for interactive use.",
     ),
+    csv_output: bool = typer.Option(
+        False, "--csv",
+        help="Emit CSV instead of the pretty summary or JSON. One row "
+             "per candidate (limited by --limit if set). Mutually "
+             "exclusive with --json (JSON wins).",
+    ),
+    no_header: bool = typer.Option(
+        False, "--no-header",
+        help="Suppress the CSV header row. Only meaningful with --csv.",
+    ),
 ) -> None:
     """Tiered storage manager — identify files for cold-tier migration (T-B05).
 
@@ -4186,6 +4271,30 @@ def tier_cmd(
             ],
         }
         typer.echo(_json.dumps(payload, indent=2))
+        return
+
+    # v1.7.33: CSV output -- one row per candidate
+    if csv_output:
+        import csv as _csv
+        writer = _csv.writer(sys.stdout)
+        if not no_header:
+            writer.writerow([
+                "curator_id", "source_id", "source_path",
+                "size", "status", "last_scanned_at",
+                "expires_at", "reason",
+            ])
+        display = report.candidates[:limit] if limit else report.candidates
+        for c in display:
+            writer.writerow([
+                str(c.file.curator_id),
+                c.file.source_id,
+                c.file.source_path,
+                c.file.size,
+                c.file.status,
+                c.file.last_scanned_at.isoformat() if c.file.last_scanned_at else "",
+                c.file.expires_at.isoformat() if c.file.expires_at else "",
+                c.reason,
+            ])
         return
 
     # Rich pretty-print
