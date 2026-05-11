@@ -39,8 +39,12 @@ Design constraints:
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Callable
@@ -163,6 +167,11 @@ class PIIMatch:
     redacted: str      # Safe to log: e.g. "XXX-XX-1234"
     offset: int        # Byte offset (in the source text) of the match
     line: int          # 1-based line number
+    # v1.7.26: optional per-pattern enrichment metadata. JWT matches
+    # populate this with {alg, iss, sub, exp, exp_iso, expired, ...}
+    # parsed from the token's header + payload. Other patterns leave
+    # it None. Keep keys flat (str -> str/int/bool) for JSON/CSV.
+    metadata: dict | None = None
 
 
 @dataclass
@@ -422,6 +431,77 @@ DEFAULT_PATTERNS: list[PIIPattern] = _build_default_patterns()
 # ---------------------------------------------------------------------------
 
 
+def _parse_jwt(token: str) -> dict | None:
+    """Parse a JWT into a flat metadata dict for forensic review (v1.7.26).
+
+    Decodes the header and payload (base64url-encoded JSON, no padding)
+    and surfaces the most useful claims for triage:
+
+      header:  alg, typ, kid
+      payload: iss, sub, aud, exp, iat, nbf, jti
+      derived: exp_iso (ISO-formatted UTC), expired (bool)
+
+    Returns ``None`` if the token doesn't parse as a valid JWT
+    structure (malformed base64, malformed JSON, missing parts).
+    NEVER verifies the cryptographic signature - that requires the
+    signing key and is out of scope for a PII scanner. The point is
+    to enrich the match for forensic review, not to validate trust.
+
+    Why this is useful in forensic / IRB / HIPAA work:
+      - ``alg=HS256`` flags symmetric signing (potential secret leak
+        if the key is hardcoded).
+      - ``iss`` identifies the issuing authority.
+      - ``exp`` + ``expired`` reveal whether the leaked token is
+        still hot (live credential exposure) or stale (lower risk).
+
+    Stdlib-only (base64 + json); no PyJWT dependency.
+    """
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+
+        def _b64url(seg: str) -> bytes:
+            pad = "=" * (-len(seg) % 4)
+            return base64.urlsafe_b64decode(seg + pad)
+
+        header = json.loads(_b64url(parts[0]))
+        payload = json.loads(_b64url(parts[1]))
+        if not isinstance(header, dict) or not isinstance(payload, dict):
+            return None
+
+        out: dict = {}
+        # Header claims
+        for k in ("alg", "typ", "kid"):
+            v = header.get(k)
+            if v is not None:
+                out[k] = v
+        # Payload claims (strings)
+        for k in ("iss", "sub", "aud", "jti"):
+            v = payload.get(k)
+            if v is not None:
+                out[k] = v
+        # Numeric timestamp claims
+        for k in ("exp", "iat", "nbf"):
+            v = payload.get(k)
+            if isinstance(v, (int, float)):
+                out[k] = int(v)
+
+        # Derived: ISO datetime + expired flag
+        if "exp" in out:
+            try:
+                exp_dt = datetime.fromtimestamp(out["exp"], tz=timezone.utc)
+                out["exp_iso"] = exp_dt.isoformat()
+                out["expired"] = exp_dt < datetime.now(timezone.utc)
+            except (OSError, ValueError, OverflowError):
+                # Bogus epoch (e.g. negative, > year 9999) - skip derivation
+                pass
+
+        return out if out else None
+    except (ValueError, TypeError, binascii.Error, json.JSONDecodeError):
+        return None
+
+
 class PIIScanner:
     """Stateless PII detector.
 
@@ -482,6 +562,7 @@ class PIIScanner:
                     redacted=pat.redact(matched),
                     offset=offset,
                     line=line,
+                    metadata=_parse_jwt(matched) if pat.name == "jwt" else None,
                 ))
         # Stable sort: by offset
         matches.sort(key=lambda m: m.offset)

@@ -3686,6 +3686,7 @@ def scan_pii_cmd(
                             "redacted": m.redacted,
                             "line": m.line,
                             "offset": m.offset,
+                            "metadata": m.metadata,
                         }
                         for m in r.matches
                     ] if show_matches else None
@@ -3703,9 +3704,16 @@ def scan_pii_cmd(
         if show_matches:
             # Per-match rows: lets users grep / sort / pivot by pattern
             if not no_header:
-                writer.writerow(["source", "line", "offset", "pattern", "severity", "redacted"])
+                writer.writerow(["source", "line", "offset", "pattern", "severity", "redacted", "metadata"])
             for r in reports:
                 for m in r.matches:
+                    # v1.7.26: encode metadata dict as 'key=value;key=value'
+                    # in a single CSV cell (same pattern as by_pattern in
+                    # v1.7.22's per-file mode). Empty string when None.
+                    if m.metadata:
+                        meta_str = ";".join(f"{k}={v}" for k, v in m.metadata.items())
+                    else:
+                        meta_str = ""
                     writer.writerow([
                         r.source,
                         m.line,
@@ -3713,6 +3721,7 @@ def scan_pii_cmd(
                         m.pattern_name,
                         m.severity.value,
                         m.redacted,
+                        meta_str,
                     ])
         else:
             # Per-file rows: high-level summary. by_pattern as a
@@ -3778,6 +3787,20 @@ def scan_pii_cmd(
                     f"      L{m.line:>4}  [{sev_color}]{m.pattern_name:>12}[/]  "
                     f"{m.redacted}"
                 )
+                # v1.7.26: surface JWT metadata under the match line.
+                # The parser exposes alg/iss/sub/exp_iso/expired - all
+                # critical for forensic triage of leaked tokens.
+                if m.metadata:
+                    parts = []
+                    for k in ("alg", "iss", "sub", "exp_iso", "expired"):
+                        v = m.metadata.get(k)
+                        if v is not None:
+                            parts.append(f"{k}={v}")
+                    if parts:
+                        meta_color = "red" if m.metadata.get("expired") else "dim"
+                        console.print(
+                            f"             [{meta_color}]{'  '.join(parts)}[/]"
+                        )
 
 
 

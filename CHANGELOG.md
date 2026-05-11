@@ -4,6 +4,114 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.26] — 2026-05-11 — JWT payload parsing for PII scanner enrichment
+
+**Headline:** When the PII scanner detects a JWT (pattern shipped in v1.7.15), it now decodes the header + payload (base64url JSON) and surfaces the most useful claims — `alg`, `iss`, `sub`, `aud`, `exp`, `iat`, `kid`, plus derived `exp_iso` and `expired` — as a `metadata` dict on the match. Forensic value: at a glance you can tell whether a leaked JWT is symmetric (HS256, possible secret exposure) or asymmetric (RS256), who issued it, who it's for, and whether it's still hot or already stale.
+
+### Why this matters
+
+v1.7.15 shipped a JWT regex pattern that detects tokens with the dual-`eyJ` prefix. But detection alone leaves the analyst with just `pattern=jwt redacted=*****hars line=42`. To answer the obvious follow-up questions ("Is this still valid? Who issued it? Symmetric or asymmetric signing?") the analyst had to copy the token into jwt.io or run a separate parser. v1.7.26 closes that loop — the metadata is right there in the scan output, in every format (Rich, JSON, CSV).
+
+For Jake's forensic / IRB / HIPAA workflow this is a triage accelerator:
+
+- `alg=HS256` → symmetric signing. If the key is hardcoded somewhere in the same repo, you have a credential exposure on top of the token exposure.
+- `alg=RS256` → asymmetric. Signing key isn't in the scan target. Lower triage priority for *crypto* concerns; still PII.
+- `expired=true` → stale credential. Lower severity (the token can't be reused) but still PII if the `sub` reveals identity.
+- `expired=false` + `exp_iso` far in the future → active credential. **High** triage priority.
+- `iss` → tells you which auth system to call to revoke.
+- `sub` → tells you whose access has been exposed.
+
+### What's new
+
+- **`_parse_jwt(token: str) -> dict | None`** module-level helper in `pii_scanner.py`. Stdlib-only (`base64.urlsafe_b64decode` + `json.loads`), no PyJWT dependency. **Never verifies the signature** — that requires the signing key and is out of scope for a scanner. Returns `None` on any parse failure (malformed base64, malformed JSON, wrong segment count). Returns flat dict with header claims (`alg`, `typ`, `kid`), payload claims (`iss`, `sub`, `aud`, `jti`), numeric timestamps (`exp`, `iat`, `nbf`), and derived fields (`exp_iso`, `expired`).
+- **New `metadata: dict | None = None` field** on `PIIMatch` dataclass. Backward-compatible (optional with default). JWT matches get populated; all other patterns leave it `None`.
+- **scan_text enrichment**: `metadata=_parse_jwt(matched) if pat.name == "jwt" else None` attached to each match.
+- **CLI JSON output**: each match dict now includes a `metadata` key (null for non-JWT patterns).
+- **CLI CSV per-match output**: new `metadata` column (when `--show-matches`). Encoded as `key=value;key=value` semicolon-joined (same pattern as v1.7.22's `by_pattern` field) so it fits in a single CSV cell.
+- **CLI Rich pretty-print**: when `--show-matches` and pattern is `jwt`, prints a sub-line under the match showing `alg=... iss=... sub=... exp_iso=... expired=...`. Colored **red** when `expired=true`; **dim** otherwise.
+
+### Example outputs
+
+**Rich pretty-print:**
+```
+  L  42         jwt  ***hars
+             alg=RS256  iss=https://auth.example.com  sub=user@example.com  exp_iso=2030-01-01T00:00:00+00:00  expired=False
+  L  43         jwt  ***hars
+             alg=HS256  iss=legacy-system  exp_iso=2020-01-01T00:00:00+00:00  expired=True
+```
+
+**CSV per-match:**
+```
+source,line,offset,pattern,severity,redacted,metadata
+./auth.env,42,15,jwt,high,***hars,alg=RS256;typ=JWT;iss=https://auth.example.com;sub=user@example.com;exp=1893456000;exp_iso=2030-01-01T00:00:00+00:00;expired=False
+```
+
+**JSON:**
+```json
+{
+  "pattern": "jwt",
+  "severity": "high",
+  "redacted": "***hars",
+  "line": 42,
+  "offset": 15,
+  "metadata": {
+    "alg": "RS256",
+    "typ": "JWT",
+    "iss": "https://auth.example.com",
+    "sub": "user@example.com",
+    "exp": 1893456000,
+    "iat": 1735689600,
+    "exp_iso": "2030-01-01T00:00:00+00:00",
+    "expired": false
+  }
+}
+```
+
+### Files changed
+
+- `src/curator/services/pii_scanner.py` — +84 lines (imports + `_parse_jwt` function + `metadata` field + scan_text enrichment line)
+- `src/curator/cli/main.py` — +23 lines (JSON dict entry + CSV column + CSV value encoding + Rich sub-line render)
+- `docs/releases/v1.7.26.md` — new release notes
+
+### Verification
+
+- **10-test suite** (`test_jwt_parsing.py`) mixing in-process unit tests with subprocess CLI tests:
+  1. **`_parse_jwt` direct** — valid JWT extracts all 9 expected claims (alg/typ/kid/iss/sub/exp/iat/exp_iso/expired)
+  2. **Expired JWT** — `expired=true`, `exp_iso` in the past
+  3. **Malformed inputs** — 6 graceful-failure cases all return `None` (empty, 2 segments, 4 segments, garbage, bad b64, valid b64 but not JSON)
+  4. **Scanner end-to-end** — PIIScanner.scan_text enriches JWT match with metadata
+  5. **Non-JWT patterns unchanged** — SSN match has `metadata=None` (no spurious enrichment)
+  6. **CLI JSON** — `--json --show-matches` emits metadata; both expired flags visible
+  7. **CLI CSV per-match** — `--csv --show-matches` header includes `metadata`; key=value encoding parseable
+  8. **CLI Rich** — sub-line contains `alg=...`, `iss=...`, `expired=...` for both tokens
+  9. **Per-file CSV regression** — `--csv` (without `--show-matches`) headers unchanged (no metadata column)
+  10. **`--csv --show-matches --no-header`** — 2 rows, 7 fields each (one more than v1.7.22's 6)
+- **Live CLI smoke** with real synthetic tokens showed clean Rich/JSON/CSV emission
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 27-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**0 bugs caught.** Clean first-try ship across all 10 tests — the design was straightforward enough that probing the existing `PIIMatch` shape + JWT pattern source + matches.append call site told me exactly where to insert each piece.
+
+**Design lessons reinforced:**
+
+1. **Backward-compatible dataclass extension** — adding `metadata: dict | None = None` with a default means every existing PIIMatch construction site continues to work without modification. The default field value is the migration path.
+
+2. **Single-cell CSV encoding** — reused v1.7.22's `name=count;name=count` pattern (with `=` instead of `:` to keep parsing trivial). Avoided JSON-in-CSV escaping hell. A 9-field metadata dict fits comfortably in one cell and parses with one line of Python.
+
+3. **Stdlib-only enrichment** — PyJWT is the obvious dependency but adds 1.5 MB and a maintenance burden for what is ultimately 60 lines of base64+json+dict-shuffling. The parser deliberately does NOT verify signatures (out of scope; requires the signing key) so PyJWT's main feature is unused.
+
+4. **Color the urgent thing** — the Rich sub-line is colored **red** when `expired=true` and **dim** otherwise. The eye lands on the active credentials first.
+
+### v1.7.26 limitations
+
+- **No signature verification** — deliberate. Detecting that a token *parses* is enough for triage. Signature validity requires the signing key, which the scanner doesn't have.
+- **No JWK/JWKS resolution** — the `kid` field is extracted but not resolved against a JWKS endpoint to find the actual key. Would require network access from a scanner that's deliberately offline.
+- **Only JWT pattern is enriched** — other patterns (`stripe_secret_key`, `aws_access_key_id`, etc.) could in theory expose useful prefix-derived metadata (test vs live, region, etc.). Could batch as v1.8.
+- **No CLI flag to skip parsing** — enrichment is always on. Cost is ~10 μs per JWT match (negligible). Could add `--no-metadata` if a user wanted to opt out for some reason.
+- **`metadata` field in `PIIMatch` is generic** — the dict shape is JWT-specific in this ship. If other patterns grow enrichment, the shape becomes pattern-dependent. Could formalize as a TypedDict-per-pattern later if needed.
+- **No tests for the conclave plugin path** — if a future plugin (T-D02) adds its own patterns, those wouldn't get JWT-style enrichment unless they explicitly invoke `_parse_jwt`. Considered a feature, not a bug.
+
 ## [1.7.25] — 2026-05-11 — curator tier --apply --target (T-B05 completion)
 
 **Headline:** `curator tier` gains 5 new flags (`--apply`, `--target`, `--dry-run`, `--keep-source`, `--yes`) that chain detected candidates directly into `MigrationService.apply()`. The biggest functional gap in the tier story is closed — users no longer have to manually pipe candidate paths into `curator migrate`. T-B05 is now fully complete.
