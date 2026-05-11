@@ -486,6 +486,15 @@ def _pick_primary(files, strategy: str):
 def lineage(
     ctx: typer.Context,
     identifier: str = typer.Argument(..., help="curator_id or path."),
+    csv_output: bool = typer.Option(
+        False, "--csv",
+        help="Emit CSV instead of the pretty table or JSON. One row "
+             "per lineage edge. Mutually exclusive with --json (JSON wins).",
+    ),
+    no_header: bool = typer.Option(
+        False, "--no-header",
+        help="Suppress the CSV header row. Only meaningful with --csv.",
+    ),
 ):
     """Show all lineage edges touching a file."""
     rt: CuratorRuntime = ctx.obj
@@ -514,6 +523,27 @@ def lineage(
                 for e in edges
             ],
         })
+        return
+
+    # v1.7.36: CSV output -- one row per lineage edge
+    if csv_output:
+        import csv as _csv
+        writer = _csv.writer(sys.stdout, lineterminator="\n")
+        if not no_header:
+            writer.writerow([
+                "edge_id", "kind", "from", "to",
+                "confidence", "detected_by", "notes",
+            ])
+        for e in edges:
+            writer.writerow([
+                str(e.edge_id),
+                e.edge_kind.value,
+                str(e.from_curator_id),
+                str(e.to_curator_id),
+                f"{e.confidence:.3f}",
+                e.detected_by,
+                e.notes or "",
+            ])
         return
 
     console = _console(rt)
@@ -547,7 +577,18 @@ def lineage(
 # ===========================================================================
 
 @bundles_app.command("list")
-def bundles_list(ctx: typer.Context):
+def bundles_list(
+    ctx: typer.Context,
+    csv_output: bool = typer.Option(
+        False, "--csv",
+        help="Emit CSV instead of the pretty table or JSON. One row "
+             "per bundle. Mutually exclusive with --json (JSON wins).",
+    ),
+    no_header: bool = typer.Option(
+        False, "--no-header",
+        help="Suppress the CSV header row. Only meaningful with --csv.",
+    ),
+):
     """List all bundles."""
     rt: CuratorRuntime = ctx.obj
     items = rt.bundle.list_all()
@@ -563,6 +604,25 @@ def bundles_list(ctx: typer.Context):
             for b in items
         ])
         return
+
+    # v1.7.36: CSV output -- one row per bundle
+    if csv_output:
+        import csv as _csv
+        writer = _csv.writer(sys.stdout, lineterminator="\n")
+        if not no_header:
+            writer.writerow([
+                "bundle_id", "name", "type", "members", "confidence",
+            ])
+        for b in items:
+            writer.writerow([
+                str(b.bundle_id),
+                b.name or "",
+                b.bundle_type,
+                rt.bundle.member_count(b.bundle_id),
+                f"{b.confidence:.3f}",
+            ])
+        return
+
     console = _console(rt)
     if not items:
         console.print("[dim]No bundles.[/]")
@@ -727,7 +787,18 @@ def _resolve_bundle(rt: CuratorRuntime, bundle_id: str):
 # ===========================================================================
 
 @sources_app.command("list")
-def sources_list(ctx: typer.Context):
+def sources_list(
+    ctx: typer.Context,
+    csv_output: bool = typer.Option(
+        False, "--csv",
+        help="Emit CSV instead of the pretty table or JSON. One row "
+             "per source. Mutually exclusive with --json (JSON wins).",
+    ),
+    no_header: bool = typer.Option(
+        False, "--no-header",
+        help="Suppress the CSV header row. Only meaningful with --csv.",
+    ),
+):
     """List all registered sources."""
     rt: CuratorRuntime = ctx.obj
     items = rt.source_repo.list_all()
@@ -744,6 +815,30 @@ def sources_list(ctx: typer.Context):
             for s in items
         ])
         return
+
+    # v1.7.36: CSV output -- one row per source. Includes share_visibility
+    # (v1.7.29) for symmetry with `sources config` read-only output. The
+    # config dict is JSON-encoded for the cell.
+    if csv_output:
+        import csv as _csv
+        writer = _csv.writer(sys.stdout, lineterminator="\n")
+        if not no_header:
+            writer.writerow([
+                "source_id", "source_type", "display_name", "enabled",
+                "files", "share_visibility", "config",
+            ])
+        for s in items:
+            writer.writerow([
+                s.source_id,
+                s.source_type,
+                s.display_name or "",
+                "true" if s.enabled else "false",
+                rt.file_repo.count(source_id=s.source_id),
+                s.share_visibility,
+                json.dumps(s.config, default=str) if s.config else "",
+            ])
+        return
+
     console = _console(rt)
     if not items:
         console.print(
@@ -1283,6 +1378,16 @@ def audit(
     actor: Optional[str] = typer.Option(None, "--actor"),
     action: Optional[str] = typer.Option(None, "--action"),
     limit: int = typer.Option(50, "--limit", "-n"),
+    csv_output: bool = typer.Option(
+        False, "--csv",
+        help="Emit CSV instead of the pretty table or JSON. One row "
+             "per audit entry. The 'details' column is JSON-encoded. "
+             "Mutually exclusive with --json (JSON wins).",
+    ),
+    no_header: bool = typer.Option(
+        False, "--no-header",
+        help="Suppress the CSV header row. Only meaningful with --csv.",
+    ),
 ):
     """Query the audit log."""
     rt: CuratorRuntime = ctx.obj
@@ -1307,6 +1412,29 @@ def audit(
             }
             for e in entries
         ])
+        return
+
+    # v1.7.36: CSV output -- one row per audit entry. The details field
+    # is dict-shaped; JSON-encode it for the cell so downstream tools
+    # can re-parse if needed.
+    if csv_output:
+        import csv as _csv
+        writer = _csv.writer(sys.stdout, lineterminator="\n")
+        if not no_header:
+            writer.writerow([
+                "audit_id", "occurred_at", "actor", "action",
+                "entity_type", "entity_id", "details",
+            ])
+        for e in entries:
+            writer.writerow([
+                e.audit_id,
+                e.occurred_at.isoformat() if e.occurred_at else "",
+                e.actor,
+                e.action,
+                e.entity_type or "",
+                e.entity_id or "",
+                json.dumps(e.details, default=str) if e.details else "",
+            ])
         return
 
     console = _console(rt)
@@ -3452,7 +3580,7 @@ def forecast_cmd(
     # v1.7.33: CSV output -- one row per drive
     if csv_output:
         import csv as _csv
-        writer = _csv.writer(sys.stdout)
+        writer = _csv.writer(sys.stdout, lineterminator="\n")
         if not no_header:
             writer.writerow([
                 "drive_path", "current_used_gb", "current_total_gb",
@@ -4044,7 +4172,7 @@ def export_clean_cmd(
     # v1.7.33: CSV output -- one row per file result
     if csv_output:
         import csv as _csv
-        writer = _csv.writer(sys.stdout)
+        writer = _csv.writer(sys.stdout, lineterminator="\n")
         if not no_header:
             writer.writerow([
                 "source", "destination", "outcome",
@@ -4298,7 +4426,7 @@ def tier_cmd(
     # v1.7.33: CSV output -- one row per candidate
     if csv_output:
         import csv as _csv
-        writer = _csv.writer(sys.stdout)
+        writer = _csv.writer(sys.stdout, lineterminator="\n")
         if not no_header:
             writer.writerow([
                 "curator_id", "source_id", "source_path",

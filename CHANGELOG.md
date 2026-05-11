@@ -4,6 +4,119 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.36] — 2026-05-11 — CSV completeness for list commands + Windows blank-line fix
+
+**Headline:** Four list-output CLI commands gain `--csv` / `--no-header` flags: `audit`, `lineage`, `bundles list`, `sources list`. Now every Curator command that emits a record-shaped dataset supports the same three output modes (Rich table / JSON / CSV). **Bonus fix**: caught and patched a Windows-specific blank-line issue affecting ALL 7 stdout CSV writers — csv.writer + Python's text-mode stdout was producing `\r\n\r\n` per row (extra blank lines between rows). Single-line fix (`lineterminator="\n"`) applied across the entire CSV surface.
+
+### Why this matters
+
+**CSV symmetry**: prior to this ship, six commands emitted record-shaped CSV (`audit-summary`, `scan-pii`, `audit-export`, `forecast`, `export-clean`, `tier`) and four commands didn't (`audit`, `lineage`, `bundles list`, `sources list`). The pattern was inconsistent. v1.7.36 closes that.
+
+Now ALL TEN Curator commands that emit list-shaped data support `--csv`. Pipeable into spreadsheets / SQL imports / awk pipelines with zero friction:
+
+```bash
+# Filter audit log by actor, dump as CSV for Excel review
+curator audit --actor admin --csv > audit_admin.csv
+
+# Get all share-visibility postures across sources
+curator sources list --csv --no-header \
+    | awk -F, '{print $1": "$6}'
+
+# Bundle membership analysis
+curator bundles list --csv | duckdb -c \
+    "SELECT type, AVG(members) AS avg_size FROM read_csv_auto('/dev/stdin') GROUP BY 1"
+
+# Lineage edges for a file, as a graph-import format
+curator lineage /my/file.txt --csv > edges.csv  # ready for Cytoscape, NetworkX, etc.
+```
+
+**Windows blank-line bug**: discovered while smoke-testing the new `audit --csv` output. Each CSV row had an extra blank line between it and the next. Root cause: Python's `csv.writer` defaults to `lineterminator='\r\n'`; combined with `sys.stdout`'s default text-mode newline translation on Windows (which adds another `\r\n`), the result was `\r\n\r\n` per row. Single fix: pass `lineterminator='\n'` to every `csv.writer(sys.stdout, ...)` call. Affects all 7 stdout-writing CSV sites across forecast, export-clean, tier (v1.7.33), and the four new sites this ship.
+
+The file-writing CSV in `audit-export` (writes to `out_handle`, not stdout) was unaffected and unchanged.
+
+### What's new
+
+**`--csv` / `--no-header` flags** on four list commands:
+
+| Command | Row shape | Columns |
+|---|---|---|
+| `audit` | one row per audit entry | `audit_id`, `occurred_at`, `actor`, `action`, `entity_type`, `entity_id`, `details` (JSON-encoded) |
+| `lineage` | one row per edge | `edge_id`, `kind`, `from`, `to`, `confidence`, `detected_by`, `notes` |
+| `bundles list` | one row per bundle | `bundle_id`, `name`, `type`, `members`, `confidence` |
+| `sources list` | one row per source | `source_id`, `source_type`, `display_name`, `enabled`, `files`, `share_visibility`, `config` (JSON-encoded) |
+
+All four follow the established pattern: `--json` wins over `--csv` if both are passed; `--no-header` suppresses the header row for shell pipelines.
+
+**Windows blank-line fix**: 7 instances of `_csv.writer(sys.stdout)` updated to `_csv.writer(sys.stdout, lineterminator="\n")`. Affects:
+  * `forecast` (v1.7.33)
+  * `export-clean` (v1.7.33)
+  * `tier` (v1.7.33)
+  * `audit` (NEW v1.7.36)
+  * `lineage` (NEW v1.7.36)
+  * `bundles list` (NEW v1.7.36)
+  * `sources list` (NEW v1.7.36)
+
+Verified by re-running `audit --csv` and confirming `\n` line terminators in `repr(stdout)` (no `\r\n`, no `\n\n`).
+
+**New test module** `tests/integration/test_cli_csv_list_commands.py` (+6 tests):
+  * `test_audit_csv_header_and_rows` — header present + structure correct
+  * `test_audit_csv_no_header` — header suppressed correctly
+  * `test_bundles_list_csv_empty` — empty DB → header-only output
+  * `test_bundles_list_csv_no_header_empty` — empty DB + no-header → empty output
+  * `test_sources_list_csv_includes_share_visibility` — verifies v1.7.29 column present
+  * `test_lineage_csv_no_file` — flag parses correctly even when resolution fails
+
+Each test uses an `_expect_no_blank_lines` helper that asserts no `\n\n` appears in the output — regression guard for the blank-line bug.
+
+### Files changed
+
+- `src/curator/cli/main.py` — +147 lines (4 × flag pairs + 4 × CSV branches + 7 × lineterminator fix)
+- `tests/integration/test_cli_csv_list_commands.py` — NEW (187 lines, 6 tests)
+- `CHANGELOG.md` — v1.7.36 entry
+- `docs/releases/v1.7.36.md` — release notes
+
+### Verification
+
+- **All 6 new CSV-completeness tests pass** in 13.34s
+- **Full pytest baseline**: ✅ **1473 passed**, 9 skipped, 0 failed in 243s (was 1467 at v1.7.35; +6 new tests, all passing)
+- **CLI signature check**: all four commands have `csv_output` and `no_header` parameters
+- **Output verification**: `audit --csv` produces clean single-newline-terminated CSV with proper RFC 4180 quoting for JSON-shaped cells
+- **Lesson #50 lint**: still passing on every commit
+
+### Authoritative-principle catches (this turn)
+
+**1 cross-cutting production bug caught and fixed** (Windows blank-line in CSV output). The first smoke test of `audit --csv` revealed extra blank lines between rows. Investigation traced it to the interaction between csv.writer's default `\r\n` line terminator and Python text-mode stdout's newline translation on Windows. Fix applied to all 7 stdout-writing csv.writer sites in one pass.
+
+**This bug was latent in v1.7.33** (forecast/export-clean/tier `--csv` outputs would all show blank lines on Windows console when used without redirection). It wasn't caught during v1.7.33's smoke test because the test verified header + row shape via `csv.reader` (which is tolerant of blank lines between records). Visual inspection of the raw `sys.stdout` capture in v1.7.36 revealed the issue.
+
+**Codified as lesson #56: when emitting CSV to stdout on cross-platform code, always pass `lineterminator='\n'` to `csv.writer()`. Python's text-mode stdout adds platform-appropriate newline translation; csv.writer's default `\r\n` then doubles up to `\r\n\r\n` on Windows. The fix preserves CSV correctness (any CSV-aware tool accepts `\n`-terminated lines per RFC 4180) and eliminates platform-specific visual noise. Always verify CSV output via `repr(stdout)`, not just `csv.reader(stdout)` parsing.**
+
+**0 lesson-#50 regressions caught.** The four-layer defense (helper / lint / docs / hook) caught nothing new this ship because the changes were CSV-mechanical and used no Unicode glyphs.
+
+### Limitations
+
+- **No CSV for detail commands** (`inspect`, `gdrive paths`). These emit single-record information, not record-shaped lists; CSV would be silly. They keep their `--json` for programmatic access.
+- **No CSV for `cleanup *` commands**. These produce findings + apply reports with complex nested structure; flattening to CSV would lose information. JSON output remains the answer.
+- **No CSV for `safety check` / `safety paths`**. Similar argument; safety output is structured analysis, not records.
+- **`details` and `config` columns are JSON-encoded inside a CSV cell.** This preserves the full information but loses cleanly-tabular structure. Downstream tools wanting per-key columns should use `--json` instead. The CSV format optimizes for spreadsheet review; JSON optimizes for machine post-processing.
+- **No TSV dialect yet.** v1.7.33 limitation 1 remains open. ~20 lines of follow-up to add `--csv-dialect {csv,tsv}` across all 10 commands.
+
+### Lesson #56 (new this ship)
+
+> **When emitting CSV to stdout on cross-platform code, always pass `lineterminator='\n'` to `csv.writer()`. Python's text-mode stdout adds platform-appropriate newline translation; csv.writer's default `\r\n` then doubles up to `\r\n\r\n` on Windows, producing visible blank lines between rows on the console. The fix preserves CSV correctness (any RFC 4180-compliant tool accepts `\n`-terminated lines) and eliminates platform-specific visual noise. Always verify CSV output via `repr(stdout)`, not just `csv.reader(stdout)` parsing — csv.reader is tolerant of blank lines, so it hides the bug.**
+
+Caught this ship within seconds of the first `audit --csv` smoke test. v1.7.33's three CSV commands had been carrying this latent bug since they shipped; the fix in v1.7.36 retroactively cleans them up.
+
+### Cumulative arc state (after v1.7.36)
+
+- **36 ships**, all tagged, all baselines green
+- **pytest**: 1473 / 9 / 0 (+6 from v1.7.35, all v1.7.36 CSV-completeness tests)
+- **CLI commands with CSV output**: 10 (was 6; +audit, lineage, bundles list, sources list)
+- **CSV writers with proper line terminators**: 7 stdout + 1 file = 8 (was 0 stdout + 1 file = 1 properly-terminated)
+- **Defensive layers for lesson #50**: 4 (code, tests, docs, git hook)
+- **Lessons in commit-message corpus**: #46–#56
+- **v1.7.33 CSV pattern**: now complete across all list-output commands
+
 ## [1.7.35] — 2026-05-11 — `--no-autostrip` migration opt-out (closes v1.7.29 limitation)
 
 **Headline:** New `--no-autostrip` flag on `curator migrate` and `curator tier --apply` lets the caller opt out of v1.7.29's auto-strip behavior on a per-migration basis. When the destination source has `share_visibility='public'`, the default is to auto-strip EXIF/docProps/PDF metadata on every successfully migrated file (v1.7.29 T-B07 completion). With `--no-autostrip`, the move still happens but the stripping doesn't — with the override recorded in the audit log so administrators can see why a public-dst migration didn't strip when they'd expect it to. **Bonus**: this ship also adds dedicated test coverage for the v1.7.29 auto-strip path (`tests/unit/test_migration_autostrip.py`, +5 tests), which was a real coverage gap.
