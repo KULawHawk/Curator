@@ -4110,6 +4110,19 @@ def audit_summary_cmd(
              "pretty table. Useful for spreadsheet imports. Mutually "
              "exclusive with --json (JSON wins if both are set).",
     ),
+    no_header: bool = typer.Option(
+        False, "--no-header",
+        help="Suppress the CSV header row. Useful when piping into "
+             "another tool or appending to an existing CSV file. "
+             "Only meaningful with --csv (ignored otherwise).",
+    ),
+    local: bool = typer.Option(
+        False, "--local",
+        help="Render timestamps in the system's local timezone instead "
+             "of UTC. Affects the period header, JSON ISO timestamps, "
+             "and CSV first/last columns. Relative-time deltas in the "
+             "Rich table (e.g. '2m ago') are unaffected.",
+    ),
 ) -> None:
     """Aggregate recent audit events by actor and action (T-B04-adjacent, v1.7.18).
 
@@ -4175,24 +4188,36 @@ def audit_summary_cmd(
         reverse=True,
     )
 
+    # v1.7.20: timezone-aware formatting helper.
+    # The audit_repo stores naive UTC datetimes; when --local is set we
+    # attach UTC tzinfo then convert to system local before formatting.
+    def _fmt_ts(dt):
+        if dt is None:
+            return None
+        if local:
+            from datetime import timezone
+            return dt.replace(tzinfo=timezone.utc).astimezone().isoformat()
+        return dt.isoformat()
+
     # JSON output (machine-readable)
     if rt.json_output:
         import json as _json
         payload = {
-            "since": since_dt.isoformat(),
+            "since": _fmt_ts(since_dt) or since_dt.isoformat(),
             "total_events": len(entries),
             "group_count": len(groups),
             "filters": {
                 "actor": actor,
                 "action": action,
             },
+            "timezone": "local" if local else "utc",
             "groups": [
                 {
                     "actor": k[0],
                     "action": k[1],
                     "count": v["count"],
-                    "first": v["first"].isoformat() if v["first"] else None,
-                    "last": v["last"].isoformat() if v["last"] else None,
+                    "first": _fmt_ts(v["first"]),
+                    "last": _fmt_ts(v["last"]),
                 }
                 for k, v in sorted_groups[:limit]
             ],
@@ -4207,22 +4232,35 @@ def audit_summary_cmd(
         import csv as _csv
         import sys as _sys
         writer = _csv.writer(_sys.stdout, lineterminator="\n")
-        writer.writerow(["actor", "action", "count", "first", "last"])
+        # v1.7.20: --no-header suppresses the header row
+        if not no_header:
+            writer.writerow(["actor", "action", "count", "first", "last"])
         for (actor_v, action_v), g in sorted_groups[:limit]:
+            # v1.7.20: --local converts timestamps to system local TZ
             writer.writerow([
                 actor_v,
                 action_v,
                 g["count"],
-                g["first"].isoformat() if g["first"] else "",
-                g["last"].isoformat() if g["last"] else "",
+                _fmt_ts(g["first"]) or "",
+                _fmt_ts(g["last"]) or "",
             ])
         return
 
     # Rich pretty-print
     period_end = datetime.utcnow()
     period_start = since_dt
+    # v1.7.20: --local converts the header timestamps to system local TZ
+    if local:
+        from datetime import timezone
+        period_end_display = period_end.replace(tzinfo=timezone.utc).astimezone()
+        period_start_display = period_start.replace(tzinfo=timezone.utc).astimezone()
+        tz_label = "local"
+    else:
+        period_end_display = period_end
+        period_start_display = period_start
+        tz_label = "UTC"
     console.print(f"\n[bold]Audit summary[/]")
-    console.print(f"  Period:        {period_start:%Y-%m-%d %H:%M} -> {period_end:%Y-%m-%d %H:%M}")
+    console.print(f"  Period:        {period_start_display:%Y-%m-%d %H:%M} -> {period_end_display:%Y-%m-%d %H:%M}  [dim]({tz_label})[/]")
     if actor:
         console.print(f"  Actor filter:  {actor}")
     if action:

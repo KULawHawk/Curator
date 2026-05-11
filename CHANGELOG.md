@@ -4,6 +4,89 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.20] — 2026-05-11 — curator audit-summary --no-header + --local
+
+**Headline:** Two more `audit-summary` flag enhancements: **`--no-header`** suppresses the CSV header row for piping/appending, and **`--local`** renders timestamps in the system's local timezone instead of UTC across all output formats. Completes the trio of v1.7.18/v1.7.19/v1.7.20 audit-summary refinements.
+
+### Why this matters
+
+v1.7.19's `--csv` is great for Excel, but piping it through other tools (`grep`, `awk`, `xargs`) or appending to an existing CSV file requires stripping the header row. Now `--no-header` does that in-tool.
+
+UTC timestamps are correct for forensic-grade tracking, but mentally translating "2026-05-09T03:21:34Z" to "Saturday evening Chicago time" is friction Jake doesn't need when reviewing his own activity. `--local` puts the burden on the tool. The audit_repo storage is unchanged (still UTC internally); only the *display* shifts.
+
+### What's new
+
+- **`--no-header` flag** on `audit-summary`:
+  - Suppresses the `actor,action,count,first,last` header row in CSV output
+  - Only meaningful when `--csv` is set; silently ignored otherwise
+  - Use case: `curator audit-summary --csv --no-header >> existing.csv` to append without duplicating the header
+- **`--local` flag** on `audit-summary`:
+  - Renders timestamps in the system's local timezone across **all three** output modes:
+    - **Rich pretty-print**: header shows `"(local)"` label after period range; without `--local`, shows `"(UTC)"`
+    - **JSON**: adds `"timezone": "local"` (or `"utc"`) field; ISO timestamps gain a `+HH:MM` / `-HH:MM` offset
+    - **CSV**: `first` and `last` columns gain the TZ offset suffix
+  - Relative-time deltas in the Rich table (`"2m ago"`, `"3d ago"`) are unaffected because deltas are timezone-invariant
+- **Internal helper `_fmt_ts(dt)`**: timezone-aware ISO formatter; attaches `timezone.utc` to the audit_repo's naive datetimes then converts to local when `--local` is set, otherwise returns naive UTC ISO unchanged.
+- **No storage change**: the audit_repo still stores naive UTC; `--local` only affects display formatting.
+
+### Example output
+
+```
+$ curator audit-summary --csv --local --days 30 --limit 2
+actor,action,count,first,last
+curator.migrate,migration.move,50,2026-05-08T22:21:34.007031-05:00,2026-05-08T22:21:40.408979-05:00
+gui.tier,tier.suggest,25,2026-05-11T06:43:19.786940-05:00,2026-05-11T08:09:46.370416-05:00
+```
+
+```
+$ curator audit-summary --csv --no-header --days 30 --limit 2
+curator.migrate,migration.move,50,2026-05-09T03:21:34.007031,2026-05-09T03:21:40.408979
+gui.tier,tier.suggest,25,2026-05-11T11:43:19.786940,2026-05-11T13:09:46.370416
+```
+
+```
+$ curator audit-summary --local --days 1
+
+Audit summary
+  Period:        2026-05-10 08:32 -> 2026-05-11 08:32  (local)
+  Total events:  34
+  Unique groups: 4
+  ...
+```
+
+### Files changed
+
+- `src/curator/cli/main.py` — +37 lines (2 flag declarations + `_fmt_ts` helper + threaded through JSON/CSV/Rich branches)
+- `docs/releases/v1.7.20.md` — new release notes
+
+### Verification
+
+- **9-test subprocess suite** (`test_audit_flags.py`):
+  1. Both flags listed in `--help`
+  2. `--csv --no-header` first line is a data row, NOT a header
+  3. **Regression**: `--csv` without `--no-header` still includes header (`actor,action,count,first,last`)
+  4. `--csv --local` emits TZ-aware ISO timestamps; `datetime.fromisoformat` parses them as `tzinfo`-aware
+  5. **Regression**: `--csv` without `--local` keeps naive UTC (no TZ suffix)
+  6. `--json --local` sets `timezone: "local"` field; group `first`/`last` are TZ-aware
+  7. **Regression**: `--json` without `--local` keeps `timezone: "utc"` field; naive ISO timestamps
+  8. `--local` pretty-print header shows `(local)` marker; without `--local`, shows `(UTC)`
+  9. Round-trip: `--csv --no-header --local` output + manually-reattached header parses as valid TZ-aware CSV
+- **Live CLI smoke**: all 3 output modes verified with `--local` showing `-05:00` Chicago offset
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 21-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**0 bugs caught.** Clean first-try ship across all 9 subprocess tests. Lesson #49 (use unique anchors when editing large files) was applied: each `Filesystem:edit_file` used a sentinel string from inside the target branch (e.g., `"# v1.7.19"` comment to anchor the CSV branch edit; `"period_end = datetime.utcnow()"` for the Rich branch).
+
+**Design note on UTC → local conversion**: the audit_repo stores naive UTC datetimes. To convert to local, the correct sequence is `dt.replace(tzinfo=timezone.utc).astimezone()` — first attach UTC awareness, then convert. The bare `dt.astimezone()` would treat the naive datetime as local time and produce wrong results. This is the Python-stdlib-recommended pattern for naive-UTC-to-local conversion.
+
+### v1.7.20 limitations
+
+- **`--local` doesn't accept explicit TZ** — always uses the system's local timezone via `astimezone()` with no argument. A future enhancement could accept `--tz America/Chicago` or `--tz UTC+0` for explicit zone control.
+- **`--no-header` doesn't apply to JSON** — JSON output always includes all metadata fields; there's no analogous "data-only" mode.
+- **Relative-time labels still use UTC "now"** for delta computation — this is correct behavior (deltas are TZ-invariant) but worth noting if a user is confused about why "2m ago" doesn't shift with `--local`.
+- **Pretty-print TZ label is dim-styled** — may be hard to see in some terminal color schemes; could be made bolder.
+
 ## [1.7.19] — 2026-05-11 — curator audit-summary --csv output
 
 **Headline:** `curator audit-summary` gains a `--csv` flag that emits `actor,action,count,first,last` CSV instead of the Rich pretty-print table. Mirrors v1.7.18's `--json` for users who want to dump audit data into Excel / Google Sheets / Pandas.
