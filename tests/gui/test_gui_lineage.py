@@ -278,11 +278,12 @@ class TestWiring:
         rt, _ = runtime_with_lineage
         window = CuratorMainWindow(rt)
         try:
-            # v1.1.0: tab count is 8 (Migrate added between Trash and Audit Log);
-            # Lineage Graph shifted from index 6 to index 7. Test name preserved
-            # for git history continuity.
-            assert window._tabs.count() == 8
-            assert window._tabs.tabText(7) == "Lineage Graph"
+            # v1.1.0: tab count was 8 (Migrate added between Trash and Audit Log);
+            # Lineage Graph shifted from index 6 to index 7.
+            # v1.7-alpha.5: tab count is 9 (Sources tab added between Settings
+            # and Lineage Graph); Lineage Graph shifted from index 7 to index 8.
+            assert window._tabs.count() == 9
+            assert window._tabs.tabText(8) == "Lineage Graph"
         finally:
             window.deleteLater()
 

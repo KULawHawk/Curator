@@ -104,6 +104,7 @@ class CuratorMainWindow(QMainWindow):
         tabs.addTab(self._build_migrate_tab(), "Migrate")
         tabs.addTab(self._build_audit_tab(), "Audit Log")
         tabs.addTab(self._build_settings_tab(), "Settings")
+        tabs.addTab(self._build_sources_tab(), "Sources")
         tabs.addTab(self._build_lineage_tab(), "Lineage Graph")
         self.setCentralWidget(tabs)
         self._tabs = tabs
@@ -150,14 +151,14 @@ class CuratorMainWindow(QMainWindow):
         menu_edit.addAction(self._act_bundle_edit)
 
         # v1.6.2: Tools menu — placeholders for v1.7 native dialogs.
-        # v1.7 alpha: Four items now graduated from placeholders to real
-        # in-process PySide6 dialogs:
+        # v1.7 alpha: All five items now graduated from placeholders to
+        # real in-process PySide6 dialogs (or tab pivots):
         #   * Health check    → HealthCheckDialog  (v1.7-alpha.1)
         #   * Scan folder     → ScanDialog         (v1.7-alpha.2)
         #   * Find duplicates → GroupDialog        (v1.7-alpha.3)
-        #   * Cleanup junk    → CleanupDialog      (v1.7-alpha.4, this commit)
-        # The one remaining item (Sources manager) still surfaces the
-        # 'coming in v1.7' placeholder for now.
+        #   * Cleanup junk    → CleanupDialog      (v1.7-alpha.4)
+        #   * Sources manager → Sources tab pivot  (v1.7-alpha.5, this commit)
+        # No placeholder entries remain in v1.7-alpha.5.
         menu_tools = self.menuBar().addMenu("&Tools")
 
         # v1.7 alpha: real ScanDialog wired directly.
@@ -175,12 +176,10 @@ class CuratorMainWindow(QMainWindow):
         act_cleanup.triggered.connect(self._slot_open_cleanup_dialog)
         menu_tools.addAction(act_cleanup)
 
-        for label, key in [
-            ("&Sources manager...", "sources"),
-        ]:
-            act = QAction(label, self)
-            act.triggered.connect(lambda checked=False, k=key: self._slot_tools_placeholder(k))
-            menu_tools.addAction(act)
+        # v1.7 alpha.5: Sources manager pivots to the Sources tab.
+        act_sources = QAction("&Sources manager...", self)
+        act_sources.triggered.connect(self._slot_open_sources_tab)
+        menu_tools.addAction(act_sources)
 
         # v1.7 alpha: real HealthCheckDialog (native PySide6, in-process).
         act_health = QAction("&Health check", self)
@@ -832,6 +831,248 @@ class CuratorMainWindow(QMainWindow):
         if fresh.source_path is None:
             return True, "Reloaded (no TOML file found; using built-in defaults).", fresh
         return True, f"Reloaded from {fresh.source_path}", fresh
+
+
+
+    # ------------------------------------------------------------------
+    # v1.7-alpha.5: Sources tab + source management
+    # ------------------------------------------------------------------
+
+    def _build_sources_tab(self) -> QWidget:
+        """v1.7-alpha.5: Sources tab — live table of all registered sources.
+
+        Replaces the v1.6.2 Tools-menu placeholder for "Sources Manager".
+        Shows one row per source with:
+
+          * source_id, source_type, display_name, enabled, # files indexed
+          * per-row buttons via right-click context menu:
+              - Enable / Disable (toggle)
+              - Remove (with confirm; refused if files reference the source)
+
+        Plus a top-of-tab "Add source..." button that opens
+        :class:`SourceAddDialog`.
+        """
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import (
+            QAbstractItemView,
+            QHeaderView,
+            QTableWidget,
+        )
+
+        w = QWidget()
+        layout = QVBoxLayout(w)
+
+        # --- Toolbar row -----------------------------------------------
+        toolbar = QHBoxLayout()
+        self._btn_source_add = QPushButton("+ Add source...")
+        self._btn_source_add.clicked.connect(self._slot_source_add)
+        toolbar.addWidget(self._btn_source_add)
+
+        self._btn_source_refresh = QPushButton("Refresh")
+        self._btn_source_refresh.clicked.connect(self._slot_source_refresh)
+        toolbar.addWidget(self._btn_source_refresh)
+
+        toolbar.addStretch(1)
+
+        self._lbl_sources_count = QLabel("0 sources")
+        self._lbl_sources_count.setStyleSheet("color: gray;")
+        toolbar.addWidget(self._lbl_sources_count)
+        layout.addLayout(toolbar)
+
+        # --- Sources table --------------------------------------------
+        self._tbl_sources = QTableWidget(0, 6)
+        self._tbl_sources.setHorizontalHeaderLabels(
+            ["Source ID", "Type", "Display name", "Enabled", "# files", "Created"]
+        )
+        self._tbl_sources.verticalHeader().setVisible(False)
+        self._tbl_sources.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._tbl_sources.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._tbl_sources.setAlternatingRowColors(True)
+        self._tbl_sources.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._tbl_sources.customContextMenuRequested.connect(self._slot_source_context_menu)
+        self._tbl_sources.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self._tbl_sources.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self._tbl_sources, 1)
+
+        # --- Hint ------------------------------------------------------
+        hint = QLabel(
+            "<i>Right-click a row for Enable/Disable/Remove actions. The Remove"
+            " action will refuse if any files reference the source (DB ON DELETE"
+            " RESTRICT). Disable first if you want it ignored without deletion.</i>"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #5C6BC0; padding: 4px;")
+        layout.addWidget(hint)
+
+        # Initial populate
+        self._refresh_sources_table()
+        return w
+
+    def _refresh_sources_table(self) -> None:
+        """Reload the sources table from runtime.source_repo.list_all()."""
+        from PySide6.QtWidgets import QTableWidgetItem
+        try:
+            sources = self.runtime.source_repo.list_all()
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(
+                self, "Source list error",
+                f"Could not load sources: {type(e).__name__}: {e}",
+            )
+            return
+
+        self._tbl_sources.setRowCount(len(sources))
+        for r, s in enumerate(sources):
+            # Per-source file count via file_repo
+            try:
+                file_count = self.runtime.file_repo.count(source_id=s.source_id)
+            except Exception:
+                file_count = "?"
+
+            created = s.created_at.strftime("%Y-%m-%d %H:%M") if s.created_at else "?"
+            cells = [
+                s.source_id,
+                s.source_type,
+                s.display_name or "",
+                "yes" if s.enabled else "no",
+                str(file_count),
+                created,
+            ]
+            for c, val in enumerate(cells):
+                item = QTableWidgetItem(val)
+                # Store the source_id in row's data for quick lookup on actions
+                if c == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, s.source_id)
+                # Color disabled rows gray
+                if not s.enabled:
+                    from PySide6.QtGui import QColor
+                    item.setForeground(QColor("#888"))
+                self._tbl_sources.setItem(r, c, item)
+
+        self._lbl_sources_count.setText(
+            f"{len(sources)} source(s) "
+            f"({sum(1 for s in sources if s.enabled)} enabled)"
+        )
+
+    def _slot_source_refresh(self) -> None:
+        self._refresh_sources_table()
+
+    def _slot_source_add(self) -> None:
+        """Open SourceAddDialog; refresh table on successful add."""
+        try:
+            from curator.gui.dialogs import SourceAddDialog
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "Source add unavailable",
+                f"Could not import SourceAddDialog: {e}",
+            )
+            return
+        dlg = SourceAddDialog(self.runtime, self)
+        result = dlg.exec()
+        if result == QDialog.DialogCode.Accepted and dlg.created_source_id:
+            self._refresh_sources_table()
+            QMessageBox.information(
+                self, "Source added",
+                f"Source <b>{dlg.created_source_id}</b> has been added.<br><br>"
+                f"You can now scan it via Tools \u2192 Scan folder.",
+            )
+
+    def _slot_source_context_menu(self, pos: QPoint) -> None:
+        """Right-click menu on sources table: enable/disable/remove."""
+        item = self._tbl_sources.itemAt(pos)
+        if item is None:
+            return
+        row = item.row()
+        sid_item = self._tbl_sources.item(row, 0)
+        if sid_item is None:
+            return
+        source_id = sid_item.data(Qt.ItemDataRole.UserRole) or sid_item.text()
+        # Get current enabled state from the row
+        enabled_cell = self._tbl_sources.item(row, 3)
+        currently_enabled = (enabled_cell is not None and enabled_cell.text() == "yes")
+
+        menu = QMenu(self)
+        act_toggle = QAction(
+            "Disable" if currently_enabled else "Enable", self,
+        )
+        act_toggle.triggered.connect(
+            lambda checked=False, sid=source_id, en=not currently_enabled:
+                self._toggle_source_enabled(sid, en)
+        )
+        menu.addAction(act_toggle)
+
+        menu.addSeparator()
+
+        act_remove = QAction("Remove source...", self)
+        act_remove.triggered.connect(
+            lambda checked=False, sid=source_id: self._remove_source(sid)
+        )
+        menu.addAction(act_remove)
+
+        menu.exec(self._tbl_sources.viewport().mapToGlobal(pos))
+
+    def _toggle_source_enabled(self, source_id: str, enabled: bool) -> None:
+        try:
+            self.runtime.source_repo.set_enabled(source_id, enabled)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "Toggle failed",
+                f"Could not toggle source <b>{source_id}</b>:<br>"
+                f"{type(e).__name__}: {e}",
+            )
+            return
+        self._refresh_sources_table()
+
+    def _remove_source(self, source_id: str) -> None:
+        # Confirm
+        reply = QMessageBox.question(
+            self, "Confirm remove",
+            f"Remove source <b>{source_id}</b> from the index?<br><br>"
+            f"This will fail if any files still reference the source (DB ON DELETE"
+            f" RESTRICT). Disable the source first if you want it ignored without"
+            f" removing the record.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self.runtime.source_repo.delete(source_id)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(
+                self, "Remove refused",
+                f"Could not remove source <b>{source_id}</b>:<br><br>"
+                f"{type(e).__name__}: {e}<br><br>"
+                f"If this is an IntegrityError, files still reference the source."
+                f" Use Disable instead.",
+            )
+            return
+        self._refresh_sources_table()
+        QMessageBox.information(
+            self, "Source removed",
+            f"Source <b>{source_id}</b> has been removed.",
+        )
+
+    def _slot_open_sources_tab(self) -> None:
+        """Tools menu 'Sources manager...' \u2192 switch to the Sources tab.
+
+        Mirrors the pattern of other Tools-menu items: instead of opening
+        a modal dialog (SourceAddDialog handles individual adds), pivot
+        to the persistent Sources tab so the user can see existing sources
+        first.
+        """
+        # Find the Sources tab index
+        for i in range(self._tabs.count()):
+            if self._tabs.tabText(i) == "Sources":
+                self._tabs.setCurrentIndex(i)
+                self._refresh_sources_table()  # ensure fresh data
+                return
+        # Should never happen; surface as a warning
+        QMessageBox.warning(
+            self, "Sources tab not found",
+            "The Sources tab is missing from the tab bar. "
+            "This is likely a v1.7-alpha bug.",
+        )
 
     def _build_lineage_tab(self) -> QWidget:
         """v0.41: Lineage Graph view (final DESIGN.md §15.2 view).

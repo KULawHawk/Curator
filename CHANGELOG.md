@@ -4,6 +4,52 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.0-alpha.5] — 2026-05-11 — SourceAddDialog + Sources tab (fifth native v1.7 piece)
+
+**Headline:** Last placeholder retired. The Tools menu's `"Sources manager..."` item now pivots to a new **9th tab ("Sources")** showing all registered sources with per-row context-menu actions, plus a new `SourceAddDialog` accessible from the tab's `"+ Add source..."` button. All five v1.6.2 Tools-menu placeholders are now real.
+
+### Files changed
+
+- **`src/curator/gui/dialogs.py`** — added `SourceAddDialog(QDialog)` class (~305 lines). Reads `curator_source_register` hookspec results to discover registered source types (today: `local`, `gdrive`). Renders the per-plugin `config_schema` as a **dynamic form** — picking the source type rebuilds the field list to match that plugin's required/optional config keys. JSON Schema types map to widgets: `string` → QLineEdit, `array` → QPlainTextEdit (one item per line), `boolean` → QCheckBox. On submit: builds `SourceConfig`, calls `source_repo.insert()`, surfaces IntegrityError inline if source_id collides.
+- **`src/curator/gui/main_window.py`** — 
+  - Added new "Sources" tab (9th tab) between Settings and Lineage Graph, via new `_build_sources_tab()` method (~150 lines).
+  - Sources tab features: 6-column table (Source ID, Type, Display name, Enabled, # files, Created); top-of-tab "+ Add source..." + "Refresh" buttons; right-click context menu with Enable/Disable + Remove actions; live count label "N source(s) (M enabled)".
+  - Tools menu "Sources manager..." now wired to `_slot_open_sources_tab` which pivots to the new tab (instead of the v1.6.2 "coming soon" placeholder).
+  - `_slot_tools_placeholder` no longer has any active entries — all 5 v1.6.2 placeholders are now real dialogs/tabs.
+- **`tests/gui/test_gui_inbox.py`** — updated tab count assertion: `count == 8` → `count == 9`.
+- **`tests/gui/test_gui_lineage.py`** — updated tab count + Lineage Graph index: `count == 8`/`text(7) == "Lineage Graph"` → `count == 9`/`text(8) == "Lineage Graph"`.
+- **`tests/gui/test_gui_settings.py`** — updated tab count assertion: `count == 8` → `count == 9`. Settings index unchanged (still 6).
+- **`docs/FEATURE_TODO.md`** — marked SourceAddDialog + Sources tab shipped; only `AuditFilterUI` remains before v1.7.0 tag.
+
+### Source type schemas (rendered dynamically from hookspec)
+
+| Plugin | Required config | Optional config | Capabilities |
+|---|---|---|---|
+| `local` | `roots` (array of paths) | `ignore` (array of glob patterns) | watch + write |
+| `gdrive` | `credentials_path`, `client_secrets_path` | `root_folder_id`, `include_shared` (bool) | requires auth, write (no watch) |
+
+### v1.7-alpha.5 limitations
+
+- **No edit-in-place** — you can add/enable/disable/remove sources but not edit an existing source's `config` dict. Workaround: remove + re-add. Edit support comes in v1.8 (likely via a `SourceEditDialog` variant).
+- **Remove fails for sources with indexed files** — SQL `ON DELETE RESTRICT` on the foreign key. The dialog catches IntegrityError and surfaces a hint to disable instead. This is intentional: removing a source mid-use would orphan thousands of file rows.
+- **No tab-level refresh on external changes** — if you add a source via CLI in another window, you must click Refresh to see it.
+
+### Verification
+
+- 6-test headless end-to-end suite for SourceAddDialog: ✅ instantiation + plugin discovery + dynamic form rebuild + required-field validation + real insert+rollback + duplicate rejection.
+- 6-test headless end-to-end suite for Sources tab: ✅ 9 tabs present + table populates from DB + add reflects in table + toggle enabled persists + remove (sans referencing files) succeeds + Tools menu pivot lands on tab 7.
+- Full pytest suite: ✅ 1438 passed, 9 skipped, 0 failed (after updating 3 hard-coded tab-count assertions in existing GUI tests).
+
+### Authoritative-source-first principle applied
+
+Before writing any code, probed:
+- `SourceRepository` full method surface → confirmed `insert`, `get`, `delete`, `update`, `upsert`, `set_enabled`, `list_all`, `list_by_type`, `list_enabled`. **Caught wrong assumption that `list_sources()` existed** — same lesson from ScanDialog work.
+- `SourceConfig` model fields via `model_fields` — 6 fields verified (source_id, source_type, display_name, config, enabled, created_at).
+- `FileRepository.count()` signature — **caught assumption that `count_by_source()` existed**; actual signature is `count(*, source_id=None, include_deleted=False)`. Fix made before insertion into main_window.py.
+- `curator_source_register` hookspec results — parsed the (key, value) tuple list into per-plugin dicts; verified `config_schema` shape for both `local` and `gdrive`.
+
+Three API assumptions probed and corrected before code shipped; zero crashes on first run.
+
 ## [1.7.0-alpha.4] — 2026-05-11 — CleanupDialog (fourth native v1.7 dialog)
 
 **Headline:** Fourth Tools-menu item graduated from placeholder. `CleanupDialog` is a three-mode cleanup picker (junk files / empty directories / broken symlinks) backed by two new workers in `cleanup_signals.py`. The duplicates mode is intentionally delegated to GroupDialog — the CleanupDialog provides a shortcut button to open it.

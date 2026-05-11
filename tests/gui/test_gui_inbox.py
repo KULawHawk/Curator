@@ -395,8 +395,10 @@ class TestWiring:
         rt, _ = runtime_with_inbox_data
         window = CuratorMainWindow(rt)
         try:
-            # v1.1.0: tab count is 8 (Migrate added between Trash and Audit Log).
-            assert window._tabs.count() == 8
+            # v1.1.0: tab count was 8 (Migrate added between Trash and Audit Log).
+            # v1.7-alpha.5: tab count is 9 (Sources tab added between Settings
+            # and Lineage Graph for the SourceAddDialog / Sources Manager work).
+            assert window._tabs.count() == 9
             assert window._tabs.tabText(0) == "Inbox"
         finally:
             window.deleteLater()

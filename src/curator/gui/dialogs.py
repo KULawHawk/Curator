@@ -2610,3 +2610,364 @@ class CleanupDialog(QDialog):
     @property
     def current_mode(self) -> str:
         return self._current_mode
+
+
+# ---------------------------------------------------------------------------
+# SourceAddDialog (v1.7-alpha.5) -- fifth native dialog after Health/Scan/Group/Cleanup
+# ---------------------------------------------------------------------------
+#
+# Form-based dialog for creating a new SourceConfig. Replaces the
+# `curator sources add` CLI workflow:
+#
+#   * Source type dropdown -- populated from curator_source_register
+#     hookspec results (today: 'local', 'gdrive')
+#   * Source ID text input -- required, must be unique (DB has UNIQUE
+#     constraint; we surface the IntegrityError from insert())
+#   * Display name -- optional, free text
+#   * Config fields -- rendered DYNAMICALLY from the active plugin's
+#     config_schema. Each schema field becomes an appropriate widget:
+#       - string -> QLineEdit
+#       - array  -> QPlainTextEdit (one item per line)
+#       - boolean -> QCheckBox
+#   * Enabled checkbox -- default True
+#
+# On OK: build SourceConfig, call source_repo.insert(). On IntegrityError
+# (source_id collision): surface inline error, leave dialog open.
+#
+# Synchronous (no QThread) -- a single DB insert is microseconds; no
+# point in the threading overhead.
+
+
+class SourceAddDialog(QDialog):
+    """Form dialog for adding a new SourceConfig.
+
+    Renders the per-plugin ``config_schema`` dynamically: pick a source
+    type, the field list updates to match that plugin's required/optional
+    config keys.
+    """
+
+    def __init__(self, runtime: "CuratorRuntime", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.runtime = runtime
+        self._registered_types: dict[str, dict] = {}  # source_type -> metadata
+        self._config_widgets: dict[str, Any] = {}     # field_name -> widget
+        self._created_source_id: str | None = None    # set on successful insert
+
+        self.setWindowTitle("Curator - Add source")
+        self.setMinimumWidth(560)
+        self.resize(620, 540)
+        self._discover_plugins()
+        self._build_ui()
+        self._on_source_type_changed()  # populate fields for default type
+
+    # ------------------------------------------------------------------
+    # Plugin discovery
+    # ------------------------------------------------------------------
+
+    def _discover_plugins(self) -> None:
+        """Parse curator_source_register hookspec results into a per-type dict.
+
+        Each plugin returns a list of (key, value) tuples; we group them
+        by source_type so we have one dict per registered plugin.
+        """
+        results = self.runtime.pm.hook.curator_source_register()
+        # Flatten the list of lists into individual (key, value) tuples.
+        flat: list[tuple[str, Any]] = []
+        for r in results:
+            if r:
+                flat.extend(r)
+
+        # Group into per-plugin dicts. Each plugin's tuples are contiguous
+        # and start with ('source_type', X), so we partition on that key.
+        current: dict[str, Any] = {}
+        for key, value in flat:
+            if key == "source_type":
+                # Start of a new plugin block; flush previous
+                if current and "source_type" in current:
+                    self._registered_types[current["source_type"]] = current
+                current = {"source_type": value}
+            else:
+                current[key] = value
+        # Flush the last one
+        if current and "source_type" in current:
+            self._registered_types[current["source_type"]] = current
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        from PySide6.QtWidgets import (
+            QCheckBox,
+            QComboBox,
+            QLineEdit,
+            QPlainTextEdit,
+        )
+
+        layout = QVBoxLayout(self)
+
+        # --- Core identity group --------------------------------------
+        grp_core = QGroupBox("Source identity")
+        gc = QVBoxLayout(grp_core)
+
+        # Source type
+        row_type = QHBoxLayout()
+        row_type.addWidget(QLabel("Source type:"))
+        self._cb_source_type = QComboBox()
+        for stype in sorted(self._registered_types.keys()):
+            meta = self._registered_types[stype]
+            label = f"{stype}  ({meta.get('display_name', stype)})"
+            self._cb_source_type.addItem(label, stype)
+        self._cb_source_type.currentIndexChanged.connect(self._on_source_type_changed)
+        row_type.addWidget(self._cb_source_type, 1)
+        gc.addLayout(row_type)
+
+        # Source ID
+        row_id = QHBoxLayout()
+        row_id.addWidget(QLabel("Source ID:"))
+        self._le_source_id = QLineEdit()
+        self._le_source_id.setPlaceholderText("(unique, e.g. 'photos_drive', 'work_files')")
+        self._le_source_id.textChanged.connect(self._update_ok_state)
+        row_id.addWidget(self._le_source_id, 1)
+        gc.addLayout(row_id)
+
+        # Display name
+        row_name = QHBoxLayout()
+        row_name.addWidget(QLabel("Display name:"))
+        self._le_display_name = QLineEdit()
+        self._le_display_name.setPlaceholderText("(optional friendly name)")
+        row_name.addWidget(self._le_display_name, 1)
+        gc.addLayout(row_name)
+
+        # Enabled
+        self._cb_enabled = QCheckBox("Enabled (scanning + dispatch will work for this source)")
+        self._cb_enabled.setChecked(True)
+        gc.addWidget(self._cb_enabled)
+
+        # Plugin capabilities label (updated when type changes)
+        self._lbl_caps = QLabel("")
+        self._lbl_caps.setStyleSheet("color: #5C6BC0; padding: 4px;")
+        self._lbl_caps.setWordWrap(True)
+        gc.addWidget(self._lbl_caps)
+
+        layout.addWidget(grp_core)
+
+        # --- Plugin-specific config group (cleared/rebuilt on type change) -
+        self._grp_config = QGroupBox("Plugin configuration")
+        self._gc_layout = QVBoxLayout(self._grp_config)
+        layout.addWidget(self._grp_config, 1)
+
+        # --- Status + buttons ----------------------------------------
+        self._lbl_status = QLabel("")
+        self._lbl_status.setWordWrap(True)
+        self._lbl_status.setStyleSheet("padding: 4px;")
+        layout.addWidget(self._lbl_status)
+
+        row_btn = QHBoxLayout()
+        row_btn.addStretch(1)
+        self._btn_ok = QPushButton("Add source")
+        self._btn_ok.setDefault(True)
+        self._btn_ok.clicked.connect(self._on_ok_clicked)
+        row_btn.addWidget(self._btn_ok)
+        self._btn_cancel = QPushButton("Cancel")
+        self._btn_cancel.clicked.connect(self.reject)
+        row_btn.addWidget(self._btn_cancel)
+        layout.addLayout(row_btn)
+
+    # ------------------------------------------------------------------
+    # Source-type-driven UI
+    # ------------------------------------------------------------------
+
+    def _on_source_type_changed(self, *_args) -> None:
+        stype = self._cb_source_type.currentData()
+        if not stype or stype not in self._registered_types:
+            return
+        meta = self._registered_types[stype]
+        schema = meta.get("config_schema", {})
+
+        # Update capabilities label
+        caps_bits = []
+        if meta.get("requires_auth"):
+            caps_bits.append("requires auth (run <code>curator gdrive auth</code> after adding)")
+        if meta.get("supports_watch"):
+            caps_bits.append("supports filesystem watch")
+        if meta.get("supports_write"):
+            caps_bits.append("supports write/migrate")
+        if caps_bits:
+            self._lbl_caps.setText("<i>Capabilities: " + ", ".join(caps_bits) + "</i>")
+        else:
+            self._lbl_caps.setText("")
+
+        # Rebuild config form
+        self._build_config_form(schema)
+        self._update_ok_state()
+
+    def _build_config_form(self, schema: dict) -> None:
+        """Render the plugin's config_schema as a dynamic form."""
+        from PySide6.QtWidgets import QCheckBox, QLineEdit, QPlainTextEdit
+
+        # Clear previous fields
+        while self._gc_layout.count() > 0:
+            item = self._gc_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._config_widgets = {}
+
+        properties = schema.get("properties", {})
+        required = set(schema.get("required", []))
+
+        if not properties:
+            lbl = QLabel("<i>This plugin requires no configuration.</i>")
+            lbl.setStyleSheet("color: gray; padding: 6px;")
+            self._gc_layout.addWidget(lbl)
+            return
+
+        for field_name, field_schema in properties.items():
+            field_type = field_schema.get("type", "string")
+            description = field_schema.get("description", "")
+            required_mark = " <b>*</b>" if field_name in required else ""
+
+            # Label + description
+            lbl = QLabel(f"<b>{field_name}</b>{required_mark}")
+            self._gc_layout.addWidget(lbl)
+            if description:
+                desc = QLabel(f"<i>{description}</i>")
+                desc.setStyleSheet("color: gray; padding-left: 10px;")
+                desc.setWordWrap(True)
+                self._gc_layout.addWidget(desc)
+
+            # Widget based on type
+            if field_type == "boolean":
+                w = QCheckBox()
+                w.setChecked(bool(field_schema.get("default", False)))
+            elif field_type == "array":
+                w = QPlainTextEdit()
+                w.setMaximumHeight(80)
+                w.setPlaceholderText("(one entry per line)")
+            else:
+                # string / number / fallback -> single-line input
+                w = QLineEdit()
+                placeholder = field_schema.get("default", "")
+                if placeholder:
+                    w.setPlaceholderText(f"(default: {placeholder})")
+            self._gc_layout.addWidget(w)
+            self._config_widgets[field_name] = w
+
+            # Spacer
+            self._gc_layout.addSpacing(4)
+
+    # ------------------------------------------------------------------
+    # Validation + submit
+    # ------------------------------------------------------------------
+
+    def _update_ok_state(self, *_args) -> None:
+        sid = self._le_source_id.text().strip()
+        self._btn_ok.setEnabled(bool(sid))
+
+    def _collect_config(self) -> tuple[dict, list[str]]:
+        """Read all config widgets back into a dict.
+
+        Returns (config_dict, validation_errors). Empty errors list = OK.
+        """
+        from PySide6.QtWidgets import QCheckBox, QLineEdit, QPlainTextEdit
+
+        stype = self._cb_source_type.currentData()
+        meta = self._registered_types.get(stype, {})
+        schema = meta.get("config_schema", {})
+        required = set(schema.get("required", []))
+        properties = schema.get("properties", {})
+
+        config: dict = {}
+        errors: list[str] = []
+
+        for field_name, w in self._config_widgets.items():
+            field_schema = properties.get(field_name, {})
+            field_type = field_schema.get("type", "string")
+
+            if isinstance(w, QCheckBox):
+                value: Any = w.isChecked()
+            elif isinstance(w, QPlainTextEdit):
+                lines = [ln.strip() for ln in w.toPlainText().splitlines() if ln.strip()]
+                value = lines
+            else:  # QLineEdit
+                value = w.text().strip()
+
+            # Required check
+            if field_name in required:
+                is_empty = (
+                    (isinstance(value, str) and not value)
+                    or (isinstance(value, list) and not value)
+                )
+                if is_empty:
+                    errors.append(f"'{field_name}' is required.")
+
+            # Only include non-empty values in config (skip empty strings/lists)
+            if isinstance(value, str) and not value:
+                continue
+            if isinstance(value, list) and not value:
+                continue
+            config[field_name] = value
+
+        return config, errors
+
+    def _on_ok_clicked(self) -> None:
+        from datetime import datetime
+        from curator.models.source import SourceConfig
+
+        sid = self._le_source_id.text().strip()
+        if not sid:
+            self._lbl_status.setText(
+                "<span style='color: #C62828;'>Source ID is required.</span>"
+            )
+            return
+
+        stype = self._cb_source_type.currentData()
+        display_name = self._le_display_name.text().strip() or None
+        enabled = self._cb_enabled.isChecked()
+
+        config, errors = self._collect_config()
+        if errors:
+            self._lbl_status.setText(
+                "<span style='color: #C62828;'>Validation errors:<br>"
+                + "<br>".join(f"&nbsp;&nbsp;\u2022 {e}" for e in errors)
+                + "</span>"
+            )
+            return
+
+        # Build SourceConfig + insert
+        try:
+            src = SourceConfig(
+                source_id=sid,
+                source_type=stype,
+                display_name=display_name,
+                config=config,
+                enabled=enabled,
+                created_at=datetime.now(),
+            )
+            self.runtime.source_repo.insert(src)
+        except Exception as e:  # noqa: BLE001
+            # Most likely IntegrityError (duplicate source_id) but could be
+            # validation or DB connection issue. Surface inline; don't close.
+            self._lbl_status.setText(
+                f"<span style='color: #C62828;'><b>Failed to insert:</b>"
+                f" {type(e).__name__}: {e}</span>"
+            )
+            return
+
+        self._created_source_id = sid
+        self.accept()
+
+    # ------------------------------------------------------------------
+    # Test / introspection helpers
+    # ------------------------------------------------------------------
+
+    @property
+    def created_source_id(self) -> str | None:
+        """The source_id of the source that was just inserted, or None."""
+        return self._created_source_id
+
+    @property
+    def registered_types(self) -> dict[str, dict]:
+        """Dict of source_type -> metadata for all registered plugins."""
+        return self._registered_types

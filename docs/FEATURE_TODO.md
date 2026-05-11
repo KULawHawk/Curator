@@ -288,13 +288,13 @@ If shipping linearly across v1.7 → v1.9:
 - HealthCheckDialog (v1.7-alpha.1, committed `34c1483`)
 - ScanDialog (v1.7-alpha.2, committed `e7c46ce`)
 - GroupDialog (v1.7-alpha.3, committed `0ce5d8a`)
-- CleanupDialog (v1.7-alpha.4, this session)
+- CleanupDialog (v1.7-alpha.4, committed `6b9212a`)
+- SourceAddDialog + Sources tab (v1.7-alpha.5, this session)
 
 **v1.7 remaining (per `docs/design/GUI_V2_DESIGN.md`):**
-- SourceAddDialog + Sources tab
 - Audit Log filter UI
 
-Once those 2 ship → tag **v1.7.0** with all 6 v1.7-alpha dialogs included.
+Once that 1 ships → tag **v1.7.0** with all 6 v1.7-alpha pieces included.
 
 ---
 
