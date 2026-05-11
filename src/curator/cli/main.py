@@ -4074,5 +4074,178 @@ def tier_cmd(
             f"To migrate, pipe candidate paths into [bold]curator migrate[/bold].[/]"
         )
 
+
+
+# ------------------------------------------------------------------
+# v1.7.18: curator audit-summary - aggregate audit events by actor/action
+# ------------------------------------------------------------------
+
+@app.command(name="audit-summary")
+def audit_summary_cmd(
+    ctx: typer.Context,
+    days: int = typer.Option(
+        7, "--days",
+        help="Look back this many days from now. Ignored if --since is set.",
+    ),
+    since: str = typer.Option(
+        None, "--since",
+        help="ISO datetime to filter events from (e.g. '2026-05-01'). "
+             "Overrides --days when provided.",
+    ),
+    actor: str = typer.Option(
+        None, "--actor",
+        help="Filter to a single actor (e.g. 'cli.tier', 'gui.tier').",
+    ),
+    action: str = typer.Option(
+        None, "--action",
+        help="Filter to a single action (e.g. 'tier.suggest', 'scan.start').",
+    ),
+    limit: int = typer.Option(
+        20, "--limit",
+        help="Cap the number of (actor, action) groups displayed.",
+    ),
+) -> None:
+    """Aggregate recent audit events by actor and action (T-B04-adjacent, v1.7.18).
+
+    Surfaces a forensic-grade summary of what the system has been doing
+    by grouping audit events into (actor, action) pairs and showing
+    counts + most recent timestamps. Useful for:
+
+      * Reviewing what migrations, trash operations, or status changes
+        have happened across CLI + GUI sessions
+      * Spotting unusual actor activity (e.g. unexpected gui.tier
+        events when you weren't using the GUI)
+      * Lineage investigations ("when was the last time we trashed
+        anything? what triggered it?")
+
+    Read-only; doesn't modify the audit log. Emits no new audit events
+    (would create a recursive loop). Output is pure summary.
+
+    Examples:
+        curator audit-summary
+        curator audit-summary --days 30
+        curator audit-summary --actor gui.tier
+        curator audit-summary --action tier.suggest --days 1
+        curator audit-summary --since 2026-05-01 --limit 50
+    """
+    from datetime import datetime, timedelta
+
+    rt: CuratorRuntime = ctx.obj
+    console = _console(rt)
+
+    # Resolve the lookback window
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since)
+        except ValueError as e:
+            console.print(f"[red]Bad --since value: {e}[/]")
+            raise typer.Exit(code=2)
+    else:
+        since_dt = datetime.utcnow() - timedelta(days=days)
+
+    # Query
+    entries = rt.audit_repo.query(
+        since=since_dt,
+        actor=actor,
+        action=action,
+        limit=50000,  # generous; we aggregate below
+    )
+
+    # Aggregate by (actor, action)
+    groups: dict[tuple[str, str], dict] = {}
+    for e in entries:
+        key = (e.actor, e.action)
+        g = groups.setdefault(key, {"count": 0, "last": None, "first": None})
+        g["count"] += 1
+        if g["last"] is None or e.occurred_at > g["last"]:
+            g["last"] = e.occurred_at
+        if g["first"] is None or e.occurred_at < g["first"]:
+            g["first"] = e.occurred_at
+
+    # Sort: most-active groups first
+    sorted_groups = sorted(
+        groups.items(),
+        key=lambda kv: kv[1]["count"],
+        reverse=True,
+    )
+
+    # JSON output (machine-readable)
+    if rt.json_output:
+        import json as _json
+        payload = {
+            "since": since_dt.isoformat(),
+            "total_events": len(entries),
+            "group_count": len(groups),
+            "filters": {
+                "actor": actor,
+                "action": action,
+            },
+            "groups": [
+                {
+                    "actor": k[0],
+                    "action": k[1],
+                    "count": v["count"],
+                    "first": v["first"].isoformat() if v["first"] else None,
+                    "last": v["last"].isoformat() if v["last"] else None,
+                }
+                for k, v in sorted_groups[:limit]
+            ],
+        }
+        typer.echo(_json.dumps(payload, indent=2))
+        return
+
+    # Rich pretty-print
+    period_end = datetime.utcnow()
+    period_start = since_dt
+    console.print(f"\n[bold]Audit summary[/]")
+    console.print(f"  Period:        {period_start:%Y-%m-%d %H:%M} -> {period_end:%Y-%m-%d %H:%M}")
+    if actor:
+        console.print(f"  Actor filter:  {actor}")
+    if action:
+        console.print(f"  Action filter: {action}")
+    console.print(f"  Total events:  [cyan]{len(entries):,}[/]")
+    console.print(f"  Unique groups: [cyan]{len(groups):,}[/]")
+
+    if not groups:
+        console.print("\n[green]No events in this window.[/]")
+        return
+
+    # Friendly relative-time formatter
+    def _ago(dt) -> str:
+        if dt is None:
+            return ""
+        delta = period_end - dt
+        seconds = int(delta.total_seconds())
+        if seconds < 60:
+            return f"{seconds}s ago"
+        if seconds < 3600:
+            return f"{seconds // 60}m ago"
+        if seconds < 86400:
+            return f"{seconds // 3600}h ago"
+        return f"{seconds // 86400}d ago"
+
+    # Table output
+    from rich.table import Table
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Actor", style="cyan")
+    table.add_column("Action", style="magenta")
+    table.add_column("Count", justify="right", style="bold")
+    table.add_column("First seen")
+    table.add_column("Last seen")
+
+    for (actor_v, action_v), g in sorted_groups[:limit]:
+        table.add_row(
+            actor_v,
+            action_v,
+            f"{g['count']:,}",
+            _ago(g["first"]),
+            _ago(g["last"]),
+        )
+    console.print(table)
+
+    if len(sorted_groups) > limit:
+        remaining = len(sorted_groups) - limit
+        console.print(f"\n[dim]... and {remaining:,} more groups (use --limit to expand)[/]")
+
 if __name__ == "__main__":  # pragma: no cover
     app()

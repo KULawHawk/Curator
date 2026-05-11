@@ -4,6 +4,83 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.18] — 2026-05-11 — curator audit-summary CLI command
+
+**Headline:** New CLI command `curator audit-summary` aggregates recent audit events by `(actor, action)` pairs with counts and relative-time ("2m ago", "3d ago") timestamps. Forensic-grade visibility into what the system has been doing across all sessions — a different surface area from the recent TierDialog and PII pattern ships.
+
+### Why this matters
+
+The audit log has been accumulating events from every shipped feature — scans, migrations, tier suggestions, status changes, trash dispatches, classification updates. Until now there was no way to see the aggregate shape of that activity without writing custom SQL. `curator audit-summary` surfaces it in 4 seconds:
+
+```
+$ curator audit-summary --days 30
+
+Audit summary
+  Period:        2026-04-11 13:18 -> 2026-05-11 13:18
+  Total events:  90
+  Unique groups: 7
+
+  Actor             Action             Count   First seen   Last seen
+  curator.migrate   migration.move     50      2d ago       2d ago
+  gui.tier          tier.suggest       25      1h ago       8m ago
+  gui.tier          tier.set_status    5       43m ago      35m ago
+  gui.tier          trash              3       40m ago      35m ago
+  curator.scan      scan.complete      3       2d ago       2d ago
+  curator.scan      scan.start         3       2d ago       2d ago
+  cli.tier          tier.suggest       1       1h ago       1h ago
+```
+
+This is the kind of forensic-grade visibility Jake's psychology research demands: at a glance you can see that the GUI was used 25 times in the last hour to inspect tier candidates, while 50 migration moves happened 2 days ago in a single batch. Lineage investigations, anomaly spotting, or just confirming "did I really run that scan?" all become one-command operations.
+
+### What's new
+
+- **New CLI command:** `curator audit-summary` (`cli/main.py`, +152 lines appended via the PowerShell read+substitute pattern)
+- **5 filter flags:**
+  - `--days N`        (default 7; look-back window)
+  - `--since ISO`     (overrides `--days` when set, e.g. `--since 2026-05-01`)
+  - `--actor STR`     (filter to single actor, e.g. `gui.tier`)
+  - `--action STR`    (filter to single action, e.g. `tier.suggest`)
+  - `--limit N`       (cap displayed groups; default 20)
+- **Two output modes:**
+  - Rich pretty-print (default): header + table with relative-time formatting
+  - JSON (`--json` global flag): machine-readable with full ISO timestamps for scripting
+- **Sorted by activity:** most-active `(actor, action)` groups appear first
+- **Friendly relative-time helper** `_ago(dt)` renders `Xs ago` / `Xm ago` / `Xh ago` / `Xd ago` based on delta from now
+- **Read-only:** doesn't emit new audit events (would create a recursive loop) and doesn't mutate the audit log
+
+### Files changed
+
+- `src/curator/cli/main.py` — +152 lines (3795 lines total, was 3642)
+- `docs/releases/v1.7.18.md` — new release notes
+
+### Verification
+
+- **8-test subprocess suite** (`test_audit_summary.py`):
+  1. `audit-summary` listed in main `--help`
+  2. Command's own `--help` shows all 5 flags
+  3. Default invocation runs cleanly with non-empty output
+  4. **`--days 1` vs `--days 30`** — 30-day count (90) >= 1-day count (34) ✅
+  5. `--actor gui.tier --days 30` filter line appears in output
+  6. **Bad `--since` value** → exit code 2, clean error message
+  7. **`--json` mode** → valid JSON with `since`, `total_events`, `group_count`, `groups`, `filters` keys; each group has `actor`/`action`/`count`/`first`/`last`
+  8. `--limit 2` correctly caps group count to 2
+- **Live CLI smoke**: rendered Rich table shows all 7 real audit groups with proper relative-time formatting (8m ago / 1h ago / 2d ago)
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 19-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**0 bugs caught.** Clean first-try ship across all 8 subprocess tests. Probing `AuditRepository.query()` signature + `AuditEntry.model_fields` BEFORE writing the aggregation code was the key authoritative-source-first move (lesson #46 applied) — no name guessing on `query(since=, actor=, action=, limit=)` or on the `AuditEntry.occurred_at` / `actor` / `action` field names.
+
+**Design note:** I deliberately chose **CLI subprocess tests over in-process** tests for this command. The audit data is real (155 files, 90 events from earlier ship runs) and the test verifies the full integration: argparse parsing → runtime build → repo query → aggregation → Rich rendering / JSON emit. That coverage is stronger than what an in-process unit test would give.
+
+### v1.7.18 limitations
+
+- **No per-entity drill-down** — the command aggregates by (actor, action) but you can't ask "show me the last 10 trash events with details." `curator audit list --action trash` already exists for that, separately.
+- **No graph/sparkline output** — just counts + bounds. A future v1.8 could add ASCII histograms per group.
+- **No CSV export** — `--json` is the only structured format. CSV would be straightforward to add.
+- **Time-of-day boundaries default to UTC** — matches the rest of Curator's tracking, but a `--local` flag could be useful for Jake's daily review.
+- **No GUI surface** — future v1.8 could add a Tools → Audit Summary dialog mirroring this CLI output.
+
 ## [1.7.17] — 2026-05-11 — TierDialog accelerator hints (T-B05 GUI v4)
 
 **Headline:** The Tier scan dialog now surfaces its keyboard shortcuts visually: context menu items show **`Enter`** / **`Del`** suffixes, and a hint label in the footer reads **"Tip: right-click for actions • Enter = inspect • Del = send to trash"**. Completes the discoverability story for v1.7.14 (right-click) + v1.7.16 (keyboard).
