@@ -69,11 +69,13 @@ New code, but slots cleanly into existing services.
 - **Why:** Zero risk, useful, ~210 lines. Caught the canonical-DB 99.8%-full signal immediately on first run.
 
 ### `T-B02` — Compliance Retention Enforcement
-- **Status:** proposed
+- **Status:** **shipped v1.7.4 (Curator-side bump) + atrium-safety v0.4.0**
 - **Effort:** M
-- **Depends on:** none (schema addition + atrium-safety hookimpl)
-- **What:** New `retention_until: datetime | None` column on `files` table. `atrium-safety` vetoes trash/delete when `retention_until > now()`. Admin override with audit log entry.
-- **Why:** Real value for forensic / IRB / HIPAA work. Your RCS knowledge base + assessment records should never accidentally land in trash. Small schema diff piggybacking on existing safety infrastructure.
+- **Depends on:** T-C02 (status column on files table) — NOW SATISFIED via v1.7.3
+- **What:** `atrium-safety` vetoes trash/delete when `status='vital'`. Optional retention horizon via `expires_at`: veto lifts after horizon passes.
+- **v0.4.0 (atrium-safety) delivery:** New `curator_pre_trash` hookimpl. Emits structured audit events (`compliance.retention_veto`, `compliance.retention_allow`). Graceful degradation against pre-v1.7.3 Curator (no `.status` attribute = treated as active = no veto). 11-test unit suite.
+- **Override paths:** Re-classify via `curator status set <path> active`, OR set `expires_at` to a past date via `curator status set <path> vital --expires-in-days -1`. Each override is auto-audit-logged via `cli.status`.
+- **Why:** Real value for forensic / IRB / HIPAA work. RCS knowledge base + assessment records should never accidentally land in trash.
 
 ### `T-B03` — Heuristic Ransomware Quarantine
 - **Status:** proposed

@@ -4,6 +4,57 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.4] — 2026-05-11 — T-B02 Compliance Retention Enforcement (cross-repo)
+
+**Headline:** Companion release to atrium-safety v0.4.0. No Curator-side code change — just docs + version-bump marker for the cross-repo behavior shift: with atrium-safety v0.4.0 installed, **files classified as `status='vital'` are now safe from accidental trashing**.
+
+### Why a Curator version bump for an atrium-safety feature
+
+Users experience the new behavior through Curator ("the trash button now refuses my vital files!"), so the user-facing version-bump lands in Curator's changelog. The actual implementation is in atrium-safety (the plugin), where it belongs architecturally.
+
+This pattern — cross-repo feature shipping with companion version bumps in each repo — is how Curator + plugins coordinate going forward.
+
+### What's new (in atrium-safety v0.4.0)
+
+New `curator_pre_trash` hookimpl that returns `ConfirmationResult(allow=False, ...)` for:
+- Files with `status='vital'` AND no `expires_at` set, OR
+- Files with `status='vital'` AND `expires_at` in the future (retention horizon active)
+
+Files with `status='vital'` AND `expires_at` in the past (retention horizon elapsed) are ALLOWED to trash, with an audit event recording the policy decision.
+
+Files in any other status bucket (`active` / `provisional` / `junk`) behave exactly as before — no veto.
+
+### Audit events (atrium-safety v0.4.0+)
+
+- `compliance.retention_veto` — emitted when trash blocked by retention enforcement
+- `compliance.retention_allow` — emitted when retention horizon allows previously-vital file to be trashed
+
+Both use `actor='curatorplug.atrium_safety'`, `entity_type='file'`, `entity_id=<curator_id>`.
+
+### Override paths (for users)
+
+If you legitimately need to trash a vital file:
+
+```
+curator status set /path/to/file.txt active           # reclassify
+curator status set /path/to/file.txt vital --expires-in-days -1  # expire retention
+```
+
+Each override is auto-audit-logged via `cli.status` (action: `file.status_change`).
+
+### Verification
+
+- **atrium-safety**: 11 new tests in `test_pre_trash_retention.py`. Total suite: 86 passed (was 75).
+- **Curator**: full pytest run shows 1438 passed, 9 skipped, 0 failed — no regressions across the cross-repo boundary.
+- **Live coordination**: tested in `Curator/.venv` where both packages are editable-installed. atrium-safety auto-loads via setuptools entry point; the new hookimpl auto-registers; vetoes fire on trash attempts.
+
+### Files changed (Curator side)
+
+- `CHANGELOG.md` (this entry)
+- `docs/FEATURE_TODO.md` (T-B02 status proposed → shipped)
+
+No source code changes in Curator. The user-facing behavior shift comes entirely from atrium-safety's new hookimpl using Curator's existing `curator_pre_trash` hookspec.
+
 ## [1.7.3] — 2026-05-11 — T-C02 Asset Classification Taxonomy (foundation)
 
 **Headline:** Schema-level foundation for asset classification. Adds 3 columns (`status`, `supersedes_id`, `expires_at`) to the `files` table, extends FileEntity + FileRepository, and ships a `curator status set/get/report` CLI subcommand group. Foundation only — GUI/MCP integration deferred to subsequent turns; unblocks T-B02 (retention enforcement), T-B05 (tiered storage), T-A05 (audit-feedback), T-C03 (virtual project overlays).
