@@ -2075,3 +2075,538 @@ class GroupDialog(QDialog):
     def last_apply_report(self) -> Any:
         """Return the ApplyReport from the most recent apply, or None."""
         return self._last_apply_report
+
+
+# ---------------------------------------------------------------------------
+# CleanupDialog (v1.7-alpha.4) -- fourth native dialog after Health/Scan/Group
+# ---------------------------------------------------------------------------
+#
+# Three-mode cleanup picker:
+#
+#   1. Junk files       -> CleanupService.find_junk_files (Thumbs.db etc.)
+#   2. Empty directories -> CleanupService.find_empty_dirs
+#   3. Broken symlinks  -> CleanupService.find_broken_symlinks
+#
+# Duplicates is INTENTIONALLY EXCLUDED -- GroupDialog provides the richer
+# 2-phase UI for that case. The CleanupDialog has a small notice + button
+# that opens GroupDialog when the user wants duplicate cleanup.
+#
+# UX:
+#   * Pick mode via radio buttons; mode-specific input rows show/hide
+#   * Pick root folder via QFileDialog
+#   * Click Find -> CleanupFindWorker runs in background QThread
+#   * Review findings in a table (columns vary by mode)
+#   * Click Apply -> confirm modal -> CleanupApplyWorker runs in background
+#   * Final ApplyReport tally displayed (deleted / skipped / failed)
+
+
+class CleanupDialog(QDialog):
+    """Native cleanup dialog covering 3 of CleanupService's 4 modes.
+
+    Replaces the v1.6.2 "Cleanup junk..." Tools-menu placeholder. The
+    duplicates mode is intentionally delegated to :class:`GroupDialog`
+    which provides a richer interface for that case.
+    """
+
+    def __init__(self, runtime: "CuratorRuntime", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.runtime = runtime
+        self._find_worker: Any = None
+        self._apply_worker: Any = None
+        self._bridge: Any = None
+        self._last_find_report: Any = None
+        self._last_apply_report: Any = None
+        self._current_mode: str = "junk"
+
+        self.setWindowTitle("Curator - Cleanup")
+        self.setMinimumWidth(720)
+        self.resize(820, 620)
+        self._build_ui()
+        self._on_mode_changed()  # apply initial visibility
+        self._update_button_states()
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        from PySide6.QtWidgets import (
+            QCheckBox,
+            QFileDialog,
+            QLineEdit,
+            QProgressBar,
+            QRadioButton,
+            QButtonGroup,
+        )
+
+        layout = QVBoxLayout(self)
+
+        # --- Mode picker -----------------------------------------------
+        grp_mode = QGroupBox("Cleanup mode")
+        gm = QVBoxLayout(grp_mode)
+
+        row_modes = QHBoxLayout()
+        self._rb_junk = QRadioButton("&Junk files (Thumbs.db, .DS_Store, etc.)")
+        self._rb_junk.setChecked(True)
+        self._rb_empty = QRadioButton("&Empty directories")
+        self._rb_symlinks = QRadioButton("Broken &symlinks")
+        self._rb_group_mode = QButtonGroup(self)
+        for i, rb in enumerate([self._rb_junk, self._rb_empty, self._rb_symlinks]):
+            self._rb_group_mode.addButton(rb, i)
+            rb.toggled.connect(self._on_mode_changed)
+            row_modes.addWidget(rb)
+        row_modes.addStretch(1)
+        gm.addLayout(row_modes)
+
+        # Duplicates notice (small clickable hint)
+        dup_row = QHBoxLayout()
+        dup_lbl = QLabel(
+            "<i>For duplicate cleanup, use the dedicated <b>Find duplicates</b>"
+            " dialog (Tools menu) -- it gives richer keep-strategy control"
+            " and group-by-hash review.</i>"
+        )
+        dup_lbl.setWordWrap(True)
+        dup_lbl.setStyleSheet("color: #5C6BC0; padding: 4px;")
+        dup_row.addWidget(dup_lbl, 1)
+        self._btn_open_group = QPushButton("Open Find Duplicates...")
+        self._btn_open_group.clicked.connect(self._on_open_group_clicked)
+        dup_row.addWidget(self._btn_open_group)
+        gm.addLayout(dup_row)
+
+        layout.addWidget(grp_mode)
+
+        # --- Inputs group ---------------------------------------------
+        grp_inputs = QGroupBox("Find parameters")
+        gi = QVBoxLayout(grp_inputs)
+
+        # Path picker (shared by all modes)
+        row_path = QHBoxLayout()
+        row_path.addWidget(QLabel("Folder:"))
+        self._le_path = QLineEdit()
+        self._le_path.setPlaceholderText("(pick a folder to scan)")
+        self._le_path.textChanged.connect(self._update_button_states)
+        row_path.addWidget(self._le_path, 1)
+        self._btn_browse = QPushButton("Browse...")
+        self._btn_browse.clicked.connect(self._on_browse_clicked)
+        row_path.addWidget(self._btn_browse)
+        gi.addLayout(row_path)
+
+        # Junk-specific: patterns input
+        self._row_junk = QHBoxLayout()
+        self._row_junk.addWidget(QLabel("Patterns:"))
+        self._le_junk_patterns = QLineEdit()
+        self._le_junk_patterns.setPlaceholderText(
+            "(leave empty for defaults: Thumbs.db, .DS_Store, desktop.ini, etc.)"
+        )
+        self._row_junk.addWidget(self._le_junk_patterns, 1)
+        # Wrap in a widget so we can show/hide as a unit
+        self._w_junk = QWidget()
+        self._w_junk.setLayout(self._row_junk)
+        gi.addWidget(self._w_junk)
+
+        # Empty-dirs-specific: strict checkbox
+        self._cb_strict = QCheckBox(
+            "Strict (require ZERO entries; default ignores Thumbs.db / .DS_Store)"
+        )
+        gi.addWidget(self._cb_strict)
+
+        layout.addWidget(grp_inputs)
+
+        # --- Status + progress ----------------------------------------
+        grp_status = QGroupBox("Status")
+        gs = QVBoxLayout(grp_status)
+
+        self._lbl_status = QLabel("Idle. Pick a mode + folder, then click Find.")
+        self._lbl_status.setWordWrap(True)
+        gs.addWidget(self._lbl_status)
+
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 1)
+        self._progress.setValue(0)
+        self._progress.setFormat("")
+        gs.addWidget(self._progress)
+
+        layout.addWidget(grp_status)
+
+        # --- Results group --------------------------------------------
+        self._grp_results = QGroupBox("Findings")
+        self._gr_layout = QVBoxLayout(self._grp_results)
+        self._lbl_no_results = QLabel("<i>No find run yet.</i>")
+        self._lbl_no_results.setStyleSheet("color: gray; padding: 8px;")
+        self._gr_layout.addWidget(self._lbl_no_results)
+        layout.addWidget(self._grp_results, 1)
+
+        # --- Buttons --------------------------------------------------
+        row_btn = QHBoxLayout()
+        self._btn_find = QPushButton("Find")
+        self._btn_find.setDefault(True)
+        self._btn_find.clicked.connect(self._on_find_clicked)
+        row_btn.addWidget(self._btn_find)
+
+        self._cb_use_trash = QCheckBox("Move to trash (reversible)")
+        self._cb_use_trash.setChecked(True)
+        self._cb_use_trash.setToolTip(
+            "When checked: applying sends items to OS Recycle Bin + Curator's "
+            "trash registry (restorable). When unchecked: hard delete."
+        )
+        row_btn.addWidget(self._cb_use_trash)
+
+        self._btn_apply = QPushButton("Apply")
+        self._btn_apply.clicked.connect(self._on_apply_clicked)
+        self._btn_apply.setEnabled(False)
+        row_btn.addWidget(self._btn_apply)
+
+        row_btn.addStretch(1)
+        self._btn_close = QPushButton("Close")
+        self._btn_close.clicked.connect(self.reject)
+        row_btn.addWidget(self._btn_close)
+        layout.addLayout(row_btn)
+
+    # ------------------------------------------------------------------
+    # Mode switching
+    # ------------------------------------------------------------------
+
+    def _on_mode_changed(self, *_args) -> None:
+        if self._rb_junk.isChecked():
+            self._current_mode = "junk"
+            self._w_junk.setVisible(True)
+            self._cb_strict.setVisible(False)
+        elif self._rb_empty.isChecked():
+            self._current_mode = "empty_dirs"
+            self._w_junk.setVisible(False)
+            self._cb_strict.setVisible(True)
+        elif self._rb_symlinks.isChecked():
+            self._current_mode = "broken_symlinks"
+            self._w_junk.setVisible(False)
+            self._cb_strict.setVisible(False)
+        # Apply button label adapts to mode
+        verbs = {
+            "junk": "Apply (trash junk files)",
+            "empty_dirs": "Apply (rmdir empty directories)",
+            "broken_symlinks": "Apply (unlink broken symlinks)",
+        }
+        self._btn_apply.setText(verbs.get(self._current_mode, "Apply"))
+
+    def _on_open_group_clicked(self) -> None:
+        """Open GroupDialog as a sibling and close this one."""
+        try:
+            dlg = GroupDialog(self.runtime, self.parent())
+        except Exception as e:  # noqa: BLE001
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                self, "Group dialog unavailable",
+                f"Could not open GroupDialog: {e}",
+            )
+            return
+        # Close self first so the user sees GroupDialog on top
+        self.reject()
+        dlg.exec()
+
+    # ------------------------------------------------------------------
+    # User actions
+    # ------------------------------------------------------------------
+
+    def _on_browse_clicked(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        start_dir = self._le_path.text().strip()
+        if not start_dir or not Path(start_dir).is_dir():
+            start_dir = str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(
+            self,
+            "Select folder to clean",
+            start_dir,
+        )
+        if chosen:
+            self._le_path.setText(chosen)
+
+    def _update_button_states(self) -> None:
+        path = self._le_path.text().strip()
+        path_ok = bool(path) and Path(path).is_dir()
+        find_in_flight = self._find_worker is not None and self._find_worker.isRunning()
+        apply_in_flight = self._apply_worker is not None and self._apply_worker.isRunning()
+        any_in_flight = find_in_flight or apply_in_flight
+        self._btn_find.setEnabled(path_ok and not any_in_flight)
+        has_findings = (self._last_find_report is not None
+                        and len(self._last_find_report.findings) > 0)
+        self._btn_apply.setEnabled(has_findings and not any_in_flight)
+
+    def _set_indeterminate(self, on: bool, label: str = "Working...") -> None:
+        if on:
+            self._progress.setRange(0, 0)
+            self._progress.setFormat(label)
+        else:
+            self._progress.setRange(0, 1)
+            self._progress.setFormat("")
+
+    def _clear_results(self) -> None:
+        while self._gr_layout.count() > 0:
+            item = self._gr_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+    # ------------------------------------------------------------------
+    # Find phase
+    # ------------------------------------------------------------------
+
+    def _on_find_clicked(self) -> None:
+        try:
+            from curator.gui.cleanup_signals import (
+                CleanupProgressBridge, CleanupFindWorker,
+            )
+        except Exception as e:  # noqa: BLE001
+            self._lbl_status.setText(
+                f"<span style='color: #C62828;'>Could not load CleanupFindWorker: {e}</span>"
+            )
+            return
+
+        root = self._le_path.text().strip()
+        if not root:
+            return
+
+        # Mode-specific kwargs
+        patterns: list[str] | None = None
+        ignore_system_junk = True
+        if self._current_mode == "junk":
+            raw = self._le_junk_patterns.text().strip()
+            if raw:
+                patterns = [p.strip() for p in raw.split(",") if p.strip()]
+        elif self._current_mode == "empty_dirs":
+            ignore_system_junk = not self._cb_strict.isChecked()
+
+        # Reset
+        self._last_find_report = None
+        self._last_apply_report = None
+        self._clear_results()
+        lbl = QLabel(f"<i>Searching for {self._current_mode.replace('_', ' ')}...</i>")
+        lbl.setStyleSheet("color: gray; padding: 8px;")
+        self._gr_layout.addWidget(lbl)
+        self._set_indeterminate(True, f"Scanning for {self._current_mode}...")
+        self._lbl_status.setText(
+            f"Scanning <b>{root}</b> for <b>{self._current_mode.replace('_', ' ')}</b>..."
+        )
+
+        # Bridge + worker
+        self._bridge = CleanupProgressBridge(self)
+        self._bridge.find_started.connect(self._on_find_started)
+        self._bridge.find_completed.connect(self._on_find_completed)
+        self._bridge.find_failed.connect(self._on_find_failed)
+        self._bridge.apply_started.connect(self._on_apply_started)
+        self._bridge.apply_completed.connect(self._on_apply_completed)
+        self._bridge.apply_failed.connect(self._on_apply_failed)
+
+        self._find_worker = CleanupFindWorker(
+            runtime=self.runtime,
+            mode=self._current_mode,
+            root=root,
+            patterns=patterns,
+            ignore_system_junk=ignore_system_junk,
+            bridge=self._bridge,
+            parent=self,
+        )
+        self._find_worker.start()
+        self._update_button_states()
+
+    def _on_find_started(self, _payload: object) -> None:
+        pass
+
+    def _on_find_completed(self, report: object) -> None:
+        self._last_find_report = report
+        self._set_indeterminate(False)
+
+        n = len(report.findings)
+        total_bytes = sum(f.size for f in report.findings)
+        n_errors = len(report.errors) if hasattr(report, "errors") else 0
+
+        if n == 0:
+            self._lbl_status.setText(
+                f"<span style='color: #2E7D32;'><b>Nothing to clean.</b></span>"
+                f" No {self._current_mode.replace('_', ' ')} found."
+            )
+        else:
+            self._lbl_status.setText(
+                f"<span style='color: #2E7D32;'><b>Found</b></span> {n} item(s),"
+                f" {_format_size(total_bytes)} reclaimable"
+                + (f", {n_errors} error(s) during scan." if n_errors else ".")
+            )
+        self._render_find_report(report)
+        self._update_button_states()
+
+    def _on_find_failed(self, exc: object) -> None:
+        self._set_indeterminate(False)
+        self._lbl_status.setText(
+            f"<span style='color: #C62828;'><b>Find failed:</b></span>"
+            f" {type(exc).__name__}: {exc}"
+        )
+        self._update_button_states()
+
+    def _render_find_report(self, report: object) -> None:
+        """Render findings with mode-specific columns."""
+        self._clear_results()
+
+        if not report.findings:
+            lbl = QLabel("<i>No items match.</i>")
+            lbl.setStyleSheet("color: gray; padding: 8px;")
+            self._gr_layout.addWidget(lbl)
+            return
+
+        # Mode-specific column layout
+        if self._current_mode == "junk":
+            headers = ["Path", "Size", "Matched pattern"]
+            rows = []
+            for f in report.findings:
+                detail = f.details.get("matched_pattern", "?") if isinstance(f.details, dict) else "?"
+                rows.append([f.path, _format_size(f.size), detail])
+        elif self._current_mode == "empty_dirs":
+            headers = ["Directory", "Has system junk?"]
+            rows = []
+            for f in report.findings:
+                junk = f.details.get("system_junk_present", False) if isinstance(f.details, dict) else False
+                rows.append([f.path, "yes" if junk else "no"])
+        elif self._current_mode == "broken_symlinks":
+            headers = ["Symlink path", "Broken target"]
+            rows = []
+            for f in report.findings:
+                tgt = f.details.get("target", "?") if isinstance(f.details, dict) else "?"
+                rows.append([f.path, tgt])
+        else:
+            headers = ["Path", "Size", "Details"]
+            rows = [[f.path, _format_size(f.size), str(f.details)] for f in report.findings]
+
+        tbl = _make_table(headers, rows)
+        tbl.setMinimumHeight(220)
+        self._gr_layout.addWidget(tbl)
+
+        # Errors block (if any)
+        errs = getattr(report, "errors", None) or []
+        if errs:
+            from PySide6.QtWidgets import QLabel as _QL
+            lbl_e = _QL(f"<b>Scan errors ({len(errs)}):</b>")
+            lbl_e.setStyleSheet("color: #EF6C00; padding-top: 6px;")
+            self._gr_layout.addWidget(lbl_e)
+            etbl = _make_table(["#", "Error"],
+                               [[str(i + 1), e] for i, e in enumerate(errs[:30])])
+            self._gr_layout.addWidget(etbl)
+
+    # ------------------------------------------------------------------
+    # Apply phase
+    # ------------------------------------------------------------------
+
+    def _on_apply_clicked(self) -> None:
+        if self._last_find_report is None or not self._last_find_report.findings:
+            return
+
+        try:
+            from curator.gui.cleanup_signals import CleanupApplyWorker
+        except Exception as e:  # noqa: BLE001
+            self._lbl_status.setText(
+                f"<span style='color: #C62828;'>Could not load CleanupApplyWorker: {e}</span>"
+            )
+            return
+
+        from PySide6.QtWidgets import QMessageBox
+
+        n = len(self._last_find_report.findings)
+        use_trash = self._cb_use_trash.isChecked()
+        mode_label = self._current_mode.replace("_", " ")
+        action = "move to trash" if use_trash else "HARD DELETE"
+        reply = QMessageBox.question(
+            self,
+            "Confirm apply",
+            f"This will {action} <b>{n}</b> {mode_label} item(s).<br><br>"
+            f"<b>Use trash:</b> {'yes (reversible)' if use_trash else 'NO (irreversible)'}<br><br>"
+            f"Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._set_indeterminate(True, "Applying...")
+        self._lbl_status.setText(f"Applying: {action} {n} item(s)...")
+
+        self._apply_worker = CleanupApplyWorker(
+            runtime=self.runtime,
+            report=self._last_find_report,
+            use_trash=use_trash,
+            bridge=self._bridge,
+            parent=self,
+        )
+        self._apply_worker.start()
+        self._update_button_states()
+
+    def _on_apply_started(self, _n: object) -> None:
+        pass
+
+    def _on_apply_completed(self, apply_report: object) -> None:
+        self._last_apply_report = apply_report
+        self._set_indeterminate(False)
+
+        from collections import Counter
+        outcomes = Counter()
+        errors: list[str] = []
+        for result in apply_report.results:
+            outcome_name = getattr(result.outcome, "name", str(result.outcome))
+            outcomes[outcome_name] += 1
+            if result.error:
+                errors.append(f"{result.finding.path}: {result.error}")
+
+        deleted = outcomes.get("DELETED", 0)
+        skipped = (outcomes.get("SKIPPED_REFUSE", 0)
+                   + outcomes.get("SKIPPED_MISSING", 0))
+        failed = outcomes.get("FAILED", 0)
+
+        color = "#2E7D32" if failed == 0 else "#EF6C00"
+        self._lbl_status.setText(
+            f"<span style='color: {color};'><b>Apply complete:</b></span>"
+            f" {deleted} deleted, {skipped} skipped, {failed} failed."
+        )
+
+        # Sub-report block
+        from PySide6.QtWidgets import QGroupBox as _QGB
+        sub = _QGB("Apply results")
+        sub_layout = QVBoxLayout(sub)
+        sub_rows = [
+            ("Deleted",        str(deleted)),
+            ("Skipped (refused safety)",  str(outcomes.get("SKIPPED_REFUSE", 0))),
+            ("Skipped (missing on disk)", str(outcomes.get("SKIPPED_MISSING", 0))),
+            ("Failed",         str(failed)),
+            ("Started",        _format_dt(getattr(apply_report, "started_at", None))),
+            ("Completed",      _format_dt(getattr(apply_report, "completed_at", None))),
+        ]
+        sub_layout.addWidget(_make_kv_table(sub_rows))
+        if errors:
+            sub_layout.addWidget(QLabel(f"<b>Errors ({len(errors)}):</b>"))
+            err_tbl = _make_table(
+                ["Path", "Error"],
+                [[e.split(": ", 1)[0], e.split(": ", 1)[1] if ": " in e else ""]
+                 for e in errors[:30]],
+            )
+            sub_layout.addWidget(err_tbl)
+        self._gr_layout.addWidget(sub)
+        self._update_button_states()
+
+    def _on_apply_failed(self, exc: object) -> None:
+        self._set_indeterminate(False)
+        self._lbl_status.setText(
+            f"<span style='color: #C62828;'><b>Apply failed:</b></span>"
+            f" {type(exc).__name__}: {exc}"
+        )
+        self._update_button_states()
+
+    # ------------------------------------------------------------------
+    # Test / introspection helpers
+    # ------------------------------------------------------------------
+
+    @property
+    def last_find_report(self) -> Any:
+        return self._last_find_report
+
+    @property
+    def last_apply_report(self) -> Any:
+        return self._last_apply_report
+
+    @property
+    def current_mode(self) -> str:
+        return self._current_mode

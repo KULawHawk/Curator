@@ -287,14 +287,14 @@ If shipping linearly across v1.7 → v1.9:
 **v1.7 alpha already shipped:**
 - HealthCheckDialog (v1.7-alpha.1, committed `34c1483`)
 - ScanDialog (v1.7-alpha.2, committed `e7c46ce`)
-- GroupDialog (v1.7-alpha.3, this session)
+- GroupDialog (v1.7-alpha.3, committed `0ce5d8a`)
+- CleanupDialog (v1.7-alpha.4, this session)
 
 **v1.7 remaining (per `docs/design/GUI_V2_DESIGN.md`):**
-- CleanupDialog (4 sub-modes: junk / empty-dirs / broken-symlinks / duplicates)
 - SourceAddDialog + Sources tab
 - Audit Log filter UI
 
-Once those 3 ship → tag **v1.7.0** with all 5 v1.7-alpha dialogs included.
+Once those 2 ship → tag **v1.7.0** with all 6 v1.7-alpha dialogs included.
 
 ---
 

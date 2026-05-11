@@ -150,12 +150,13 @@ class CuratorMainWindow(QMainWindow):
         menu_edit.addAction(self._act_bundle_edit)
 
         # v1.6.2: Tools menu — placeholders for v1.7 native dialogs.
-        # v1.7 alpha: Three items now graduated from placeholders to real
+        # v1.7 alpha: Four items now graduated from placeholders to real
         # in-process PySide6 dialogs:
         #   * Health check    → HealthCheckDialog  (v1.7-alpha.1)
         #   * Scan folder     → ScanDialog         (v1.7-alpha.2)
-        #   * Find duplicates → GroupDialog        (v1.7-alpha.3, this commit)
-        # The other 2 items (Cleanup / Sources manager) still surface the
+        #   * Find duplicates → GroupDialog        (v1.7-alpha.3)
+        #   * Cleanup junk    → CleanupDialog      (v1.7-alpha.4, this commit)
+        # The one remaining item (Sources manager) still surfaces the
         # 'coming in v1.7' placeholder for now.
         menu_tools = self.menuBar().addMenu("&Tools")
 
@@ -169,8 +170,12 @@ class CuratorMainWindow(QMainWindow):
         act_group.triggered.connect(self._slot_open_group_dialog)
         menu_tools.addAction(act_group)
 
+        # v1.7 alpha.4: real CleanupDialog wired directly.
+        act_cleanup = QAction("&Cleanup junk / empty / symlinks...", self)
+        act_cleanup.triggered.connect(self._slot_open_cleanup_dialog)
+        menu_tools.addAction(act_cleanup)
+
         for label, key in [
-            ("&Cleanup junk...", "cleanup"),
             ("&Sources manager...", "sources"),
         ]:
             act = QAction(label, self)
@@ -1430,6 +1435,30 @@ class CuratorMainWindow(QMainWindow):
         dlg = GroupDialog(self.runtime, self)
         dlg.exec()
 
+    def _slot_open_cleanup_dialog(self) -> None:
+        """Open the native CleanupDialog (v1.7 alpha.4).
+
+        Fourth Tools-menu item to graduate from placeholder. Three-mode
+        cleanup picker (junk / empty_dirs / broken_symlinks) backed by
+        :class:`CleanupFindWorker` + :class:`CleanupApplyWorker`. The
+        duplicates mode is intentionally delegated to GroupDialog -- the
+        CleanupDialog provides a shortcut button to open it.
+
+        Imported lazily so a broken cleanup_signals or CleanupDialog
+        module can't prevent the main window from opening.
+        """
+        try:
+            from curator.gui.dialogs import CleanupDialog
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self,
+                "Cleanup dialog unavailable",
+                f"Could not import CleanupDialog: {e}",
+            )
+            return
+        dlg = CleanupDialog(self.runtime, self)
+        dlg.exec()
+
     def _slot_tools_placeholder(self, key: str) -> None:
         """Show 'coming in v1.7' notice for a Tools menu item.
 
@@ -1443,15 +1472,9 @@ class CuratorMainWindow(QMainWindow):
         first real dialog.
         """
         guidance = {
-            # v1.7 alpha: 'scan' and 'group' keys removed — ScanDialog and
-            # GroupDialog now open directly via their dedicated slots. Kept
-            # as comments so future maintainers don't re-add them.
-            "cleanup": (
-                "<b>Cleanup</b> dialog will let you pick categories"
-                " (junk / empty-dirs / broken-symlinks) and preview before applying."
-                " Coming in v1.7.<br><br>"
-                "<b>Today:</b> use Workflows → Cleanup junk."
-            ),
+            # v1.7 alpha: 'scan', 'group', and 'cleanup' keys removed — ScanDialog,
+            # GroupDialog, and CleanupDialog now open directly via their dedicated
+            # slots. Kept as comments so future maintainers don't re-add them.
             "sources": (
                 "<b>Sources Manager</b> dialog will let you add / enable / disable / remove"
                 " sources and edit their config. Coming in v1.7.<br><br>"

@@ -165,4 +165,144 @@ __all__ = [
     "GroupProgressBridge",
     "GroupFindWorker",
     "GroupApplyWorker",
+    "CleanupProgressBridge",
+    "CleanupFindWorker",
+    "CleanupApplyWorker",
 ]
+
+
+# ---------------------------------------------------------------------------
+# CleanupDialog workers (v1.7-alpha.4) -- mode-dispatched find + apply
+# ---------------------------------------------------------------------------
+#
+# Where GroupFindWorker is specific to find_duplicates, CleanupFindWorker
+# dispatches on a mode string to one of the 3 non-duplicate find methods:
+#
+#   mode='junk'             -> CleanupService.find_junk_files
+#   mode='empty_dirs'       -> CleanupService.find_empty_dirs
+#   mode='broken_symlinks'  -> CleanupService.find_broken_symlinks
+#
+# (Duplicates is excluded from CleanupDialog because GroupDialog gives
+# the richer 2-phase UI for that case -- the CleanupDialog explains this
+# and provides a shortcut to open GroupDialog instead.)
+
+
+class CleanupProgressBridge(QObject):
+    """Cross-thread signal carrier for CleanupDialog.
+
+    Identical 6-signal shape to :class:`GroupProgressBridge`; separated
+    so the two dialogs don't share state. Each dialog instantiates its
+    own bridge.
+    """
+
+    find_started = Signal(object)       # payload: (mode, root)
+    find_completed = Signal(object)     # payload: CleanupReport
+    find_failed = Signal(object)        # payload: exception
+
+    apply_started = Signal(object)      # payload: number of findings
+    apply_completed = Signal(object)    # payload: ApplyReport
+    apply_failed = Signal(object)       # payload: exception
+
+
+class CleanupFindWorker(QThread):
+    """QThread that dispatches to one of the 3 non-duplicate find_* methods.
+
+    The ``mode`` parameter selects which CleanupService method runs:
+
+      * ``mode='junk'``            -> ``find_junk_files(root, patterns=patterns)``
+      * ``mode='empty_dirs'``      -> ``find_empty_dirs(root, ignore_system_junk=...)``
+      * ``mode='broken_symlinks'`` -> ``find_broken_symlinks(root)``
+
+    Emits via the bridge:
+
+      1. ``bridge.find_started.emit((mode, root))``
+      2. On success: ``bridge.find_completed.emit(cleanup_report)``
+      3. On failure: ``bridge.find_failed.emit(exception)``
+    """
+
+    SUPPORTED_MODES = ("junk", "empty_dirs", "broken_symlinks")
+
+    def __init__(
+        self,
+        runtime: "CuratorRuntime",
+        *,
+        mode: str,
+        root: str,
+        # Junk-specific:
+        patterns: list[str] | None = None,
+        # Empty-dirs-specific:
+        ignore_system_junk: bool = True,
+        bridge: "CleanupProgressBridge",
+        parent: QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        if mode not in self.SUPPORTED_MODES:
+            raise ValueError(
+                f"CleanupFindWorker: unknown mode {mode!r}. "
+                f"Supported: {self.SUPPORTED_MODES}"
+            )
+        self._runtime = runtime
+        self._mode = mode
+        self._root = root
+        self._patterns = patterns
+        self._ignore_system_junk = ignore_system_junk
+        self._bridge = bridge
+
+    def run(self) -> None:  # noqa: D401 -- QThread API
+        """Dispatch to the right find_* method based on mode."""
+        self._bridge.find_started.emit((self._mode, self._root))
+        try:
+            cleanup = self._runtime.cleanup
+            if self._mode == "junk":
+                report = cleanup.find_junk_files(
+                    self._root, patterns=self._patterns,
+                )
+            elif self._mode == "empty_dirs":
+                report = cleanup.find_empty_dirs(
+                    self._root, ignore_system_junk=self._ignore_system_junk,
+                )
+            elif self._mode == "broken_symlinks":
+                report = cleanup.find_broken_symlinks(self._root)
+            else:
+                # Defensive; __init__ validates but be paranoid.
+                raise ValueError(f"unreachable: mode {self._mode!r}")
+        except Exception as e:  # noqa: BLE001
+            self._bridge.find_failed.emit(e)
+            return
+        self._bridge.find_completed.emit(report)
+
+
+class CleanupApplyWorker(QThread):
+    """QThread that runs ``CleanupService.apply`` for the CleanupDialog.
+
+    Functionally identical to :class:`GroupApplyWorker` but uses
+    :class:`CleanupProgressBridge` signals so the two dialogs stay
+    decoupled.
+    """
+
+    def __init__(
+        self,
+        runtime: "CuratorRuntime",
+        report: "CleanupReport",
+        *,
+        use_trash: bool,
+        bridge: "CleanupProgressBridge",
+        parent: QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._runtime = runtime
+        self._report = report
+        self._use_trash = use_trash
+        self._bridge = bridge
+
+    def run(self) -> None:  # noqa: D401 -- QThread API
+        """Run apply, emit via the bridge; never raise."""
+        self._bridge.apply_started.emit(len(self._report.findings))
+        try:
+            apply_report = self._runtime.cleanup.apply(
+                self._report, use_trash=self._use_trash,
+            )
+        except Exception as e:  # noqa: BLE001
+            self._bridge.apply_failed.emit(e)
+            return
+        self._bridge.apply_completed.emit(apply_report)

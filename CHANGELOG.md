@@ -4,6 +4,52 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.0-alpha.4] — 2026-05-11 — CleanupDialog (fourth native v1.7 dialog)
+
+**Headline:** Fourth Tools-menu item graduated from placeholder. `CleanupDialog` is a three-mode cleanup picker (junk files / empty directories / broken symlinks) backed by two new workers in `cleanup_signals.py`. The duplicates mode is intentionally delegated to GroupDialog — the CleanupDialog provides a shortcut button to open it.
+
+### Files changed
+
+- **`src/curator/gui/cleanup_signals.py`** — added `CleanupProgressBridge` (6 signals; identical shape to GroupProgressBridge), `CleanupFindWorker` (mode-dispatching to `find_junk_files` / `find_empty_dirs` / `find_broken_symlinks`), and `CleanupApplyWorker` (mirrors `GroupApplyWorker` shape). `__all__` updated.
+- **`src/curator/gui/dialogs.py`** — added `CleanupDialog(QDialog)` class (~370 lines). Mode-specific UI: junk patterns text input (visible only in junk mode), strict checkbox (visible only in empty_dirs mode). Mode-specific result tables: junk shows matched pattern, empty_dirs shows system_junk_present, broken_symlinks shows broken target. Shared: path picker, use_trash toggle, Apply button with confirm modal.
+- **`src/curator/gui/main_window.py`** — Tools menu rewired: `"Cleanup junk / empty / symlinks..."` now opens `CleanupDialog` directly via `_slot_open_cleanup_dialog`. Only `"Sources manager..."` placeholder remains.
+- **`docs/FEATURE_TODO.md`** — marked CleanupDialog shipped; updated v1.7 remaining list.
+
+### Mode coverage
+
+| Mode | CleanupService method | Mode-specific inputs |
+|---|---|---|
+| Junk files | `find_junk_files(root, patterns=...)` | Comma-separated glob patterns (default: 17 system-junk patterns) |
+| Empty directories | `find_empty_dirs(root, ignore_system_junk=...)` | Strict checkbox (inverts `ignore_system_junk`) |
+| Broken symlinks | `find_broken_symlinks(root)` | (none) |
+| Duplicates | — (delegated to GroupDialog) | Shortcut button opens GroupDialog |
+
+### v1.7-alpha.4 limitations
+
+- **No glob expansion preview** — when the user types a junk pattern, there's no "would match these files" preview before clicking Find.
+- **Empty-dirs `system_junk_present` column** — currently renders as yes/no truthiness check; could render the actual list of system-junk filenames in v1.7.x.
+- **No mid-find cancellation** — `find_*` methods are not interruptible.
+
+### Verification
+
+- Headless smoke test with seeded temp dir (3 junk + 1 empty subdir + 1 non-empty subdir): ✅
+  - Junk mode: found 3 (Thumbs.db, .DS_Store, desktop.ini) with correct `matched_pattern` details
+  - Empty dirs mode: found 1 (just `empty_subdir`); non-empty dir correctly skipped
+  - Broken symlinks mode: found 0 (no symlinks created on Windows without admin); no crash
+- Full pytest suite: ✅ 1438 passed, 9 skipped, 0 failed (identical to v1.6.5 baseline).
+
+### Authoritative-source-first principle applied
+
+Before writing any code, probed:
+- `CleanupService.find_junk_files` signature → `(root, *, patterns=None) -> CleanupReport`
+- `CleanupService.find_empty_dirs` signature → `(root, *, ignore_system_junk=True) -> CleanupReport`
+- `CleanupService.find_broken_symlinks` signature → `(root) -> CleanupReport`
+- `DEFAULT_JUNK_PATTERNS` constant → 17 patterns including `Thumbs.db`, `.DS_Store`, `desktop.ini`, `.AppleDouble`, etc.
+- `SYSTEM_JUNK_NAMES` constant → 6 names used by `find_empty_dirs` when `ignore_system_junk=True`
+- `details` dict keys per mode (found via `inspect.getsource()`): `{'matched_pattern': str}` / `{'system_junk_present': list-or-bool}` / `{'target': str}`
+
+Zero API assumptions made; zero crashes on first run across all 3 modes.
+
 ## [1.7.0-alpha.3] — 2026-05-11 — GroupDialog (third native v1.7 dialog)
 
 **Headline:** Third Tools-menu item graduated from placeholder to a real in-process PySide6 dialog. `GroupDialog` is a two-phase duplicate finder: configure parameters → Find (background QThread) → review groups with keepers highlighted in green → Apply (background QThread) → see deleted/skipped/failed tally. Both phases use the same `GroupProgressBridge`. Closes the v1.7 GUI parity gap for `curator group` and the Workflows-menu "Find duplicates" path.
