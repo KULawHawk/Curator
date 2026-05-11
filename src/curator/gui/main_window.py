@@ -1269,7 +1269,16 @@ class CuratorMainWindow(QMainWindow):
         with nodes = files, edges = lineage relationships colored by
         edge kind. Read-only for v0.41; focus-mode (centered on a
         selected file) is a v0.42 follow-up.
+
+        v1.7.5 (T-A02): adds a time-machine slider above the graph
+        that filters edges by ``detected_at <= slider_value``. The
+        slider's range is computed once on tab construction from the
+        DB's MIN(detected_at) / MAX(detected_at). Plus a 'Show all'
+        reset button and a Play/Pause animation toggle that sweeps
+        the slider from earliest to latest at ~1 step per 200ms.
         """
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QSlider
         from curator.gui.lineage_view import (
             LineageGraphBuilder,
             _make_lineage_graph_view,
@@ -1290,8 +1299,163 @@ class CuratorMainWindow(QMainWindow):
         header.setStyleSheet("padding: 4px; font-size: 10pt;")
         layout.addWidget(header)
 
+        # v1.7.5 (T-A02): Time-machine slider row.
+        # The slider has N+1 stops where N is the number of days in
+        # the edge time range. The 'show all' button on the right
+        # disables the filter entirely.
+        self._lineage_time_min, self._lineage_time_max = (
+            self._lineage_builder.get_time_range()
+        )
+
+        time_row = QHBoxLayout()
+        time_row.addWidget(QLabel("<b>Time:</b>"))
+
+        self._lineage_slider = QSlider(Qt.Orientation.Horizontal)
+        self._lineage_slider.setMinimum(0)
+        # Use 0..100 ticks; map to actual datetimes via _slider_to_datetime
+        self._lineage_slider.setMaximum(100)
+        self._lineage_slider.setValue(100)  # all edges visible at start
+        self._lineage_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._lineage_slider.setTickInterval(10)
+        if self._lineage_time_min is None or self._lineage_time_max is None:
+            # No edges yet — disable slider but keep it visible
+            self._lineage_slider.setEnabled(False)
+            self._lineage_slider.setToolTip(
+                "No lineage edges in the DB yet. Run a scan to populate."
+            )
+        else:
+            self._lineage_slider.setToolTip(
+                f"Show only edges detected on or before the selected time. "
+                f"Range: {self._lineage_time_min:%Y-%m-%d} — "
+                f"{self._lineage_time_max:%Y-%m-%d}"
+            )
+        self._lineage_slider.valueChanged.connect(
+            self._slot_lineage_slider_changed,
+        )
+        time_row.addWidget(self._lineage_slider, 1)
+
+        self._lineage_time_label = QLabel(self._lineage_time_label_text(100))
+        self._lineage_time_label.setMinimumWidth(180)
+        self._lineage_time_label.setStyleSheet("font-family: monospace;")
+        time_row.addWidget(self._lineage_time_label)
+
+        self._lineage_play_btn = QPushButton("▶ Play")
+        self._lineage_play_btn.setMaximumWidth(80)
+        self._lineage_play_btn.setToolTip(
+            "Animate the time slider from earliest to latest at ~5 steps/sec."
+        )
+        self._lineage_play_btn.setEnabled(
+            self._lineage_time_min is not None
+            and self._lineage_time_max is not None
+        )
+        self._lineage_play_btn.clicked.connect(self._slot_lineage_play_toggle)
+        time_row.addWidget(self._lineage_play_btn)
+
+        self._lineage_clear_btn = QPushButton("Show all")
+        self._lineage_clear_btn.setMaximumWidth(90)
+        self._lineage_clear_btn.setToolTip(
+            "Reset the time filter and show every edge in the DB."
+        )
+        self._lineage_clear_btn.clicked.connect(
+            self._slot_lineage_clear_time_filter,
+        )
+        time_row.addWidget(self._lineage_clear_btn)
+        layout.addLayout(time_row)
+
+        # The QTimer that drives the play animation. None when not playing.
+        self._lineage_play_timer: QTimer | None = None
+
         layout.addWidget(self._lineage_view)
         return wrapper
+
+    def _slider_to_datetime(self, pct: int):
+        """Map slider value (0..100) to a datetime within the edge time range.
+
+        Returns ``None`` if the time range is unknown (no edges).
+        """
+        if self._lineage_time_min is None or self._lineage_time_max is None:
+            return None
+        if pct >= 100:
+            return self._lineage_time_max
+        if pct <= 0:
+            return self._lineage_time_min
+        # Linear interpolation between min and max
+        span = (self._lineage_time_max - self._lineage_time_min).total_seconds()
+        seconds_offset = span * (pct / 100.0)
+        from datetime import timedelta as _td
+        return self._lineage_time_min + _td(seconds=seconds_offset)
+
+    def _lineage_time_label_text(self, pct: int) -> str:
+        """Human-readable text for the time-label widget."""
+        if self._lineage_time_min is None or self._lineage_time_max is None:
+            return "(no edges)"
+        if pct >= 100:
+            return "as of: now (all edges)"
+        dt = self._slider_to_datetime(pct)
+        if dt is None:
+            return "(no edges)"
+        return f"as of: {dt:%Y-%m-%d %H:%M}"
+
+    def _slot_lineage_slider_changed(self, value: int) -> None:
+        """v1.7.5 (T-A02): re-render the graph when the time slider moves."""
+        self._lineage_time_label.setText(self._lineage_time_label_text(value))
+        if value >= 100:
+            # End-of-range = no filter (show every edge).
+            self._lineage_view.clear_time_filter()
+            return
+        dt = self._slider_to_datetime(value)
+        if dt is None:
+            return
+        self._lineage_view.refresh(max_detected_at=dt)
+
+    def _slot_lineage_clear_time_filter(self) -> None:
+        """v1.7.5 (T-A02): reset the slider to 100% and clear the filter."""
+        self._lineage_slider.blockSignals(True)
+        self._lineage_slider.setValue(100)
+        self._lineage_slider.blockSignals(False)
+        self._lineage_time_label.setText(self._lineage_time_label_text(100))
+        self._lineage_view.clear_time_filter()
+        # Stop animation if it was running
+        if self._lineage_play_timer is not None:
+            self._lineage_play_timer.stop()
+            self._lineage_play_timer = None
+            self._lineage_play_btn.setText("▶ Play")
+
+    def _slot_lineage_play_toggle(self) -> None:
+        """v1.7.5 (T-A02): start/stop the time-slider animation.
+
+        When playing, a QTimer increments the slider by 1 every 200ms
+        until it reaches 100, then stops. Clicking again pauses; clicking
+        a third time resumes from the current value.
+        """
+        from PySide6.QtCore import QTimer
+        if self._lineage_play_timer is not None:
+            # Currently playing → pause
+            self._lineage_play_timer.stop()
+            self._lineage_play_timer = None
+            self._lineage_play_btn.setText("▶ Play")
+            return
+        # Not playing → start
+        # If we're already at the end, restart from the beginning
+        if self._lineage_slider.value() >= 100:
+            self._lineage_slider.setValue(0)
+        self._lineage_play_timer = QTimer(self)
+        self._lineage_play_timer.setInterval(200)  # 5 steps/sec
+        self._lineage_play_timer.timeout.connect(self._lineage_play_tick)
+        self._lineage_play_timer.start()
+        self._lineage_play_btn.setText("⏸ Pause")
+
+    def _lineage_play_tick(self) -> None:
+        """v1.7.5 (T-A02): single step of the animation timer."""
+        cur = self._lineage_slider.value()
+        if cur >= 100:
+            # Animation finished — stop the timer.
+            if self._lineage_play_timer is not None:
+                self._lineage_play_timer.stop()
+                self._lineage_play_timer = None
+            self._lineage_play_btn.setText("▶ Play")
+            return
+        self._lineage_slider.setValue(cur + 1)
 
     @staticmethod
     def _build_lineage_legend_html() -> str:

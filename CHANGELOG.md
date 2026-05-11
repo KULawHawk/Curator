@@ -4,6 +4,58 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.5] — 2026-05-11 — T-A02 Visual Lineage Time-Machine
+
+**Headline:** The Lineage Graph tab gains a **time-slider that replays how lineage evolved**. Drag the slider, watch edges appear in chronological order. Click Play and the slider auto-sweeps at 5 steps/sec. Captures "Card VIII v1 → v2 → v3.1 → final" as an animated graph.
+
+### Why this matters
+
+Lineage edges accumulate over time — every scan adds new ones (when the fuzzy-dup / filename / hash plugins find relationships). A static view shows the *current* state, not the *history*. The time-machine surfaces when each relationship was first detected, which is the natural way to follow a multi-version document's lineage chain.
+
+### What's new
+
+- **`LineageGraphBuilder.build_full_graph(max_detected_at=...)`** — SQL-level filter on `detected_at <= cutoff`. Backward-compatible: `None` (default) preserves the v0.41 "show all edges" behavior.
+- **`LineageGraphBuilder.get_time_range() -> tuple[datetime|None, datetime|None]`** — returns DB `MIN(detected_at) / MAX(detected_at)` for slider bounds. Defensive: coerces SQLite strings to datetimes via `fromisoformat` (different connection setups return different types).
+- **`GraphEdge.detected_at`** — new dataclass field, populated from the underlying `LineageEdge`. Already-tested code that constructs GraphEdge without this kwarg continues to work (default = None).
+- **`LineageGraphView.refresh(max_detected_at=...)`** — accepts the filter; persists state in `_current_max_detected_at` so argument-less refresh() calls preserve the filter. New `clear_time_filter()` method.
+- **Lineage Graph tab UI** (`main_window.py`):
+  - QSlider (0–100 with tick marks every 10) above the graph
+  - Linear interpolation: slider 0% → earliest edge time, 100% → latest, in between → proportional cutoff
+  - Live time-label widget shows "as of: 2026-05-04 18:00" as the slider moves
+  - **▶ Play / ⏸ Pause button** drives a QTimer at 200ms intervals; auto-stops at 100%
+  - **Show all** button resets the filter
+  - When the DB has no lineage edges (current canonical state), slider + Play disable themselves with an informative tooltip; tab still renders cleanly
+
+### Files changed
+
+- `src/curator/gui/lineage_view.py` — +60 lines (builder + view extensions; coerce_datetime helper)
+- `src/curator/gui/main_window.py` — +135 lines (time-slider row + 4 new slots + animation timer)
+- `docs/FEATURE_TODO.md` — T-A02 status proposed → shipped
+- `docs/releases/v1.7.5.md` — new release notes
+
+### Verification
+
+- 6-test headless suite (`test_ta02.py` against synthetic 4-edge DB):
+  1. `build_full_graph()` backward-compat (no filter) shows all 4 edges
+  2. `build_full_graph(max_detected_at=cutoff)` filters correctly at multiple cutoffs
+  3. `get_time_range()` returns DB MIN/MAX correctly
+  4. `GraphEdge.detected_at` is populated from the underlying LineageEdge
+  5. `LineageGraphView.refresh()` accepts + persists + clears the time filter
+  6. `CuratorMainWindow` constructs Lineage tab with all expected slider/button widgets
+- Full pytest: ✅ 1438 passed, 9 skipped, 0 failed (baseline intact)
+
+### Authoritative-source-first principle applied
+
+Caught **1 type-coercion bug** before integration tests would have crashed it:
+- `SELECT MIN(detected_at), MAX(detected_at)` returns SQLite STRING values, not datetimes (unless `detect_types=PARSE_DECLTYPES` is set on the connection). Test 3 revealed this before the GUI integration would have crashed on `slider_value - min_dt` arithmetic. Fixed via a `_coerce_datetime` static method that handles None / datetime / ISO-string inputs.
+
+### v1.7.5 limitations
+
+- **No history axis labels.** The slider shows current cutoff via the time-label widget, but there's no axis with marked dates (e.g. "May 1 | May 5 | now"). A `QGraphicsItem` axis-marker layer would be a v1.8 polish item.
+- **No per-edge fade-in animation.** Edges appear/disappear instantly as the cutoff moves. Smooth opacity transitions would require a tween system; deferred.
+- **No "focused on file X" + time slider combination.** The focus-graph mode (built into the LineageGraphBuilder but not yet wired in v0.41) doesn't yet integrate with the time slider.
+- **No edge count history chart.** A small inset chart showing edges-vs-time would help orient the user; deferred to v1.8.
+
 ## [1.7.4] — 2026-05-11 — T-B02 Compliance Retention Enforcement (cross-repo)
 
 **Headline:** Companion release to atrium-safety v0.4.0. No Curator-side code change — just docs + version-bump marker for the cross-repo behavior shift: with atrium-safety v0.4.0 installed, **files classified as `status='vital'` are now safe from accidental trashing**.

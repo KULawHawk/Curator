@@ -26,12 +26,12 @@ The heavy machinery exists. Work is wiring + a small UI/glue layer.
 - **Notes:** False positives below 0.85 confidence happen — the dialog defaults to 0.70 (matches plugin threshold) but the user can dial up.
 
 ### `T-A02` — Visual Lineage Graphing (time-machine UI)
-- **Status:** proposed
+- **Status:** **shipped v1.7.5**
 - **Effort:** M
-- **Depends on:** none (uses existing `gui/lineage_view.py` + `LineageEdge.created_at`)
+- **Depends on:** none (uses existing `gui/lineage_view.py` + `LineageEdge.detected_at`)
 - **What:** Add a time-slider to the Lineage Graph tab that filters edges by creation date, so you can replay how a file lineage evolved.
+- **v1.7.5 delivery:** `LineageGraphBuilder.build_full_graph(max_detected_at=...)` filters edges by SQL `detected_at <= cutoff`. New `get_time_range()` returns DB MIN/MAX for slider bounds. `LineageGraphView.refresh(max_detected_at=...)` accepts the filter; persists state for argument-less calls. Tab adds a QSlider (0–100 → linear interp over time range), Play/Pause button (5 steps/sec), Show-all reset.
 - **Why high priority:** Same RCS use case — see "Card VIII v1 → v2 → v3.1 → final" as an animated graph.
-- **Notes:** UI design decision: slider vs. animation vs. both. Recommend both, with the slider as the primary control.
 
 ### `T-A03` — Watchdog Daemon Mode
 - **Status:** proposed

@@ -25,6 +25,7 @@ follow-up; the builder already supports it via
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -63,6 +64,7 @@ class GraphEdge:
     edge_kind: str
     confidence: float
     detected_by: str = ""
+    detected_at: datetime | None = None  # T-A02 (v1.7.5): time-machine support
 
 
 @dataclass
@@ -125,12 +127,70 @@ class LineageGraphBuilder:
 
     # -- public API -----------------------------------------------------
 
-    def build_full_graph(self) -> GraphLayout:
-        """Every file with at least one lineage edge."""
+    def build_full_graph(
+        self,
+        *,
+        max_detected_at: datetime | None = None,
+    ) -> GraphLayout:
+        """Every file with at least one lineage edge.
+
+        T-A02 (v1.7.5): if ``max_detected_at`` is provided, only edges
+        with ``detected_at <= max_detected_at`` are included. Files
+        that participate in NO surviving edge are dropped. This
+        powers the time-slider in the Lineage Graph tab; passing
+        ``None`` (the default) preserves the v0.41 behavior of
+        showing every edge.
+        """
         if not NETWORKX_AVAILABLE:
             return GraphLayout()
-        edges = self._fetch_all_edges()
+        edges = self._fetch_all_edges(max_detected_at=max_detected_at)
         return self._build_from_edges(edges)
+
+    def get_time_range(self) -> tuple[datetime | None, datetime | None]:
+        """Return ``(earliest_detected_at, latest_detected_at)`` across all edges.
+
+        Returns ``(None, None)`` if the DB has no lineage edges (or no
+        non-NULL ``detected_at`` values). T-A02 (v1.7.5): the slider in
+        the Lineage Graph tab uses this to set its min/max bounds.
+
+        Defensive: SQLite returns TIMESTAMP columns as either string
+        (default) or datetime (when PARSE_DECLTYPES is set on the
+        connection). We coerce strings to datetimes via fromisoformat
+        to make the contract type-safe.
+        """
+        try:
+            with self._lineage_repo.db.conn() as conn:
+                cursor = conn.execute(
+                    "SELECT MIN(detected_at), MAX(detected_at) FROM lineage_edges "
+                    "WHERE detected_at IS NOT NULL"
+                )
+                row = cursor.fetchone()
+            if row is None:
+                return (None, None)
+            return (
+                self._coerce_datetime(row[0]),
+                self._coerce_datetime(row[1]),
+            )
+        except Exception:
+            return (None, None)
+
+    @staticmethod
+    def _coerce_datetime(v) -> datetime | None:
+        """Coerce a SQLite-returned timestamp value to a datetime.
+
+        Handles three cases:
+          * None → None
+          * datetime instance → returned as-is
+          * str (ISO 8601) → parsed via fromisoformat
+        """
+        if v is None:
+            return None
+        if isinstance(v, datetime):
+            return v
+        try:
+            return datetime.fromisoformat(v)
+        except (TypeError, ValueError):
+            return None
 
     def build_focus_graph(
         self,
@@ -165,12 +225,24 @@ class LineageGraphBuilder:
 
     # -- internal helpers -----------------------------------------------
 
-    def _fetch_all_edges(self) -> list:
+    def _fetch_all_edges(
+        self,
+        *,
+        max_detected_at: datetime | None = None,
+    ) -> list:
         try:
             with self._lineage_repo.db.conn() as conn:
-                cursor = conn.execute(
-                    "SELECT * FROM lineage_edges ORDER BY confidence DESC"
-                )
+                if max_detected_at is not None:
+                    cursor = conn.execute(
+                        "SELECT * FROM lineage_edges "
+                        "WHERE detected_at IS NULL OR detected_at <= ? "
+                        "ORDER BY confidence DESC",
+                        (max_detected_at,),
+                    )
+                else:
+                    cursor = conn.execute(
+                        "SELECT * FROM lineage_edges ORDER BY confidence DESC"
+                    )
                 rows = cursor.fetchall()
                 return [self._lineage_repo._row_to_edge(row) for row in rows]
         except Exception:
@@ -198,6 +270,7 @@ class LineageGraphBuilder:
                 edge_kind=kind_str,
                 confidence=float(e.confidence),
                 detected_by=getattr(e, "detected_by", ""),
+                detected_at=getattr(e, "detected_at", None),
             ))
 
         # Compute layout.
@@ -314,16 +387,37 @@ def _make_lineage_graph_view(builder: LineageGraphBuilder):
             self._scene = QGraphicsScene(0, 0, self.SCENE_W, self.SCENE_H)
             self.setScene(self._scene)
             self.setRenderHint(self.renderHints() | self.renderHints().__class__.Antialiasing)
+            # T-A02 (v1.7.5): remember the current time filter so
+            # external refresh() calls without arguments preserve it.
+            self._current_max_detected_at = None
             self.refresh()
 
-        def refresh(self) -> None:
-            """Re-query the builder and re-render the scene."""
+        def refresh(self, max_detected_at=None) -> None:
+            """Re-query the builder and re-render the scene.
+
+            T-A02 (v1.7.5): an optional ``max_detected_at`` filter
+            shows only edges with ``detected_at <= max_detected_at``.
+            Pass ``None`` (the default) to show every edge; pass a
+            datetime to filter. Whatever is passed becomes the
+            persisted filter — subsequent argument-less refresh()
+            calls reuse it. To clear the filter explicitly, call
+            ``refresh(max_detected_at=None)``.
+            """
+            if max_detected_at is not None:
+                self._current_max_detected_at = max_detected_at
             self._scene.clear()
-            layout = self._builder.build_full_graph()
+            layout = self._builder.build_full_graph(
+                max_detected_at=self._current_max_detected_at,
+            )
             if layout.is_empty:
                 self._render_empty_state()
                 return
             self._render(layout)
+
+        def clear_time_filter(self) -> None:
+            """Reset the time filter to None (show all edges) and re-render."""
+            self._current_max_detected_at = None
+            self.refresh()
 
         def _render_empty_state(self) -> None:
             t = self._scene.addText(self.EMPTY_HINT)
