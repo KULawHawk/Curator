@@ -3,10 +3,10 @@
 **Generated 2026-05-11 directly from `git ls-files` across all three repos.**
 This is the **100% accurate** list. No omissions possible - `git ls-files` is the source of truth.
 
-**Total tracked files: 287** (251 Curator + 17 atrium-safety + 19 atrium-citation)
+**Total tracked files: 289** (253 Curator + 17 atrium-safety + 19 atrium-citation)
 
 **Versions at generation time:**
-- Curator: v1.7.2 (HEAD 0a1f827)
+- Curator: v1.7.2 (HEAD post-doc-refresh)
 - curatorplug-atrium-safety: v0.3.0
 - curatorplug-atrium-citation: v0.2.0
 
@@ -17,21 +17,21 @@ This is the **100% accurate** list. No omissions possible - `git ls-files` is th
 | Extension | Count |
 |-----------|-------|
 | .py | 199 |
-| .md | 43 |
+| .md | 45 |
 | .json | 12 |
 | .ps1 | 7 |
 | .png | 7 |
 | .bat | 6 |
-| .toml | 3 |
-| .gitignore | 3 |
-| .typed | 3 |
 | .txt | 3 |
+| .gitignore | 3 |
+| .toml | 3 |
+| .typed | 3 |
 | .sql | 1 |
-| **TOTAL** | **287** |
+| **TOTAL** | **289** |
 
 ---
 
-## Curator repo - 251 files
+## Curator repo - 253 files
 
 ```
 .gitignore
@@ -59,6 +59,8 @@ docs/PHASE_BETA_LSH.md
 docs/PHASE_BETA_WATCH.md
 docs/PLUGIN_INIT_HOOKSPEC_DESIGN.md
 docs/releases/v1.7.0.md
+docs/releases/v1.7.1.md
+docs/releases/v1.7.2.md
 docs/ROADMAP.md
 docs/TRACER_PHASE_2_DESIGN.md
 docs/TRACER_PHASE_3_DESIGN.md
