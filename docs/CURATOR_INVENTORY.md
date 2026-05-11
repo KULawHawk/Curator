@@ -1,6 +1,6 @@
 # Curator — Complete Inventory of Tools, Utilities, and Assets
 
-**As of Curator v1.6.5 (+ v1.7 alpha HealthCheckDialog) — 2026-05-10**
+**As of Curator v1.7.0 (HEAD a41840d) — 2026-05-11**
 
 Everything you can click, run, or open. Copy any code block as-is. Items grouped by surface (CLI / GUI / MCP / Workflows / Plugins / Files).
 
@@ -221,7 +221,7 @@ Show metadata for one MCP API key.
 ```
 curator gui
 ```
-Launch the PySide6 desktop GUI. 8 tabs, 5 menus, full read/write surface.
+Launch the PySide6 desktop GUI. 9 tabs, 5 menus, full read/write surface.
 
 ---
 
@@ -276,9 +276,9 @@ Query Curator's migration jobs (in-progress, completed, failed).
 
 ---
 
-## 3. GUI — 8 Tabs
+## 3. GUI — 9 Tabs
 
-Launch with `curator gui`. The window title shows the current version (1.6.5 at last commit).
+Launch with `curator gui`. The window title shows the current version (1.7.0 at last commit).
 
 ```
 Inbox
@@ -308,12 +308,17 @@ Migration job tracker. Active jobs show progress bars; completed jobs show summa
 ```
 Audit Log
 ```
-Every mutation Curator has ever made: scans, sources adds/removes, trash actions, migrations, bundle ops.
+Every mutation Curator has ever made: scans, sources adds/removes, trash actions, migrations, bundle ops. **v1.7-alpha.6 added a 6-control filter toolbar** (Since-hours / Actor / Action / Entity type / Entity ID / Apply+Clear) backed by `AuditRepository.query()`. Dropdowns auto-populate from distinct values in the DB.
 
 ```
 Settings
 ```
 Read-only config view (editable Settings is v1.8 work). Shows current DB path, source roots, log levels, MCP config.
+
+```
+Sources
+```
+**(NEW in v1.7-alpha.5.)** Live table of all registered sources (id / type / display name / enabled / # files / created). Top toolbar has `+ Add source...` (opens `SourceAddDialog`) and `Refresh`. Right-click any row for Enable / Disable / Remove. Remove gracefully refuses if files still reference the source (SQL ON DELETE RESTRICT) and suggests Disable instead.
 
 ```
 Lineage Graph
@@ -343,15 +348,21 @@ Edit → Edit selected bundle           (Ctrl+E)
 
 ### Tools menu
 
+**As of v1.7.0: all 5 items are real dialogs/tabs. Zero placeholders.**
+
 ```
-Tools → Scan folder...        [v1.7 placeholder]
-Tools → Find duplicates...    [v1.7 placeholder]
-Tools → Cleanup junk...       [v1.7 placeholder]
-Tools → Sources manager...    [v1.7 placeholder]
-Tools → Health check          [v1.7 alpha — REAL native dialog]
+Tools → Scan folder...                       → ScanDialog          (v1.7-alpha.2)
+Tools → Find duplicates...                   → GroupDialog         (v1.7-alpha.3)
+Tools → Cleanup junk / empty / symlinks...   → CleanupDialog       (v1.7-alpha.4)
+Tools → Sources manager...                   → Sources tab pivot   (v1.7-alpha.5)
+Tools → Health check                         → HealthCheckDialog   (v1.7-alpha.1)
 ```
 
-The Health check item opens **`HealthCheckDialog`** — an 8-section diagnostic running 22 checks in ~4 seconds. Has Refresh + Copy-to-clipboard buttons.
+- **`ScanDialog`** — folder + source picker → background QThread runs `runtime.scan.scan()` → renders ScanReport (counts + errors + timings).
+- **`GroupDialog`** — 2-phase duplicate finder: configure (source, keep strategy, match kind) → Find (background) → review groups with keepers highlighted → Apply (background, trash duplicates).
+- **`CleanupDialog`** — 3-mode picker (junk files / empty dirs / broken symlinks) backed by `CleanupFindWorker` + `CleanupApplyWorker`. Duplicates mode delegates to GroupDialog via a shortcut button.
+- **`Sources tab pivot`** — switches to the new Sources tab rather than opening a modal, so the user sees existing sources first.
+- **`HealthCheckDialog`** — 8-section diagnostic running 22 checks in ~4 seconds. Refresh + Copy-to-clipboard buttons.
 
 ### Workflows menu
 
@@ -536,7 +547,7 @@ Where Curator is going (23 KB).
 ```
 docs/design/GUI_V2_DESIGN.md
 ```
-Full v1.7 / v1.8 / v1.9 GUI architecture (12 KB). Spec for the dialogs that aren't yet built.
+Full v1.7 / v1.8 / v1.9 GUI architecture (12 KB). v1.7 portion is now SHIPPED — all 5 dialogs and the Sources tab landed in the v1.7-alpha.1..6 sequence. v1.8 / v1.9 portions remain spec-only.
 
 ```
 docs/CURATOR_MCP_SERVER_DESIGN.md
@@ -633,7 +644,7 @@ docs/lessons/2026-05-09_install_mcp_session.md
 ```
 https://github.com/KULawHawk/Curator
 ```
-Main Curator repo (HEAD = v1.6.5 tag, plus v1.7 alpha HealthCheckDialog commit `34c1483`).
+Main Curator repo (HEAD = v1.7.0 tag at commit `a41840d`).
 
 ```
 https://github.com/KULawHawk/curatorplug-atrium-safety
@@ -681,4 +692,6 @@ See the last day's activity.
 
 ---
 
-**Total surface count:** 43 CLI commands + 9 MCP tools + 8 GUI tabs + 14 GUI menu actions + 5 workflow scripts + 9 plugins + 21 doc files + 3 installer files + 3 config files + 4 GitHub repos = **119 discrete clickable items**.
+**Total surface count (v1.7.0):** 43 CLI commands + 9 MCP tools + 9 GUI tabs + 14 GUI menu actions + 5 workflow scripts + 9 plugins + 24 doc files + 3 installer files + 3 config files + 4 GitHub repos = **123 discrete clickable items**.
+
+**Delta v1.6.5 → v1.7.0:** +1 GUI tab (Sources), +0 menu actions (5 placeholders graduated to real dialogs), +3 doc files (FEATURE_TODO, BUILDING_BLOCKS, ALL_FILES), +0 new CLI commands or MCP tools.

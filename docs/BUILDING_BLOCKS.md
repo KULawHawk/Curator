@@ -1,7 +1,7 @@
 # Curator — Building Blocks (source-level inventory)
 
 **The actual `.py` files, scripts, and source artifacts that make Curator work.**
-As of v1.6.5 + v1.7 alpha HealthCheckDialog — 2026-05-10.
+As of v1.7.0 (HEAD a41840d) — 2026-05-11.
 
 Organized by architectural tier from the inside out: **Models → Storage → Plugins → Services → CLI / GUI / MCP → External plugins → Tests → Scripts → Installer**.
 
@@ -253,21 +253,23 @@ cli/runtime.py                  CuratorRuntime dataclass + build_runtime() — w
 
 ---
 
-## Tier 7: GUI (`src/curator/gui/`) — 7 files
+## Tier 7: GUI (`src/curator/gui/`) — 9 files
 
 PySide6 desktop window.
 
 ```
 gui/__init__.py                 Subpackage init
 gui/launcher.py                 run_gui() — boots QApplication + main window
-gui/main_window.py              CuratorMainWindow — 8 tabs, 5 menus (61 KB)
-gui/dialogs.py                  3 dialogs: FileInspect, BundleEditor, HealthCheck (45 KB, last 500 lines = v1.7 alpha)
-gui/models.py                   Qt table models for all 8 tabs (40 KB) — FileTableModel, AuditLogTableModel, ScanJobTableModel, etc.
+gui/main_window.py              CuratorMainWindow — 9 tabs, 5 menus (66 KB; +Sources tab + Audit filter UI in v1.7)
+gui/dialogs.py                  7 dialogs: FileInspect, BundleEditor, HealthCheck, Scan, Group, Cleanup, SourceAdd (95 KB after v1.7-alpha sequence)
+gui/models.py                   Qt table models for all 9 tabs (40 KB) — FileTableModel, AuditLogTableModel (extended with set_filter() in v1.7-alpha.6), ScanJobTableModel, etc.
 gui/lineage_view.py             Lineage Graph tab (networkx-rendered)
 gui/migrate_signals.py          MigrationProgressBridge — bridges background-thread progress events to Qt signals
+gui/scan_signals.py             (NEW in v1.7-alpha.2) ScanProgressBridge + ScanWorker for ScanDialog QThread
+gui/cleanup_signals.py          (NEW in v1.7-alpha.3, extended alpha.4) GroupProgressBridge + GroupFindWorker + GroupApplyWorker + CleanupProgressBridge + CleanupFindWorker + CleanupApplyWorker
 ```
 
-**`main_window.py` is mostly menu wiring + slot methods.** The actual data display lives in `models.py` (Qt model/view classes) and the per-tab build methods (`_build_inbox_tab`, `_build_browser_tab`, etc.).
+**`main_window.py` is mostly menu wiring + slot methods.** The actual data display lives in `models.py` (Qt model/view classes) and the per-tab build methods (`_build_inbox_tab`, `_build_browser_tab`, `_build_sources_tab`, etc.). The two `*_signals.py` modules provide `QThread`+`QObject(Signal)` infrastructure for the v1.7 dialogs that run long operations off the GUI thread.
 
 ---
 
@@ -466,24 +468,24 @@ Curator/ECOSYSTEM_DESIGN.md         (37 KB)    Where Curator fits in the Ad Astr
 | Plugin framework | 11 | hookspecs + 9 built-in plugins |
 | Services | 21 | Business logic |
 | CLI | 4 | Typer subcommands |
-| GUI | 7 | PySide6 desktop |
+| GUI | 9 | PySide6 desktop (5 dialogs + 9 tabs + 2 signal bridges) |
 | MCP server | 5 | FastMCP tools + auth |
 | PEP 561 markers | 1 | py.typed |
-| **Curator src/ total** | **92** | All Python + SQL + py.typed + LICENSE |
+| **Curator src/ total** | **95** | All Python + SQL + py.typed + LICENSE (+2 signal modules added in v1.7)  |
 | Tests (production) | 82 | Excludes perf/results JSON |
 | Tests (perf results JSON) | 12 | Historical benchmark snapshots |
 | **Curator tests/ total** | **94** | All test artifacts |
 | Workflow scripts | 13 | .ps1 + .bat + README |
 | Installer | 3 | .bat + .ps1 + README |
-| docs/ markdown | 23 | Design + user docs |
+| docs/ markdown | 25 | Design + user docs (+FEATURE_TODO + BUILDING_BLOCKS + ALL_FILES + CURATOR_INVENTORY in v1.7) |
 | docs/ binary assets | 8 | 7 PNGs + 1 demo TXT |
 | Github/ | 2 | Loose metadata notes |
 | examples/ | 1 | watch_demo.py |
 | Top-level Curator/ | 8 | pyproject + .gitignore + 6 design/changelog .md |
-| **CURATOR REPO TOTAL** | **246** | Verified via `git ls-files` |
+| **CURATOR REPO TOTAL** | **249** | Verified via `git ls-files` on 2026-05-11 |
 | atrium-safety | 17 | 6 src + 6 tests + 5 metadata |
 | atrium-citation | 19 | 7 src + 6 tests + 6 metadata |
-| **GRAND TOTAL (all 3 repos)** | **282** | |
+| **GRAND TOTAL (all 3 repos)** | **285** | |
 
 ---
 
