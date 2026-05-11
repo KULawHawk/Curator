@@ -242,6 +242,18 @@ These are quick wins that should ship in v1.6.2 or v1.7 alpha:
 
 ---
 
+## User-flagged improvements (Jake, 2026-05-09)
+
+During the v1.6.4 smoke test, Jake ran `Workflows → Initial scan` and got it working on his 86k-file / 11 GB AL workspace. He flagged three improvements for when the GUI v2 dialogs ship:
+
+1. **Live progress bar + currently-processing-file display** during scans. Curator's `ScanService` already emits progress events internally (the Migrate tab's `MigrationProgressBridge` is the proven pattern); a ScanProgressBridge would surface (i) files-seen / total, (ii) bytes hashed / total, (iii) current file path, (iv) ETA. Must not slow the scan — update at most every 100 ms or every Nth file.
+
+2. **Directory picker dialog** instead of typing the path. Standard `QFileDialog.getExistingDirectory()` — trivial to wire. The CLI keeps the typed-path option for scripting; the GUI should default to the picker.
+
+3. **Window inside the app** instead of separate console window. The current `Workflows → Initial scan` launches a `.bat` via `os.startfile()`, opening a new cmd console. Cleaner long-term: an in-app modal/dock with the same UX (prompt for path, confirm, show progress, show summary). The .bat workflow becomes the fallback when running detached.
+
+All three are part of the v1.7 ScanDialog spec already in this doc; this section just calls them out explicitly so they don't get lost.
+
 ## Open questions for next iteration
 
 - Should the Sources tab become the *primary* tab (replacing Inbox as default)?

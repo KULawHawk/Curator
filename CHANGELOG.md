@@ -4,6 +4,38 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.6.5] — 2026-05-10 — plugin SDK fix: same `_owns()` lookup for gdrive
+
+**Headline:** Same fix as v1.6.4 applied symmetrically to the gdrive plugin. Custom source_ids registered via `curator sources add my_drive --type gdrive` are now dispatched to the gdrive plugin (instead of failing with `RuntimeError: No source plugin registered`). Closes the v1.6.x plugin-SDK limitation for both built-in source plugins.
+
+### Files changed
+
+- **`src/curator/plugins/core/gdrive_source.py`** — extended `_owns()` with the DB-lookup fallback. The `set_source_repo()` injection was already in place from v1.5.1 (added for OAuth config resolution), so no runtime.py changes needed.
+- **`docs/design/GUI_V2_DESIGN.md`** — added a "User-flagged improvements" section capturing Jake's v1.6.4 smoke-test feedback on the GUI Workflows menu (live progress bar, directory picker, in-app window vs separate console). These are already part of the v1.7 ScanDialog spec; the new section just calls them out explicitly so they don't get lost.
+
+### Why it shipped fast
+
+The gdrive plugin already had `set_source_repo()` (added in v1.5.1 for OAuth config resolution — the same mechanism we extended for `_owns()`). Only the 30-line `_owns()` method needed updating; no other wiring changes.
+
+### Multi-account Drive scenarios (unlocked)
+
+Users can now run multiple Drive accounts side-by-side:
+
+```
+curator sources add gdrive_personal --type gdrive --name "Personal Drive"
+curator sources add gdrive_work     --type gdrive --name "Work Drive"
+curator gdrive auth gdrive_personal   # interactive OAuth
+curator gdrive auth gdrive_work       # interactive OAuth (separate creds)
+curator scan gdrive_personal <folder_id>
+curator scan gdrive_work <folder_id>
+```
+
+Each account has its own `client_secrets_path` and `credentials_path` in the source row's config. Cross-source migrations between them (`migrate gdrive_personal:folder gdrive_work:folder`) work the same way.
+
+### Test status
+
+All tests pass without changes — the gdrive `_owns()` modification only changes behavior for source_ids that ARE registered in the sources table with `source_type='gdrive'` (previously refused). Tests that construct the plugin directly without going through `build_runtime` see the legacy prefix matching, unchanged.
+
 ## [1.6.4] — 2026-05-09 — plugin SDK fix: custom source_ids now scannable for type='local'
 
 **Headline:** Closes the v1.6.x plugin-SDK limitation where users could register custom source_ids via `curator sources add my_id --type local` but the local plugin would refuse to dispatch scans to them with `RuntimeError: No source plugin registered for source_id='my_id'`. The local source plugin now claims **any** source registered with `source_type='local'`, regardless of source_id.

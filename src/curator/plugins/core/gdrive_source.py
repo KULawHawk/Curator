@@ -664,8 +664,39 @@ class Plugin:
     # ------------------------------------------------------------------
 
     def _owns(self, source_id: str) -> bool:
-        """True iff this plugin owns the given source_id."""
-        return source_id == SOURCE_TYPE or source_id.startswith(f"{SOURCE_TYPE}:")
+        """True iff this plugin owns the given source_id.
+
+        Two checks (in order):
+        1. Legacy convention: source_id is ``"gdrive"`` or starts with
+           ``"gdrive:"`` (multi-account convention).
+        2. Database lookup (v1.6.5+): source_id is registered in the
+           sources table with ``source_type='gdrive'``. Only runs if
+           :attr:`_source_repo` has been injected (it always is during
+           normal CLI / GUI / MCP operation).
+
+        Mirrors the v1.6.4 fix to the local plugin. Closes the v1.6.x
+        limitation where ``curator sources add my_drive --type gdrive``
+        succeeded but ``curator scan my_drive <folder_id>`` failed with
+        ``RuntimeError: No source plugin registered``.
+
+        Test contexts that construct the plugin without going through
+        build_runtime see only check #1 active, matching pre-v1.6.5
+        behavior.
+        """
+        if source_id == SOURCE_TYPE or source_id.startswith(f"{SOURCE_TYPE}:"):
+            return True
+        if self._source_repo is not None:
+            try:
+                source = self._source_repo.get(source_id)
+                if source is not None and source.source_type == SOURCE_TYPE:
+                    return True
+            except Exception:  # noqa: BLE001 -- defensive boundary
+                # Don't let a transient DB issue make scans worse than
+                # they would be without the fix. Caller will see a
+                # normal error from the underlying hookimpl if we
+                # return False here.
+                pass
+        return False
 
     def _get_or_build_client(
         self,
