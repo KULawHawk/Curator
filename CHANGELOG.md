@@ -4,6 +4,98 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.31] — 2026-05-11 — `curator audit-export` (append-only audit archival)
+
+**Headline:** New top-level CLI command `curator audit-export --to FILE [--older-than N | --before ISO | --since ISO] [--actor X] [--action X] [--entity-type X] [--format jsonl|csv] [--limit N]`. Exports audit log entries to JSONL (default) or CSV with a header. **Read-only by design** — honors AuditRepository's append-only contract; entries are never deleted from the DB. The export operation itself emits a `audit.exported` meta-audit event so the trail remains complete.
+
+### Why this matters
+
+The audit log grows unbounded. v1.7.x has shipped 30 features and accumulated audit entries continuously; a forensic deployment can rack up tens of thousands of rows over a quarter. AuditRepository is intentionally append-only (its docstring is explicit: forensic immutability is the property, no `delete()` / `prune()` methods exist by design). v1.7.31 gives operators a way to ARCHIVE old entries to a durable file format without violating that contract:
+
+  * The exported file is the durable record for long-term storage / off-site backup
+  * The live DB stays intact — it can be cleared only by deliberately spinning up a fresh deployment (e.g., `rm curator.db; curator scan ...`)
+  * Any future "clear after archive" workflow would be a SEPARATE explicit user action, not bundled into the export
+
+The sister command to `audit-summary` (which aggregates) and `audit` (which queries live): `audit-export` extracts.
+
+### What's new
+
+**New top-level command**: `curator audit-export`
+  * `--to PATH` (required) — output file path; `-` for stdout. Refuses `.db` extensions defensively.
+  * `--older-than N` — convenience for `--before=now()-Ndays`. Mutually exclusive with `--before`.
+  * `--before ISO` — export entries where `occurred_at < this`. ISO 8601 (`2026-04-01` or `2026-04-01T12:34:56`).
+  * `--since ISO` — export entries where `occurred_at >= this`. Combinable with `--before` for a time window.
+  * `--actor TEXT` — exact-match filter on the actor field.
+  * `--action TEXT` — exact-match filter (e.g. `migration.move`).
+  * `--entity-type TEXT` — exact-match filter on entity_type.
+  * `--format jsonl|csv` — default `jsonl` (one JSON object per line). `csv` emits a 7-column header + rows.
+  * `--limit N` — safety cap (default 1,000,000) on rows exported.
+
+**JSONL format** (one object per line, complete record shape):
+```jsonl
+{"audit_id": 123, "occurred_at": "2026-05-11T12:34:56", "actor": "cli.scan", "action": "scan.completed", "entity_type": "source", "entity_id": "local", "details": {"files_seen": 1234}}
+```
+
+**CSV format** (with header, suitable for spreadsheet review):
+```csv
+audit_id,occurred_at,actor,action,entity_type,entity_id,details_json
+123,2026-05-11T12:34:56,cli.scan,scan.completed,source,local,"{""files_seen"": 1234}"
+```
+
+**Validations** (all return non-zero exit + helpful error message):
+  * Invalid `--format` value
+  * `--older-than` + `--before` both supplied (mutually exclusive)
+  * `--older-than` < 0
+  * Invalid ISO datetime in `--before` or `--since`
+  * `--since` >= `--before` (time-order sanity)
+  * Output path ends in `.db` (defensive: refuse to clobber any SQLite file)
+
+**Meta-audit**: every successful export emits a `audit.exported` event with `actor=cli.audit`, `entity_type=audit_log`, `details={output_path, format, rows_exported, filters: {since, before, older_than_days, actor, action, entity_type, limit}}`. The trail itself records that an archive was created.
+
+### Files changed
+
+- `src/curator/cli/main.py` — +208 lines (`audit_export_cmd` function + section header). No existing code modified.
+
+### Verification
+
+- **13-test subprocess suite** (`test_audit_export.py`):
+  1. `--format xml` rejected with helpful error
+  2. `--older-than` + `--before` mutual exclusion caught
+  3. Invalid ISO datetime rejected (`--before not-a-date`)
+  4. `--since >= --before` time-order sanity caught
+  5. `.db` output path refused (defensive)
+  6. **JSONL export end-to-end** — 5 seeded entries appear with all 7 canonical fields
+  7. **CSV export end-to-end** — 7-column header + data rows; `details_json` column is valid JSON
+  8. `--actor` filter narrows correctly (exactly 1 row for actor0)
+  9. **Append-only contract verified** — `audit_repo.count()` does NOT decrease after export
+  10. **Meta-audit verified** — `audit.exported` event recorded with `details={output_path, format, rows_exported, filters}`
+  11. `--to -` writes JSONL to stdout cleanly
+  12. `--json` mode emits summary `{rows_exported, output_path, format}` on stdout
+  13. `--older-than 0` convenience captures everything before now()
+- **Full pytest baseline**: ✅ 1461 passed, 9 skipped, 0 failed (unchanged from v1.7.30)
+
+### Authoritative-principle catches (this turn)
+
+**0 implementation bugs caught.** The command was small enough and the AuditRepository surface stable enough that the first pass was correct. Tests verified the contract rather than catching regressions.
+
+**Design lessons reinforced:**
+
+1. **Append-only stays append-only.** No `delete()` method was added. No `prune()` flag. No `--clear-after-export` shortcut. Anyone wanting to clear the DB after archival must do it as a SEPARATE explicit action, surfacing the intent. This is the same principle as v1.7.7 ("source files never modified") and v1.7.29 ("failures of secondary goals don't fail primary goals"). Bundling destructive operations with convenience ones is how forensic integrity gets accidentally compromised; keeping them separate keeps the audit trail trustworthy.
+
+2. **The export records itself.** The meta-audit `audit.exported` event captures the export's own filters and row count. This means the audit log can show, years later, "on 2026-05-11, N rows matching filters {X, Y, Z} were exported to PATH." The trail of archive operations is itself part of the trail.
+
+3. **Defensive output validation.** Refusing `.db` extensions prevents the obvious footgun of `curator audit-export --to curator.db` truncating the actual SQLite file. The check costs one line; the failure mode it prevents is unrecoverable data loss.
+
+4. **Use lesson #50 helpers from the start.** The new command uses `from curator.cli.util import CHECK` for its success message. No literal `\u2713` glyph anywhere. v1.7.30's helper module made this the natural pattern; no contributor needed to remember the rule.
+
+### v1.7.31 limitations
+
+- **No streaming for huge exports.** All matching rows are loaded into memory before writing. A 100k-row export needs proportional RAM. Mitigation: use `--limit` to chunk; the existing default cap of 1M rows is conservative.
+- **No compression option.** `.jsonl` and `.csv` are uncompressed. Users wanting `.jsonl.gz` need to pipe through `gzip` separately. Could be a future `--compress gzip` flag.
+- **No incremental archive bookkeeping.** Each export is independent; the command doesn't remember "last archive was up to audit_id N." Mitigation: use `--since` with the previous run's `--before` value, or filter on `audit_id > N` via a future enhancement.
+- **No GUI exposure.** CLI-only. The existing Audit tab in the GUI could surface an "Export…" button as a future ship.
+- **No batch deletion path** (deliberate, see Design Lesson 1 above). Anyone needing to actually shrink the live DB after archival must do it manually with explicit intent.
+
 ## [1.7.30] — 2026-05-11 — Lesson #50 codified: `cli/util.py` ASCII-fallback helper
 
 **Headline:** The recurring Unicode-in-CLI-strings bug (lesson #50 — hit FIVE times across the v1.7.21→v1.7.29 arc) is now codified as a reusable helper module `curator.cli.util`. Eight glyph constants (`CHECK`, `CROSS`, `ARROW`, `LARROW`, `ELLIPSIS`, `BLOCK`, `TIMES`, `WARN`) automatically resolve to their ASCII fallbacks (`[OK]`, `[X]`, `->`, `<-`, `...`, `#`, `x`, `!`) when stdout is a subprocess pipe, file redirect, or legacy cp1252 console. A one-pass audit of `cli/main.py` replaced all 8 remaining literal Unicode glyphs with the new constants. **No more strikes.**

@@ -4682,5 +4682,212 @@ def audit_summary_cmd(
         remaining = len(sorted_groups) - limit
         console.print(f"\n[dim]... and {remaining:,} more groups (use --limit to expand)[/]")
 
+
+# ===========================================================================
+# audit-export (v1.7.31)
+# ===========================================================================
+
+@app.command(name="audit-export")
+def audit_export_cmd(
+    ctx: typer.Context,
+    output: str = typer.Option(
+        ...,
+        "--to", "-o",
+        help="Output file path. Use '-' for stdout.",
+    ),
+    older_than: Optional[int] = typer.Option(
+        None, "--older-than",
+        help="Export entries older than N days. Convenience for --before=now()-Ndays.",
+    ),
+    before: Optional[str] = typer.Option(
+        None, "--before",
+        help="ISO datetime; export entries where occurred_at < this (e.g. '2026-01-01').",
+    ),
+    since: Optional[str] = typer.Option(
+        None, "--since",
+        help="ISO datetime; export entries where occurred_at >= this.",
+    ),
+    actor: Optional[str] = typer.Option(
+        None, "--actor",
+        help="Filter by actor (exact match).",
+    ),
+    action: Optional[str] = typer.Option(
+        None, "--action",
+        help="Filter by action (exact match, e.g. 'migration.move').",
+    ),
+    entity_type: Optional[str] = typer.Option(
+        None, "--entity-type",
+        help="Filter by entity_type (e.g. 'file', 'source').",
+    ),
+    fmt: str = typer.Option(
+        "jsonl", "--format", "-f",
+        help="Output format: 'jsonl' (default, one JSON object per line) or 'csv' (with header).",
+    ),
+    limit: int = typer.Option(
+        1_000_000, "--limit",
+        help="Safety cap on rows exported (default 1M). Prevents runaway exports.",
+    ),
+):
+    """Export audit log entries to a file. READ-ONLY — NEVER deletes.
+
+    v1.7.31. Honors the AuditRepository append-only design: exports do not
+    remove rows from the DB; the audit trail remains intact for forensic
+    integrity. Use this to archive old entries before they grow unbounded;
+    the archive is the durable record, the live DB stays full until you
+    deliberately spin up a fresh deployment.
+
+    Examples:
+      curator audit-export --to audit_2026_q1.jsonl --before 2026-04-01
+      curator audit-export --to old.csv --older-than 90 --format csv
+      curator audit-export --to - --action migration.move --limit 100
+
+    The export operation itself is recorded as an 'audit.exported' event
+    so the audit trail can show "these N entries were archived on date X."
+    """
+    rt: CuratorRuntime = ctx.obj
+
+    # Validate format
+    if fmt not in ("jsonl", "csv"):
+        raise _err_exit(
+            rt,
+            f"--format must be 'jsonl' or 'csv'; got {fmt!r}",
+        )
+
+    # Mutual exclusion of time filters
+    if older_than is not None and before is not None:
+        raise _err_exit(
+            rt,
+            "--older-than and --before are mutually exclusive (both specify upper time bound)",
+        )
+
+    # Resolve time filters
+    before_dt: Optional[datetime] = None
+    since_dt: Optional[datetime] = None
+    if older_than is not None:
+        if older_than < 0:
+            raise _err_exit(rt, f"--older-than must be >= 0; got {older_than}")
+        before_dt = datetime.utcnow() - timedelta(days=older_than)
+    elif before is not None:
+        try:
+            before_dt = datetime.fromisoformat(before.rstrip("Z"))
+        except ValueError:
+            raise _err_exit(
+                rt,
+                f"--before is not valid ISO datetime: {before!r}",
+            )
+
+    if since is not None:
+        try:
+            since_dt = datetime.fromisoformat(since.rstrip("Z"))
+        except ValueError:
+            raise _err_exit(
+                rt,
+                f"--since is not valid ISO datetime: {since!r}",
+            )
+
+    # since must be earlier than before (basic sanity)
+    if since_dt is not None and before_dt is not None and since_dt >= before_dt:
+        raise _err_exit(
+            rt,
+            f"--since ({since_dt.isoformat()}) must be earlier than "
+            f"--before/--older-than ({before_dt.isoformat()})",
+        )
+
+    # Query the audit log
+    entries = rt.audit_repo.query(
+        since=since_dt,
+        until=before_dt,
+        actor=actor,
+        action=action,
+        entity_type=entity_type,
+        limit=limit,
+    )
+
+    # Open output (stdout or file)
+    use_stdout = (output == "-")
+    if use_stdout:
+        out_handle = sys.stdout
+    else:
+        out_path = Path(output)
+        # Defensive: refuse to overwrite curator's own DB or any .db file by accident
+        if out_path.suffix.lower() == ".db":
+            raise _err_exit(
+                rt,
+                f"refusing to write to a .db file: {out_path}. Use a .jsonl, .csv, or .txt extension.",
+            )
+        out_handle = open(out_path, "w", encoding="utf-8", newline="")
+
+    try:
+        if fmt == "jsonl":
+            for e in entries:
+                out_handle.write(json.dumps({
+                    "audit_id": e.audit_id,
+                    "occurred_at": e.occurred_at.isoformat() if e.occurred_at else None,
+                    "actor": e.actor,
+                    "action": e.action,
+                    "entity_type": e.entity_type,
+                    "entity_id": e.entity_id,
+                    "details": e.details,
+                }, default=str) + "\n")
+        else:  # csv
+            import csv as _csv  # local import; avoids polluting module namespace
+            writer = _csv.writer(out_handle)
+            writer.writerow([
+                "audit_id", "occurred_at", "actor", "action",
+                "entity_type", "entity_id", "details_json",
+            ])
+            for e in entries:
+                writer.writerow([
+                    e.audit_id,
+                    e.occurred_at.isoformat() if e.occurred_at else "",
+                    e.actor,
+                    e.action,
+                    e.entity_type or "",
+                    e.entity_id or "",
+                    json.dumps(e.details, default=str),
+                ])
+    finally:
+        if not use_stdout:
+            out_handle.close()
+
+    # Meta-audit: record the export operation itself
+    rt.audit_repo.log(
+        actor="cli.audit",
+        action="audit.exported",
+        entity_type="audit_log",
+        entity_id=None,
+        details={
+            "output_path": output,
+            "format": fmt,
+            "rows_exported": len(entries),
+            "filters": {
+                "since": since_dt.isoformat() if since_dt else None,
+                "before": before_dt.isoformat() if before_dt else None,
+                "older_than_days": older_than,
+                "actor": actor,
+                "action": action,
+                "entity_type": entity_type,
+                "limit": limit,
+            },
+        },
+    )
+
+    # Summary output (skip when writing to stdout to avoid corrupting the export)
+    if rt.json_output:
+        if not use_stdout:
+            _emit_json(rt, {
+                "rows_exported": len(entries),
+                "output_path": output,
+                "format": fmt,
+            })
+    elif not use_stdout:
+        console = _console(rt)
+        console.print(
+            f"[green]{CHECK}[/] Exported {len(entries)} audit "
+            f"entr{'y' if len(entries) == 1 else 'ies'} to "
+            f"[bold]{output}[/] ({fmt})"
+        )
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()
