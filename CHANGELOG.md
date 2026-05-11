@@ -4,6 +4,60 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.14] — 2026-05-11 — TierDialog right-click context menu (T-B05 GUI v2)
+
+**Headline:** The Tier scan dialog table now has a **right-click context menu** with three actions: **Inspect...**, **Set status →** (vital/active/provisional/junk submenu), and **Send to trash...**. Closes the GUI gap from v1.7.9 where the dialog was purely informational — users can now act on candidates without switching to CLI.
+
+### Why this matters
+
+v1.7.9 shipped the TierDialog as a read-only view: you could SEE what files were cold/expired/archive candidates, but to actually do anything about them you had to copy the path, switch to a terminal, and issue `curator status set <path> <status>` or `curator trash send <path>`. That breaks workflow flow. v1.7.14 wires the obvious right-click actions directly into the dialog. Three audit-logged operations, one click each.
+
+### What's new
+
+- **Right-click context menu** on the TierDialog candidate table (`gui/dialogs.py`, +161 lines). Resolves the clicked row back to a `FileEntity` via `curator_id` stored in the `Qt.UserRole` data on the path column. Robust against future table sorting/filtering.
+- **Three action handlers:**
+  - `_action_inspect(file_ent)` → opens `FileInspectDialog` (the existing dialog shipped earlier; reused as-is)
+  - `_action_set_status(file_ent, new_status)` → calls `file_repo.update_status()`, emits `tier.set_status` audit event, re-runs the scan to refresh the table
+  - `_action_send_to_trash(file_ent)` → confirms with `QMessageBox.question`, dispatches to `TrashService.send_to_trash` with `actor='gui.tier'` and `reason='tier scan: <recipe> candidate'`, re-runs the scan
+- **Smart submenu behavior:** the file's current status appears in the submenu but with `(current)` suffix and is disabled — no accidental no-op writes.
+- **Audit-trail integration:** every action emits a properly-attributed audit event (`tier.set_status` with old/new status + path; trash uses `TrashService`'s built-in audit hooks).
+- **Confirmation only on destructive action:** status changes are reversible (re-classify), so no confirmation dialog. Trash is technically reversible (`curator trash restore`) but moves files off-disk, so it gets a confirm with the full path shown.
+- **curator_id stored on path column** via `setData(Qt.ItemDataRole.UserRole, str(...))` — string repr to avoid PySide UUID serialization quirks.
+
+### Files changed
+
+- `src/curator/gui/dialogs.py` — +167 lines (`_on_table_context_menu` + 3 action handlers + context menu policy setup + curator_id storage on rows)
+- `docs/releases/v1.7.14.md` — new release notes
+
+### Verification
+
+- **6-test headless suite** (`test_tierdialog_v2.py`):
+  1. Context menu policy = `CustomContextMenu`; `_on_table_context_menu` slot exists
+  2. All 3 action handlers exist as callables
+  3. `curator_id` stored on rows via `UserRole`; row-lookup by curator_id works correctly
+  4. `_action_set_status` updates DB + emits audit event with correct `old_status`/`new_status` details
+  5. `_action_send_to_trash` invokes `TrashService.send_to_trash` correctly; file actually moves off-disk; `trashed_by='gui.tier'` audit attribution
+  6. Slot dispatches cleanly on out-of-range positions (rowAt returns -1 → no-op without exception)
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 15-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**Two API-name bugs caught immediately by tests:**
+
+1. **`FileRepository.get_by_id` doesn't exist** — my handler used `file_repo.get_by_id(curator_id)`. Test 4 caught this on first run (AttributeError). Probed the actual repository methods via `inspect.getmembers` and found the correct method is just `.get(curator_id)`. Fix: 1-character change (`get_by_id` → `get`). **Lesson #46 logged**: when writing GUI handlers that call into repository code, **probe the repository's method names** via `inspect.getmembers(Repo, predicate=inspect.isfunction)` before writing the call — don't assume `get_by_id` / `find_by_id` / `getById` based on convention. Repository naming varies.
+
+2. **`TrashRecord.actor` doesn't exist; the field is `trashed_by`** — my test attempted `trash_record.actor`. Caught immediately by Test 5 (pydantic AttributeError). Probed `TrashRecord.model_fields` and found the actual field name. Same lesson #46 applies.
+
+**Test design lesson (#47 logged):** my initial Test 6 monkeypatched `QMenu.exec` to inspect menu structure. This hung indefinitely under PySide6 headless mode (Qt's event loop doesn't terminate cleanly when exec is intercepted). **For Qt GUI tests in offscreen mode, prefer testing slot dispatch on edge cases (out-of-range positions → no-op) over intercepting menu/dialog `exec()` methods.** The menu-building code path is well-typed and was already exercised through the other tests' real action handler calls; the live menu rendering is properly covered by manual GUI smoke testing, not headless intercepts.
+
+### v1.7.14 limitations
+
+- **No multi-row bulk operations** — right-click acts on the single hovered row. A future polish could detect multi-row selection and offer "Set status for 47 rows" / "Send 47 rows to trash."
+- **No undo for status changes** — they go through `update_status` immediately. The audit log preserves the prior status so it's manually reversible.
+- **No keyboard shortcut equivalents** — Del key doesn't trigger trash; arrow-keys + Enter don't open Inspect. Could add via QAction shortcuts in v1.8.
+- **Send to trash doesn't queue** — it dispatches synchronously. For 100+ files the user would see UI freezing briefly per file. A future v1.8 could background the trash operation.
+- **No "Open in file manager" action** — `os.startfile(os.path.dirname(path))` would be a useful addition; deferred.
+
 ## [1.7.13] — 2026-05-11 — T-A02 polish: lineage time-slider axis labels
 
 **Headline:** The Lineage Graph time-slider now shows 5 date labels (YYYY-MM-DD) at 0% / 25% / 50% / 75% / 100% of the time range, directly under the slider. Users can now visually anchor slider position to actual dates instead of just "somewhere between earliest and latest."

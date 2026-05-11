@@ -3493,6 +3493,12 @@ class TierDialog(QDialog):
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
+        # v1.7.14: enable right-click context menu for per-row actions
+        # (Inspect / Set status / Send to trash). Custom-policy mode +
+        # the customContextMenuRequested signal lets us pop a QMenu at
+        # the exact cursor position.
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._on_table_context_menu)
         h = self._table.horizontalHeader()
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -3591,6 +3597,11 @@ class TierDialog(QDialog):
         for r, c in enumerate(report.candidates):
             path_item = QTableWidgetItem(c.file.source_path)
             path_item.setToolTip(c.file.source_path)
+            # v1.7.14: store curator_id on the path column so the right-click
+            # context menu can resolve the row back to a FileEntity even after
+            # table sorting / filtering. Use Qt.UserRole and a string repr to
+            # avoid serialization issues with UUID objects across the binding.
+            path_item.setData(Qt.ItemDataRole.UserRole, str(c.file.curator_id))
 
             size_item = QTableWidgetItem(_fmt_size(c.file.size or 0))
             size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -3604,6 +3615,167 @@ class TierDialog(QDialog):
             self._table.setItem(r, 1, size_item)
             self._table.setItem(r, 2, status_item)
             self._table.setItem(r, 3, reason_item)
+
+    # ------------------------------------------------------------------
+    # v1.7.14: Right-click context menu
+    # ------------------------------------------------------------------
+
+    def _on_table_context_menu(self, pos) -> None:
+        """Show a right-click context menu for the candidate under the cursor.
+
+        Three action groups:
+          * Inspect... — opens :class:`FileInspectDialog` for the file
+          * Set status → vital / active / provisional / junk
+          * Send to trash... — confirm + dispatch to :class:`TrashService`
+
+        Resolves the row→curator_id mapping via the UserRole data stored
+        on the path column when the scan populated the table.
+        """
+        from PySide6.QtWidgets import QMenu
+
+        row = self._table.rowAt(pos.y())
+        if row < 0:
+            return
+        path_item = self._table.item(row, 0)
+        if path_item is None:
+            return
+        curator_id_str = path_item.data(Qt.ItemDataRole.UserRole)
+        if not curator_id_str:
+            return
+
+        # Resolve to FileEntity (the table might be filtered/sorted)
+        import uuid as _uuid
+        try:
+            curator_id = _uuid.UUID(curator_id_str)
+        except (ValueError, TypeError):
+            return
+        try:
+            file_ent = self.runtime.file_repo.get(curator_id)
+        except Exception:  # noqa: BLE001
+            file_ent = None
+        if file_ent is None:
+            QMessageBox.warning(
+                self, "File not found",
+                f"Could not load file metadata for {curator_id}. "
+                "It may have been removed since the scan ran.",
+            )
+            return
+
+        menu = QMenu(self)
+
+        # --- Inspect action ---
+        act_inspect = menu.addAction("Inspect...")
+        act_inspect.triggered.connect(
+            lambda _checked=False, f=file_ent: self._action_inspect(f)
+        )
+
+        # --- Set status submenu ---
+        status_menu = menu.addMenu("Set status")
+        for status in ("vital", "active", "provisional", "junk"):
+            act = status_menu.addAction(status)
+            # Disable the action for the current status (no-op)
+            if file_ent.status == status:
+                act.setEnabled(False)
+                act.setText(f"{status} (current)")
+            else:
+                act.triggered.connect(
+                    lambda _checked=False, f=file_ent, s=status:
+                        self._action_set_status(f, s)
+                )
+
+        menu.addSeparator()
+
+        # --- Send to trash action ---
+        act_trash = menu.addAction("Send to trash...")
+        act_trash.triggered.connect(
+            lambda _checked=False, f=file_ent: self._action_send_to_trash(f)
+        )
+
+        menu.exec(self._table.viewport().mapToGlobal(pos))
+
+    def _action_inspect(self, file_ent) -> None:
+        """Open FileInspectDialog for the chosen file."""
+        try:
+            dlg = FileInspectDialog(file_ent, self.runtime, parent=self)
+            dlg.exec()
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "Inspect failed",
+                f"{type(e).__name__}: {e}",
+            )
+
+    def _action_set_status(self, file_ent, new_status: str) -> None:
+        """Update the file's status; refresh the scan to reflect the change.
+
+        Status updates are not destructive so we don't require a
+        confirmation dialog — the user can re-classify back if they
+        change their mind.
+        """
+        try:
+            self.runtime.file_repo.update_status(
+                file_ent.curator_id, new_status,
+            )
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "Status update failed",
+                f"{type(e).__name__}: {e}",
+            )
+            return
+
+        # Audit-trail: record the status change
+        try:
+            self.runtime.audit.log(
+                actor="gui.tier",
+                action="tier.set_status",
+                entity_type="file",
+                entity_id=str(file_ent.curator_id),
+                details={
+                    "old_status": file_ent.status,
+                    "new_status": new_status,
+                    "source_path": file_ent.source_path,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            pass  # audit failure is non-fatal
+
+        # Re-run the scan so the table reflects the new status
+        # (the row may now drop out of the result set)
+        self._on_scan_clicked()
+
+    def _action_send_to_trash(self, file_ent) -> None:
+        """Confirm + dispatch to TrashService.
+
+        Trash is reversible (TrashService.restore can undo it) but
+        destructive enough that we surface a confirmation dialog with
+        the file path so the user can verify before clicking through.
+        """
+        confirm = QMessageBox.question(
+            self,
+            "Send to trash?",
+            f"Move the following file to trash?\n\n{file_ent.source_path}\n\n"
+            "This is reversible (restore via 'curator trash restore') "
+            "but the file will be moved out of the source directory.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self.runtime.trash.send_to_trash(
+                file_ent.curator_id,
+                reason=f"tier scan: {self._cb_recipe.currentData()} candidate",
+                actor="gui.tier",
+            )
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "Trash failed",
+                f"{type(e).__name__}: {e}",
+            )
+            return
+
+        # Re-run the scan so the trashed file disappears from the table
+        self._on_scan_clicked()
 
     @property
     def last_report(self):
