@@ -93,10 +93,11 @@ New code, but slots cleanly into existing services.
 - **Why:** Forensic psych work demands it. The regex baseline gets you 90% of the value in 30 lines. Conclave will plug into the hookspec later for semantic detection.
 
 ### `T-B05` — Tiered Storage Manager (`curator tier`)
-- **Status:** proposed
+- **Status:** **shipped v1.7.8** (detect-only baseline; one-step `--apply --target` deferred to v1.8)
 - **Effort:** M
-- **Depends on:** existing migration + organize + safety
+- **Depends on:** existing migration + organize + safety; T-C02 status taxonomy
 - **What:** `curator tier` subcommand. Scan files matching age/access criteria, propose migration plan to a "cold" source, apply on confirmation. The user-supplied `tiered_storage_manager.py` sketch is the right intent, wrong API — real version is ~300 lines using `ScanService` + `MigrationService.run_job()`.
+- **v1.7.8 delivery:** `services/tier.py` with `TierService`, `TierCriteria`, `TierCandidate`, `TierReport`, `TierRecipe` enum (3 recipes). CLI: `curator tier <recipe> [--min-age-days N --source-id X --root PREFIX --show-files --limit M --json]`. Recipes: **cold** (provisional + stale >90d), **expired** (expires_at < now), **archive** (vital + stale >365d). Detect-only baseline; emits `tier.suggest` audit events. One-step `--apply --target <dst>` (which would chain into MigrationService) deferred to v1.8 — for now, users run `curator tier <recipe> --json` and feed the curator_ids into a `curator migrate` invocation.
 - **Notes:** Don't generalize to a full rule engine yet; ship as a single-purpose command first. If it gets used heavily, then consider generalizing (`T-C02`).
 
 ### `T-B06` — Background OCR via pytesseract (with Conclave hookspec placeholder)

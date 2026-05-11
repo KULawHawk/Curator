@@ -4,6 +4,74 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.8] — 2026-05-11 — T-B05 Tiered Storage Manager
+
+**Headline:** New `curator tier <recipe>` command identifies files that have aged into a different storage tier. Three named recipes — **cold** (stale provisional), **expired** (past expires_at), **archive** (stale vital) — surface migration candidates based on the T-C02 status taxonomy. Detect-only baseline; emits `tier.suggest` audit events.
+
+### Why this matters
+
+Files accumulate. The classification taxonomy shipped in v1.7.3 (T-C02) gave Curator a way to *label* files (vital / active / provisional / junk); v1.7.8 gives Curator a way to *act on those labels over time*. A provisional file from 9 months ago that's never been touched again is exactly what you want on cheap cold storage. A vital file from 2 years ago is what you want in an immutable archive. The taxonomy alone surfaces nothing; pairing it with age-based scans turns it into a working lifecycle.
+
+### What's new
+
+- **`services/tier.py`** — new module (~280 lines) with:
+  - `TierService` (stateless; uses existing `FileRepository` status methods)
+  - `TierRecipe` enum: `COLD`, `EXPIRED`, `ARCHIVE` (+ `from_string` parser)
+  - `TierCriteria` (recipe, min_age_days, source_id, root_prefix, injectable `now` for testability)
+  - `TierCandidate` (file + human-readable reason)
+  - `TierReport` (candidates list + total_size + by_source + duration)
+- **3 tier-transition recipes:**
+  - **cold** — `status='provisional'` AND `last_scanned_at` older than `--min-age-days` (default 90). Files that aren't active work but haven't been trashed; ideal cold-storage candidates.
+  - **expired** — `expires_at IS NOT NULL` AND `expires_at < now`. Files explicitly marked with a TTL via `curator status set <file> <status> --expires-in-days N`. Policy decision (delete / archive) is the caller's.
+  - **archive** — `status='vital'` AND `last_scanned_at` older than `--min-age-days` (default 365). Long-stable vital files (contracts, finished datasets, board minutes) belong in immutable archive storage.
+- **`curator tier <recipe>` CLI command** with flags:
+  - `--min-age-days N` (override the per-recipe default; ignored for `expired`)
+  - `--source-id X` (restrict to one source)
+  - `--root PREFIX` (restrict to source_path prefix)
+  - `--show-files` (per-candidate paths + reasons; default = summary only)
+  - `--limit M` (cap displayed candidates after oldest-first sort)
+  - `--json` (machine-readable output)
+- **`CuratorRuntime.tier`** — wired into the runtime container.
+- **Audit integration** — every `curator tier` invocation emits a `tier.suggest` audit event with criteria + result count, so the lifecycle has a paper trail.
+
+### Files changed
+
+- `src/curator/services/tier.py` — new module, +280 lines
+- `src/curator/cli/runtime.py` — +5 lines (TierService field on CuratorRuntime)
+- `src/curator/cli/main.py` — +166 lines (`tier` command via append-concat pattern; no de-indent collateral)
+- `docs/FEATURE_TODO.md` — T-B05 status proposed → shipped
+- `docs/releases/v1.7.8.md` — new release notes
+
+### Verification
+
+- **8-test headless suite** against synthetic 14-file population spanning 4 statuses x 4 age buckets + 3 expires_at variants:
+  1. COLD recipe finds 3 stale provisional files (skips fresh ones; sort: oldest first)
+  2. EXPIRED recipe finds 2 past-expires_at files (correctly skips not-yet-expired)
+  3. ARCHIVE recipe with default 365d catches 2 vital_stale + vital_ancient
+  4. ARCHIVE with min_age_days=180 catches one more (vital_old at 200d)
+  5. `--root` filter narrows correctly (synthetic `/other/` files only)
+  6. `--source-id` filter (positive + negative test for nonexistent source)
+  7. TierReport aggregates: `total_size`, `by_source()`, `duration_seconds`
+  8. `TierRecipe.from_string` parses case-insensitively + rejects bad input with clear error
+- **Live CLI smoke test**: `curator tier cold` against canonical DB (all files currently `status='active'`) correctly returns 0 candidates with proper Rich output
+- **`curator tier --help`** renders the full docstring with the 3-recipe explainer + examples
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 9-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**0 bugs caught** — the design used the FileRepository API surface verified in earlier ships (`query_by_status`, `find_expiring_before`, `count_by_status` all from T-C02). FileEntity field names (`last_scanned_at`, `expires_at`) verified via `model_fields` probe before writing the service. Tests passed first run.
+
+**Append pattern reused:** v1.7.7's PowerShell read+substitute pattern (anchor on unique `if __name__` marker) used again for the 166-line CLI append. Zero collateral damage; `ast.parse` clean on first try.
+
+### v1.7.8 limitations
+
+- **No one-step `--apply --target <dst>`** — detect-only. The natural follow-up is to chain into `MigrationService.create_job()` and stream candidates as the migration plan. Deferred to v1.8 because it requires resolving the destination's source plugin (cold storage might be local disk, gdrive, B2, etc.); needs a `--target-source-id` design pass.
+- **No daemon mode** — the user runs `curator tier` when they want to. A v1.8 watchdog could run it on a schedule and post results to an Inbox queue.
+- **No interactive picker** — candidates are listed but not selectable. A future GUI tab could show a checklist with bulk-actions ("Send these 47 cold candidates to gdrive:archive").
+- **No tier-by-size** — e.g. "files >1 GB regardless of status." Could add as a 4th recipe (`bulky`) if size-based lifecycle becomes common.
+- **No tier-by-access-pattern** — we use `last_scanned_at` as a proxy for staleness; this is the time Curator last *saw* the file, not the time anyone *opened* it. A v1.8 watchdog (T-A03) tracking open events would enable true access-based tiering.
+- **No reverse-tier (warmup)** — promoting a file from archive back to active is purely a manual `curator status set` operation.
+
 ## [1.7.7] — 2026-05-11 — T-B07 Metadata-Stripping Export Pipelines
 
 **Headline:** New `curator export-clean <src> <dst>` command copies files while stripping privacy-leaking metadata. Handles **images (EXIF/XMP/IPTC/PNG-text), DOCX (author/company props), and PDF (metadata dict)** in one pass. Source files never modified.

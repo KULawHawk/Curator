@@ -3886,5 +3886,193 @@ def export_clean_cmd(
     if report.failed_count > 0:
         raise typer.Exit(code=1)
 
+
+
+# ------------------------------------------------------------------
+# v1.7.8 (T-B05): curator tier - Tiered Storage Manager
+# ------------------------------------------------------------------
+
+@app.command(name="tier")
+def tier_cmd(
+    ctx: typer.Context,
+    recipe: str = typer.Argument(
+        ..., help="Tier recipe: 'cold' (stale provisional), 'expired' "
+                  "(past expires_at), or 'archive' (stale vital).",
+    ),
+    min_age_days: int = typer.Option(
+        None, "--min-age-days",
+        help="Override default staleness threshold. Default 90 for "
+             "cold, 365 for archive. Ignored for expired (uses expires_at).",
+    ),
+    source_id: str = typer.Option(
+        None, "--source-id",
+        help="Restrict scan to one source (e.g. 'local').",
+    ),
+    root_prefix: str = typer.Option(
+        None, "--root",
+        help="Restrict to files whose source_path starts with this prefix.",
+    ),
+    show_files: bool = typer.Option(
+        False, "--show-files",
+        help="Print every candidate path. Default: summary only.",
+    ),
+    limit: int = typer.Option(
+        None, "--limit",
+        help="Limit displayed candidates (after sort, oldest-first). "
+             "Doesn't affect counts or aggregate sizes in the summary.",
+    ),
+) -> None:
+    """Tiered storage manager — identify files for cold-tier migration (T-B05).
+
+    Three named recipes match the most common transitions:
+
+      cold     -- status='provisional' AND last_scanned_at older than
+                  --min-age-days (default 90). These files aren't active
+                  work but haven't been trashed; they're cold-storage
+                  candidates.
+      expired  -- expires_at is set AND in the past. Files explicitly
+                  marked with a TTL via 'curator status set --expires-in-days'.
+      archive  -- status='vital' AND last_scanned_at older than
+                  --min-age-days (default 365). Long-stable vital files
+                  belong in an immutable archive store.
+
+    This command is detect-only. To migrate candidates, run:
+
+        curator tier cold --root C:/Work --show-files | grep -oP ...
+        curator migrate <src_source_id> <src_root> <dst_root> --apply
+
+    A future v1.8 will add --apply --target <dst> for one-step move.
+
+    Examples:
+        curator tier cold
+        curator tier cold --min-age-days 180 --root C:/Users/jmlee
+        curator tier expired --show-files
+        curator tier archive --min-age-days 730 --source-id local
+    """
+    from curator.services.tier import TierCriteria, TierRecipe
+
+    rt: CuratorRuntime = ctx.obj
+    console = _console(rt)
+
+    # Parse recipe
+    try:
+        recipe_enum = TierRecipe.from_string(recipe)
+    except ValueError as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(code=2)
+
+    # Default min_age_days per recipe
+    if min_age_days is None:
+        defaults = {
+            TierRecipe.COLD: 90,
+            TierRecipe.EXPIRED: 0,    # not used
+            TierRecipe.ARCHIVE: 365,
+        }
+        min_age_days = defaults[recipe_enum]
+
+    criteria = TierCriteria(
+        recipe=recipe_enum,
+        min_age_days=min_age_days,
+        source_id=source_id,
+        root_prefix=root_prefix,
+    )
+
+    report = rt.tier.scan(criteria)
+
+    # Audit event: log the suggest action with criteria
+    rt.audit.log(
+        actor="cli.tier",
+        action="tier.suggest",
+        entity_type="tier_scan",
+        entity_id=recipe_enum.value,
+        details={
+            "recipe": recipe_enum.value,
+            "min_age_days": min_age_days,
+            "source_id": source_id,
+            "root_prefix": root_prefix,
+            "candidate_count": report.candidate_count,
+            "total_size_bytes": report.total_size,
+        },
+    )
+
+    if rt.json_output:
+        import json as _json
+        payload = {
+            "recipe": recipe_enum.value,
+            "criteria": {
+                "min_age_days": min_age_days,
+                "source_id": source_id,
+                "root_prefix": root_prefix,
+            },
+            "candidate_count": report.candidate_count,
+            "total_size_bytes": report.total_size,
+            "duration_seconds": report.duration_seconds,
+            "by_source": report.by_source(),
+            "candidates": [
+                {
+                    "curator_id": str(c.file.curator_id),
+                    "source_id": c.file.source_id,
+                    "source_path": c.file.source_path,
+                    "size": c.file.size,
+                    "status": c.file.status,
+                    "last_scanned_at": c.file.last_scanned_at.isoformat() if c.file.last_scanned_at else None,
+                    "expires_at": c.file.expires_at.isoformat() if c.file.expires_at else None,
+                    "reason": c.reason,
+                }
+                for c in (report.candidates[:limit] if limit else report.candidates)
+            ],
+        }
+        typer.echo(_json.dumps(payload, indent=2))
+        return
+
+    # Rich pretty-print
+    color = {"cold": "cyan", "expired": "red", "archive": "blue"}[recipe_enum.value]
+    console.print(f"\n[bold]Tier scan: [{color}]{recipe_enum.value}[/][/]")
+    console.print(f"  Recipe:          [{color}]{recipe_enum.value}[/]")
+    if recipe_enum != TierRecipe.EXPIRED:
+        console.print(f"  Min age:         {min_age_days} days")
+    if source_id:
+        console.print(f"  Source filter:   {source_id}")
+    if root_prefix:
+        console.print(f"  Root filter:     {root_prefix}")
+    console.print(f"  Duration:        {report.duration_seconds:.3f}s")
+    console.print(f"  Candidates:      [{color}]{report.candidate_count:,}[/]")
+
+    def _fmt_size(n: int) -> str:
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if n < 1024 or unit == "TB":
+                return f"{n:.1f} {unit}" if unit != "B" else f"{n} {unit}"
+            n /= 1024
+        return f"{n:.1f} TB"
+
+    console.print(f"  Total size:      {_fmt_size(report.total_size)}")
+    if report.by_source():
+        console.print("  By source:")
+        for sid, n in sorted(report.by_source().items()):
+            console.print(f"    {sid}: {n}")
+
+    if report.candidate_count == 0:
+        console.print(f"\n[green]No {recipe_enum.value} candidates found.[/]")
+        return
+
+    if show_files:
+        console.print(f"\n[bold]Candidates (oldest-staleness first):[/]")
+        display = report.candidates[:limit] if limit else report.candidates
+        for c in display:
+            console.print(
+                f"  [{color}]{c.file.source_path}[/]"
+            )
+            console.print(
+                f"      [dim]{_fmt_size(c.file.size or 0)}  -  {c.reason}[/]"
+            )
+        if limit and len(report.candidates) > limit:
+            remaining = len(report.candidates) - limit
+            console.print(f"  [dim]... and {remaining:,} more (use --limit to expand)[/]")
+    else:
+        console.print(
+            f"\n[dim]Run with --show-files to see paths. "
+            f"To migrate, pipe candidate paths into [bold]curator migrate[/bold].[/]"
+        )
+
 if __name__ == "__main__":  # pragma: no cover
     app()

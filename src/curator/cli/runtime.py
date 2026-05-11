@@ -43,6 +43,7 @@ from curator.services import (
 from curator.services.forecast import ForecastService
 from curator.services.pii_scanner import PIIScanner
 from curator.services.metadata_stripper import MetadataStripper
+from curator.services.tier import TierService
 from curator.storage import CuratorDB
 from curator.storage.repositories import (
     AuditRepository,
@@ -103,6 +104,7 @@ class CuratorRuntime:
     forecast: ForecastService
     pii_scanner: PIIScanner
     metadata_stripper: MetadataStripper
+    tier: TierService
 
     # Output controls (set by CLI flags)
     json_output: bool = False
@@ -225,6 +227,7 @@ def build_runtime(
     forecast = ForecastService(db)
     pii_scanner = PIIScanner()
     metadata_stripper = MetadataStripper()
+    tier = TierService(file_repo)
 
     return CuratorRuntime(
         config=config,
@@ -256,6 +259,7 @@ def build_runtime(
         forecast=forecast,
         pii_scanner=pii_scanner,
         metadata_stripper=metadata_stripper,
+        tier=tier,
         json_output=json_output,
         no_color=no_color,
         verbosity=verbosity,
