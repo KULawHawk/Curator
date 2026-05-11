@@ -860,6 +860,18 @@ def sources_config(
         "--clear",
         help="Remove ALL config keys. Applied AFTER --unset and BEFORE --set in the same invocation.",
     ),
+    share_visibility: str = typer.Option(
+        None,
+        "--share-visibility",
+        help=(
+            "Set the source's sharing posture (v1.7.29, T-B07). Valid "
+            "values: 'private' (default, no metadata stripping), 'team' "
+            "(no stripping), 'public' (MigrationService AUTO-STRIPS "
+            "EXIF/docProps/PDF metadata on each move TO this source). "
+            "Pass without other flags to view+set; combine with --set/"
+            "--unset/--clear to make a single atomic update."
+        ),
+    ),
 ):
     """View or mutate a source's per-plugin config dict (v1.6.0).
 
@@ -884,18 +896,43 @@ def sources_config(
     if src is None:
         raise _err_exit(rt, f"No source with id: {source_id!r}")
 
+    # v1.7.29: validate --share-visibility before any other work
+    if share_visibility is not None:
+        valid = {"private", "team", "public"}
+        if share_visibility not in valid:
+            raise _err_exit(
+                rt,
+                f"--share-visibility must be one of {sorted(valid)}; "
+                f"got {share_visibility!r}",
+            )
+
     # Read-only path: no mutation flags given
-    if not set_pairs and not unset_keys and not clear:
+    if (not set_pairs and not unset_keys and not clear
+            and share_visibility is None):
         if rt.json_output:
-            _emit_json(rt, {"source_id": source_id, "config": src.config})
+            _emit_json(rt, {
+                "source_id": source_id,
+                "config": src.config,
+                "share_visibility": src.share_visibility,
+            })
             return
         console = _console(rt)
         console.print(f"[bold]{src.source_id}[/] config:")
         if not src.config:
             console.print("  [dim](empty)[/]")
-            return
-        for k, v in src.config.items():
-            console.print(f"  {k} = {v!r}")
+        else:
+            for k, v in src.config.items():
+                console.print(f"  {k} = {v!r}")
+        # v1.7.29: also surface sharing posture in the read-only view
+        vis_color = {
+            "private": "green",
+            "team": "yellow",
+            "public": "red",
+        }.get(src.share_visibility, "white")
+        console.print(
+            f"  [dim]share_visibility =[/] [{vis_color}]"
+            f"{src.share_visibility}[/]"
+        )
         return
 
     # Mutation path: build the new config dict, then update.
@@ -931,6 +968,12 @@ def sources_config(
         new_config[key] = value
         changes.append(("set", key, value))
 
+    # 4. --share-visibility (v1.7.29). Tracked as a 'visibility' change.
+    new_share_visibility = src.share_visibility
+    if share_visibility is not None and share_visibility != src.share_visibility:
+        new_share_visibility = share_visibility
+        changes.append(("visibility", "share_visibility", share_visibility))
+
     if not changes:
         # Nothing to do (e.g., --unset a key that wasn't there)
         if rt.json_output:
@@ -951,6 +994,7 @@ def sources_config(
         config=new_config,
         enabled=src.enabled,
         created_at=src.created_at,
+        share_visibility=new_share_visibility,
     )
     rt.source_repo.update(updated)
     rt.audit.log(
@@ -978,7 +1022,7 @@ def sources_config(
         return
 
     console = _console(rt)
-    console.print(f"[green]\u2713[/] Updated config for [bold]{source_id}[/]:")
+    console.print(f"[green][OK][/] Updated config for [bold]{source_id}[/]:")
     for op, key, value in changes:
         if op == "set":
             console.print(f"  [cyan]set[/]   {key} = {value!r}")
@@ -986,6 +1030,15 @@ def sources_config(
             console.print(f"  [yellow]unset[/] {key}")
         elif op == "clear":
             console.print(f"  [red]clear[/] (removed {len(value)} key(s))")
+        elif op == "visibility":
+            vis_color = {
+                "private": "green",
+                "team": "yellow",
+                "public": "red",
+            }.get(value, "white")
+            console.print(
+                f"  [magenta]visibility[/] -> [{vis_color}]{value}[/]"
+            )
 
 
 @sources_app.command("add")

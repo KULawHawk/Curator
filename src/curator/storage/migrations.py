@@ -149,6 +149,41 @@ def migration_003_classification_taxonomy(conn: sqlite3.Connection) -> None:
     )
 
 
+def migration_004_share_visibility(conn: sqlite3.Connection) -> None:
+    """Add ``share_visibility`` column to the ``sources`` table.
+
+    T-B07 v1.8 completion (shipped v1.7.29). Lets each source be flagged
+    with its sharing posture:
+
+      * ``private`` (default) — internal/personal storage. No automatic
+        metadata stripping on migration. This is the conservative
+        default; existing rows get this value.
+      * ``team``    — shared with a defined team. No automatic
+        stripping (the audience is trusted). Reserved for future
+        finer-grained policy.
+      * ``public``  — destination may be world-readable (public cloud
+        bucket, shared Drive link, GitHub repo, etc.). MigrationService
+        AUTO-INVOKES :class:`MetadataStripper` on each migrated file
+        when the destination source has this value. EXIF, docProps,
+        PDF metadata, etc. are removed in-place at the destination
+        AFTER the verified move completes.
+
+    Migration is purely additive (ALTER TABLE ADD COLUMN is metadata-only
+    in SQLite). Existing sources get the safe default ``'private'`` so
+    behavior is unchanged unless the user explicitly opts in via
+    ``curator sources config <id> --share-visibility public``.
+    """
+    conn.executescript(
+        """
+        ALTER TABLE sources ADD COLUMN share_visibility TEXT NOT NULL
+            DEFAULT 'private';
+
+        CREATE INDEX IF NOT EXISTS idx_sources_share_visibility
+            ON sources(share_visibility);
+        """
+    )
+
+
 # ---------------------------------------------------------------------------
 # Migration registry
 # ---------------------------------------------------------------------------
@@ -159,6 +194,7 @@ MIGRATIONS: list[tuple[str, MigrationFunc]] = [
     ("001_initial", migration_001_initial),
     ("002_migration_jobs_and_progress", migration_002_migration_jobs_and_progress),
     ("003_classification_taxonomy", migration_003_classification_taxonomy),
+    ("004_share_visibility", migration_004_share_visibility),
 ]
 
 

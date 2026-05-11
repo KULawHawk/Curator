@@ -115,12 +115,13 @@ New code, but slots cleanly into existing services.
 - **Notes:** Mark the *semantic indexing* layer as a Conclave hookspec (`curator_index_semantic`). Curator ships the OCR-to-text part; Conclave later replaces the dumb keyword index with an embedding index.
 
 ### `T-B07` — Metadata-Stripping Export Pipelines
-- **Status:** **shipped v1.7.7** (standalone `curator export-clean` CLI; per-source policy gating deferred to v1.8)
+- **Status:** **shipped v1.7.7 + v1.7.29 (T-B07 fully complete)**
 - **Effort:** S-M
 - **Depends on:** `services/organize.py` staging
 - **What:** When destination source is flagged "shareable," strip EXIF from photos (Pillow/piexif — already installed) and DOCX author metadata before staging the move.
 - **v1.7.7 delivery:** `services/metadata_stripper.py` with `MetadataStripper`, `StripResult`, `StripReport`, `StripOutcome`. Handles images (EXIF/XMP/IPTC/PNG-text via Pillow re-save), DOCX (docProps/core.xml + app.xml stub-replacement via stdlib zipfile), PDF (metadata-dict clear via pypdf re-emit), and passthrough for unknown types. CLI: `curator export-clean <src> <dst> [--ext .jpg --drop-icc --show-files --json]`. Source files never modified; ICC profiles kept by default (color rendering).
-- **Notes:** Per-source policy gating (`SourceConfig.strip_metadata: bool` or `share_visibility: 'private' | 'team' | 'public'`) is the v1.8 follow-up; v1.7.7 ships the stripper as a standalone CLI command so it's usable today without touching the migration/organize integration surface.
+- **v1.7.29 delivery (T-B07 completion):** Per-source policy gating via `SourceConfig.share_visibility` field (`'private'` | `'team'` | `'public'`). Migration 004 adds the column with DEFAULT `'private'` (backward-compatible). `MigrationService` accepts optional `source_repo` + `metadata_stripper` kwargs; when both are wired AND `dst_source.share_visibility == 'public'`, `apply()` auto-invokes `MetadataStripper.strip_file()` on each successfully migrated file via temp-file + atomic rename. Strip failures are audited (`migration.metadata_strip_failed`) but do NOT fail the migration. New CLI flag: `curator sources config <id> --share-visibility {private|team|public}`. New audit events: `migration.autostrip.enabled` (plan-start), `migration.metadata_stripped` (per file), `migration.metadata_strip_failed` (per file). Closes the v1.8 follow-up explicitly called out in v1.7.7's release notes.
+- **Notes:** GUI exposure of `share_visibility` (dropdown in Sources tab) and finer-grained `'team'` semantics deferred. `--no-autostrip` per-migration opt-out and `strip_keep` allowlists are possible future enhancements.
 
 ### `T-B08` — Smart OS-Level Deduplication (hardlinks)
 - **Status:** proposed (cautious)

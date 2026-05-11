@@ -40,3 +40,14 @@ class SourceConfig(CuratorEntity):
     config: dict[str, Any] = Field(default_factory=dict, description="Plugin-specific configuration")
     enabled: bool = Field(default=True)
     created_at: datetime = Field(default_factory=_utcnow)
+    # v1.7.29: T-B07 v1.8 completion. Sharing posture controls whether
+    # MigrationService auto-strips metadata when files are migrated to
+    # this source as destination. Valid values: 'private' (default,
+    # no stripping), 'team' (no stripping, reserved for finer-grained
+    # policy), 'public' (auto-strip EXIF/docProps/PDF metadata after
+    # each verified move).
+    share_visibility: str = Field(
+        default="private",
+        description="Sharing posture: 'private' | 'team' | 'public'. "
+                    "When 'public', MigrationService auto-strips metadata.",
+    )

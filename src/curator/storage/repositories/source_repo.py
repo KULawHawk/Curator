@@ -26,8 +26,8 @@ class SourceRepository:
             conn.execute(
                 """
                 INSERT INTO sources (
-                    source_id, source_type, display_name, config_json, enabled, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    source_id, source_type, display_name, config_json, enabled, created_at, share_visibility
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     source.source_id,
@@ -36,6 +36,7 @@ class SourceRepository:
                     json_dumps(source.config),
                     1 if source.enabled else 0,
                     source.created_at,
+                    source.share_visibility,
                 ),
             )
 
@@ -45,8 +46,8 @@ class SourceRepository:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO sources (
-                    source_id, source_type, display_name, config_json, enabled, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    source_id, source_type, display_name, config_json, enabled, created_at, share_visibility
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     source.source_id,
@@ -55,6 +56,7 @@ class SourceRepository:
                     json_dumps(source.config),
                     1 if source.enabled else 0,
                     source.created_at,
+                    source.share_visibility,
                 ),
             )
 
@@ -63,7 +65,7 @@ class SourceRepository:
             conn.execute(
                 """
                 UPDATE sources SET
-                    source_type = ?, display_name = ?, config_json = ?, enabled = ?
+                    source_type = ?, display_name = ?, config_json = ?, enabled = ?, share_visibility = ?
                 WHERE source_id = ?
                 """,
                 (
@@ -71,6 +73,7 @@ class SourceRepository:
                     source.display_name,
                     json_dumps(source.config),
                     1 if source.enabled else 0,
+                    source.share_visibility,
                     source.source_id,
                 ),
             )
@@ -122,6 +125,14 @@ class SourceRepository:
     # ------------------------------------------------------------------
 
     def _row_to_source(self, row) -> SourceConfig:
+        # v1.7.29: share_visibility added via migration 004. Older rows
+        # have the column with DEFAULT 'private' so this should always
+        # be present, but we defensively fall back if the test fixture
+        # uses a pre-004 schema snapshot.
+        try:
+            share_visibility = row["share_visibility"] or "private"
+        except (IndexError, KeyError):
+            share_visibility = "private"
         return SourceConfig(
             source_id=row["source_id"],
             source_type=row["source_type"],
@@ -129,4 +140,5 @@ class SourceRepository:
             config=json_loads(row["config_json"]) or {},
             enabled=bool(row["enabled"]),
             created_at=row["created_at"],
+            share_visibility=share_visibility,
         )

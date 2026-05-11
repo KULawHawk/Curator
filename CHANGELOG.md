@@ -4,6 +4,118 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.29] — 2026-05-11 — T-B07 v1.8 completion: share_visibility auto-strip on public destinations
+
+**Headline:** When a source is flagged `share_visibility="public"`, MigrationService now AUTO-INVOKES the metadata stripper on every successfully migrated file. EXIF, docProps, PDF metadata, and ICC profiles disappear from public-destination files automatically. **T-B07 is now fully complete** — v1.7.7 shipped the stripper as a standalone CLI; v1.7.29 wires it into the migration pipeline as the original FEATURE_TODO intended.
+
+### Why this matters
+
+v1.7.7's release notes called this out as the deferred v1.8 follow-up: "Per-source policy gating (`SourceConfig.share_visibility: 'private' | 'team' | 'public'`) is the v1.8 follow-up; v1.7.7 ships the stripper as a standalone CLI command so it's usable today." Two ships later (v1.7.25's tier --apply) the migration infrastructure was mature enough to support auto-gating. v1.7.29 ties them together.
+
+The forensic safety win: an analyst can mark `gdrive:public-bucket` or `s3:public-archive` as `share_visibility=public` ONCE and then **never accidentally leak EXIF/docProps/PDF metadata to a public destination again**. Auto-strip is the default behavior for that destination class.
+
+Example workflow:
+```
+# Mark a destination source as public-facing
+curator sources config s3:incident-bucket --share-visibility public
+
+# Future migrations to that source auto-strip
+curator migrate local /Cases/2026-XX-15 s3:incident-bucket /redacted/ --apply
+# Migration completes; EXIF/docProps/PDF metadata removed automatically.
+# Audit trail records migration.autostrip.enabled at plan-start + one
+# migration.metadata_stripped event per file.
+```
+
+### What's new
+
+**New DB column** (migration 004): `sources.share_visibility TEXT NOT NULL DEFAULT 'private'`. Three valid values:
+  * `'private'` (default) — internal/personal. No stripping.
+  * `'team'` — shared with a trusted team. No stripping (reserved for finer-grained policy).
+  * `'public'` — world-readable destination. **Auto-strip enabled.**
+
+Migration is purely additive (ALTER TABLE ADD COLUMN is metadata-only in SQLite). Existing rows get `'private'` so behavior is unchanged unless the user explicitly opts in.
+
+**Model + repository extension**:
+  * `SourceConfig.share_visibility: str = Field(default="private", ...)` field added.
+  * `SourceRepository.insert/upsert/update` carry the new column.
+  * `_row_to_source` reads it with a defensive try/except fallback for test fixtures using pre-004 schema snapshots.
+
+**CLI**: `curator sources config <id> --share-visibility {private|team|public}`:
+  * Validates the value against the allowed set (rejects bad values with exit 2).
+  * Audits the change as `op=visibility` alongside any concurrent --set/--unset/--clear ops.
+  * Read-only view (no flags) now also shows `share_visibility =` line, colored green/yellow/red.
+  * JSON view includes `"share_visibility"` key.
+
+**MigrationService auto-gating**:
+  * Constructor accepts new optional kwargs: `source_repo` and `metadata_stripper`. Both default to `None` for backward compatibility — bare instantiation still works.
+  * `apply()` resolves `auto_strip` ONCE at the top: fetches the destination `SourceConfig` and checks `share_visibility == "public"`. If both deps are wired AND visibility is public, sets `auto_strip = True` and emits a plan-start audit event `migration.autostrip.enabled`.
+  * After each successful move (MOVED / COPIED / MOVED_OVERWROTE_WITH_BACKUP / MOVED_RENAMED_WITH_SUFFIX), `_auto_strip_metadata(move)` is called.
+  * `_auto_strip_metadata`: strips to a temp file alongside the destination, then atomic rename. Failures are caught, cleanup'd, and audited but do NOT fail the migration (the file is already at its destination with verified hash; only the metadata-cleanliness goal is missed).
+
+**New audit events**:
+  * `migration.autostrip.enabled` — emitted once per `apply()` call when auto-strip is active. Includes `plan_move_count`.
+  * `migration.metadata_stripped` — emitted per successfully stripped file. Includes `dst_path`, `outcome`, `bytes_in`, `bytes_out`, `fields_removed` (the list of metadata field names removed).
+  * `migration.metadata_strip_failed` — emitted per file where stripping raised. Migration itself still successful.
+
+**Runtime wiring**: `metadata_stripper = MetadataStripper()` construction moved BEFORE `migration = MigrationService(...)` in `build_runtime()` so both deps can be wired in at construction time.
+
+### Files changed
+
+- `src/curator/storage/migrations.py` — +35 lines (migration 004 + registry entry)
+- `src/curator/models/source.py` — +11 lines (`share_visibility` field on `SourceConfig`)
+- `src/curator/storage/repositories/source_repo.py` — +19 / -4 lines (CRUD methods carry the new column; `_row_to_source` defensive read)
+- `src/curator/services/migration.py` — +110 lines (constructor deps + apply() auto_strip resolution + `_auto_strip_metadata` helper with audit events)
+- `src/curator/cli/main.py` — +56 lines (`--share-visibility` flag + view-mode display + visibility op tracking) + lesson #50 fix (replaced pre-existing `\u2713` with `[OK]`)
+- `src/curator/cli/runtime.py` — +5 / -1 lines (re-ordered MetadataStripper construction; wired into MigrationService)
+- `docs/releases/v1.7.29.md` — new release notes
+- `docs/FEATURE_TODO.md` — T-B07 marked fully complete
+
+### Verification
+
+- **7-test suite** (`test_share_visibility.py`) mixing in-process unit tests with subprocess CLI + real-image E2E migration:
+  1. `SourceConfig.share_visibility` defaults to `'private'`, accepts explicit values
+  2. Migration 004 applied to runtime DB; `sources` table has the column; `schema_versions` records the migration
+  3. `SourceRepository` round-trips `share_visibility` through insert / update; new sources default to `'private'`
+  4. CLI `sources config --share-visibility`: validates bad values (exit ≠ 0 with error message), sets `public`, JSON view includes the field
+  5. **End-to-end auto-strip**: registered public destination source + JPEG with EXIF (`secret_description_xyz`, `secret_software_v1`) → migration runs → dst JPEG no longer contains EXIF strings → `migration.metadata_stripped` audit event present → `migration.autostrip.enabled` plan-start event present
+  6. **Private dst regression**: same setup with `share_visibility="private"` → EXIF preserved at destination (no auto-strip)
+  7. **Backward compat**: bare `MigrationService(file_repo, safety, audit=...)` without the new kwargs — `source_repo` and `metadata_stripper` are `None`; `apply()` with an empty plan completes cleanly
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 30-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**1 bug caught — Lesson #50 strikes for the FIFTH time.** The PRE-EXISTING `sources_config` CLI code (shipped earlier in the arc) used `\u2713` (✓) in a `console.print()` call. The subprocess test captured stdout (non-TTY), Rich crashed encoding the codepoint with cp1252. Fixed by replacing with ASCII `[OK]`.
+
+**5 strikes is no longer a recurrence — it's a pattern.** Strikes across the arc:
+  * v1.7.21: histogram `█` chars on first ship (fixed by ASCII fallback)
+  * v1.7.24: TTY-aware bars (codified detection but kept fallback)
+  * v1.7.25: tier --apply Unicode `→` and `…` in print strings
+  * v1.7.28: `✓` in test scaffolding
+  * **v1.7.29: pre-existing `✓` in `sources_config` CLI** — caught by my test, not by any existing test
+
+The pre-existing strike is the most important: it means the bug had been there for an unknown duration, undetected, because no existing test exercised that code path via subprocess. **The next ship MUST be a `safe_print()` helper** extracted to `cli/util.py` + a one-pass audit replacing all remaining `\u2588`, `✓`, `→`, `…` in user-facing strings. This is now operationally overdue.
+
+**0 implementation bugs caught.** The migration applied cleanly, the FK constraint correctly prevented deleting a source with referenced files (the test cleanup needed file_repo.delete first), the temp-file atomic rename worked correctly across platforms, and the audit bracketing was right on the first try.
+
+**Design lessons reinforced:**
+
+1. **Backward-compatible constructor extension via default-None kwargs** — `MigrationService(..., source_repo=None, metadata_stripper=None)` keeps every existing call site working unchanged. The auto-strip code path is `if self.source_repo is not None and self.metadata_stripper is not None and dst_source.share_visibility == "public"` — three independent guards, fails safe.
+
+2. **Policy at the migration boundary, not the call site** — the alternative was making each caller (CLI tier --apply, GUI TierDialog, etc.) responsible for invoking the stripper after a successful migration. That would have spread the policy across 3+ code paths and any future caller would miss it. Putting it in `MigrationService.apply()` means the policy is enforced regardless of how `apply()` is invoked.
+
+3. **Failures of secondary goals don't fail primary goals** — if `_auto_strip_metadata()` raises, the migration itself is NOT rolled back. The file is at its destination with verified hash; the metadata-cleanliness goal is missed but recoverable (`curator export-clean` can be run manually after the fact). The strip failure is audited as `migration.metadata_strip_failed` so it's visible in the trail.
+
+4. **Migration 004 was "purely additive"** — ALTER TABLE ADD COLUMN with DEFAULT means existing rows get the safe value automatically. No row rewrites, no application-level data migration code. SQLite makes this metadata-only. The pattern is the right shape for any future column additions.
+
+### v1.7.29 limitations
+
+- **No `'team'`-specific behavior yet** — the field accepts `'team'` but treats it identically to `'private'` (no auto-strip). Reserved for finer-grained future policy (e.g., strip-but-keep-team-specific-watermarks).
+- **No GUI for setting `share_visibility`** — currently CLI-only. The Sources tab in the GUI could surface this as a dropdown.
+- **Auto-strip can't be disabled per-migration** — if a user wants to migrate a specific file to a public dst WITHOUT stripping (rare edge case), they'd need to temporarily flip the source to `'private'`. A future `--no-autostrip` flag on `tier --apply` and `curator migrate` could opt out.
+- **No per-pattern strip configuration** — the stripper removes "all metadata" via its existing logic. Future enhancement: a `strip_keep` allowlist (e.g., "keep EXIF GPS for archaeological photos but strip everything else").
+- **Audit `fields_removed` field assumes flat list** — some stripper implementations could return nested structures; current code passes whatever the `StripResult.metadata_fields_removed` field contains.
+- **`migration.autostrip.enabled` emits even if 0 files actually get stripped** — the audit event is at plan-start, before knowing how many moves will succeed. The per-file events tell the true story; the plan-start event signals "this run COULD have stripped."
+
 ## [1.7.28] — 2026-05-11 — Per-pattern PII enrichment + generalized metadata render
 
 **Headline:** v1.7.26's JWT-only `metadata` field is now generalized across **6 more HIGH-severity patterns**. AWS, Stripe, Slack, GitHub, OpenAI, and Mailgun matches all get parsed metadata exposing the *kind* of credential (long-term vs session, live vs test, bot vs user, etc.). The Rich pretty-print now shows red coloring for **active/production/long-term/broad-scope** credentials — the eye lands on the urgent triage rows first.

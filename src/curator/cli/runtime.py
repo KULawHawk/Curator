@@ -219,14 +219,21 @@ def build_runtime(
     # v1.1.0a1: Migration tool (Tracer Phase 1).
     # v1.1.0a2: Phase 2 Session A -- pass migration_job_repo for create_job/run_job.
     # v1.1.0a3: Phase 2 Session B -- pass pm for cross-source via curator_source_write hook.
+    # v1.7.29: build metadata_stripper BEFORE MigrationService so we can
+    # wire it in for T-B07 auto-strip on public destinations.
+    metadata_stripper = MetadataStripper()
     migration = MigrationService(
         file_repo=file_repo, safety=safety, audit=audit_repo,
         migration_jobs=migration_job_repo,
         pm=pm,
+        # v1.7.29: T-B07 v1.8 completion -- wire source_repo +
+        # metadata_stripper so apply() can auto-strip when dst source
+        # has share_visibility='public'.
+        source_repo=source_repo,
+        metadata_stripper=metadata_stripper,
     )
     forecast = ForecastService(db)
     pii_scanner = PIIScanner()
-    metadata_stripper = MetadataStripper()
     tier = TierService(file_repo)
 
     return CuratorRuntime(

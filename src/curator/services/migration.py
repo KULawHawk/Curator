@@ -333,12 +333,22 @@ class MigrationService:
         audit: AuditRepository | None = None,
         migration_jobs: MigrationJobRepository | None = None,
         pm: "pluggy.PluginManager | None" = None,
+        source_repo: "SourceRepository | None" = None,
+        metadata_stripper: "MetadataStripper | None" = None,
     ) -> None:
         self.files = file_repo
         self.safety = safety
         self.audit = audit
         self.migration_jobs = migration_jobs
         self.pm = pm
+        # v1.7.29: T-B07 v1.8 completion. When both are provided AND the
+        # destination source has share_visibility='public', apply() will
+        # auto-invoke metadata_stripper.strip_file() on each successfully
+        # migrated file. Both are optional for backward compatibility:
+        # callers that don't supply them get the legacy behavior
+        # (migration only, no stripping).
+        self.source_repo = source_repo
+        self.metadata_stripper = metadata_stripper
         # Phase 3 retry policy (DM-1, DM-2, DM-3). Read by
         # `migration_retry.retry_transient_errors` decorator wrapping
         # `_cross_source_transfer`. Set per-job via :meth:`set_max_retries`.
@@ -682,6 +692,31 @@ class MigrationService:
 
         report = MigrationReport(plan=plan)
 
+        # v1.7.29: T-B07 v1.8 completion. Resolve destination source's
+        # sharing posture once, before the per-move loop. If 'public' AND
+        # we have both source_repo and metadata_stripper available, every
+        # successfully migrated file will get its metadata auto-stripped
+        # in-place after the verified move completes. Both deps are
+        # optional; callers wiring an old-style MigrationService get the
+        # legacy behavior (migration only, no stripping).
+        auto_strip = False
+        if (self.source_repo is not None
+                and self.metadata_stripper is not None):
+            dst_source = self.source_repo.get(plan.dst_source_id)
+            if dst_source is not None and dst_source.share_visibility == "public":
+                auto_strip = True
+                if self.audit is not None:
+                    self.audit.log(
+                        actor="curator.migration",
+                        action="migration.autostrip.enabled",
+                        entity_type="source",
+                        entity_id=plan.dst_source_id,
+                        details={
+                            "reason": "dst_source has share_visibility=public",
+                            "plan_move_count": len(plan.moves),
+                        },
+                    )
+
         for src_move in plan.moves:
             # Build fresh result copy (preserve plan-time fields, set apply-time fields)
             move = MigrationMove(
@@ -755,6 +790,20 @@ class MigrationService:
 
             report.moves.append(move)
 
+            # v1.7.29: auto-strip metadata when destination source has
+            # share_visibility='public'. Runs ONLY after a successful
+            # move (any MOVED variant or COPIED). Failures are logged
+            # to audit but don't fail the migration -- the file is
+            # already at its destination with verified hash; only the
+            # metadata-cleanliness goal is missed.
+            if auto_strip and move.outcome in (
+                MigrationOutcome.MOVED,
+                MigrationOutcome.COPIED,
+                MigrationOutcome.MOVED_OVERWROTE_WITH_BACKUP,
+                MigrationOutcome.MOVED_RENAMED_WITH_SUFFIX,
+            ):
+                self._auto_strip_metadata(move)
+
             # Phase 3 P2: --on-conflict=fail aborts on the first collision,
             # including cross-source collisions detected inside
             # _execute_one (which set outcome=FAILED_DUE_TO_CONFLICT but
@@ -769,6 +818,108 @@ class MigrationService:
 
         report.completed_at = datetime.utcnow()
         return report
+
+    def _auto_strip_metadata(self, move: MigrationMove) -> None:
+        """v1.7.29: T-B07 v1.8 completion.
+
+        Strip metadata (EXIF / docProps / PDF metadata / ICC profile,
+        depending on file type) from a successfully migrated file when
+        the destination source has ``share_visibility='public'``.
+
+        Modifies the destination file in-place via a temp file +
+        atomic rename. Failures are logged to the audit trail but do
+        NOT fail the migration: the file is already at its destination
+        with verified hash; only the metadata-cleanliness goal is
+        missed, and the analyst can re-run :command:`curator export-clean`
+        manually.
+
+        Emits one of these audit events per file:
+          * ``migration.metadata_stripped`` -- success, includes
+            bytes_in/bytes_out + list of removed metadata field names.
+          * ``migration.metadata_strip_failed`` -- exception during
+            stripping (e.g. corrupt destination). Migration considered
+            successful; only the strip step failed.
+
+        Called only from apply() and only after a successful move
+        (MOVED, COPIED, MOVED_OVERWROTE_WITH_BACKUP, or
+        MOVED_RENAMED_WITH_SUFFIX). The caller is responsible for
+        that gating.
+        """
+        if self.metadata_stripper is None:
+            return
+
+        # Local imports to avoid circular dependency at module load time.
+        from curator.services.metadata_stripper import StripOutcome
+
+        dst_path = Path(move.dst_path)
+        if not dst_path.exists():
+            return  # Defensive: destination already vanished
+
+        # Strip to a temp file alongside the destination, then atomic
+        # rename. Using the same parent dir means the rename is atomic
+        # within the destination's filesystem.
+        tmp_path = dst_path.with_suffix(
+            dst_path.suffix + ".curator_autostrip"
+        )
+        try:
+            result = self.metadata_stripper.strip_file(dst_path, tmp_path)
+            if result.outcome in (StripOutcome.STRIPPED, StripOutcome.PASSTHROUGH):
+                if tmp_path.exists():
+                    # Atomic replace -- on Windows, replace() is atomic
+                    # within the same volume.
+                    tmp_path.replace(dst_path)
+                if self.audit is not None:
+                    self.audit.log(
+                        actor="curator.migration",
+                        action="migration.metadata_stripped",
+                        entity_type="file",
+                        entity_id=str(move.curator_id),
+                        details={
+                            "dst_path": move.dst_path,
+                            "outcome": result.outcome.value,
+                            "bytes_in": result.bytes_in,
+                            "bytes_out": result.bytes_out,
+                            "fields_removed": result.metadata_fields_removed,
+                        },
+                    )
+            else:
+                # SKIPPED or FAILED -- clean up the temp file
+                if tmp_path.exists():
+                    try:
+                        tmp_path.unlink()
+                    except OSError:
+                        pass
+                if self.audit is not None and result.outcome == StripOutcome.FAILED:
+                    self.audit.log(
+                        actor="curator.migration",
+                        action="migration.metadata_strip_failed",
+                        entity_type="file",
+                        entity_id=str(move.curator_id),
+                        details={
+                            "dst_path": move.dst_path,
+                            "outcome": result.outcome.value,
+                            "error": result.error,
+                        },
+                    )
+        except Exception as e:  # noqa: BLE001 - defensive boundary
+            # Strip failed catastrophically; cleanup + audit but don't
+            # propagate. The migration itself succeeded.
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
+            if self.audit is not None:
+                self.audit.log(
+                    actor="curator.migration",
+                    action="migration.metadata_strip_failed",
+                    entity_type="file",
+                    entity_id=str(move.curator_id),
+                    details={
+                        "dst_path": move.dst_path,
+                        "error": f"{type(e).__name__}: {e}",
+                    },
+                )
 
     def _execute_one(
         self, move: MigrationMove, *, verify_hash: bool,
