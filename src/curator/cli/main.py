@@ -54,7 +54,7 @@ from rich.table import Table
 
 from curator import __version__
 from curator.cli.runtime import CuratorRuntime, build_runtime
-from curator.cli.util import CHECK, CROSS, ARROW, LARROW, ELLIPSIS, BLOCK, WARN, SUPER2, safe_glyphs
+from curator.cli.util import CHECK, CROSS, ARROW, LARROW, ELLIPSIS, BLOCK, WARN, SUPER2, build_csv_writer, safe_glyphs
 from curator.config import Config
 from curator.models import LineageKind, SourceConfig
 from curator.services import (
@@ -491,6 +491,11 @@ def lineage(
         help="Emit CSV instead of the pretty table or JSON. One row "
              "per lineage edge. Mutually exclusive with --json (JSON wins).",
     ),
+    csv_dialect: str = typer.Option(
+        "csv", "--csv-dialect",
+        help="CSV dialect: 'csv' (default; RFC 4180 comma-separated) or "
+             "'tsv' (tab-separated). Only meaningful with --csv.",
+    ),
     no_header: bool = typer.Option(
         False, "--no-header",
         help="Suppress the CSV header row. Only meaningful with --csv.",
@@ -527,8 +532,7 @@ def lineage(
 
     # v1.7.36: CSV output -- one row per lineage edge
     if csv_output:
-        import csv as _csv
-        writer = _csv.writer(sys.stdout, lineterminator="\n")
+        writer = build_csv_writer(sys.stdout, csv_dialect)
         if not no_header:
             writer.writerow([
                 "edge_id", "kind", "from", "to",
@@ -584,6 +588,11 @@ def bundles_list(
         help="Emit CSV instead of the pretty table or JSON. One row "
              "per bundle. Mutually exclusive with --json (JSON wins).",
     ),
+    csv_dialect: str = typer.Option(
+        "csv", "--csv-dialect",
+        help="CSV dialect: 'csv' (default; RFC 4180 comma-separated) or "
+             "'tsv' (tab-separated). Only meaningful with --csv.",
+    ),
     no_header: bool = typer.Option(
         False, "--no-header",
         help="Suppress the CSV header row. Only meaningful with --csv.",
@@ -607,8 +616,7 @@ def bundles_list(
 
     # v1.7.36: CSV output -- one row per bundle
     if csv_output:
-        import csv as _csv
-        writer = _csv.writer(sys.stdout, lineterminator="\n")
+        writer = build_csv_writer(sys.stdout, csv_dialect)
         if not no_header:
             writer.writerow([
                 "bundle_id", "name", "type", "members", "confidence",
@@ -794,6 +802,11 @@ def sources_list(
         help="Emit CSV instead of the pretty table or JSON. One row "
              "per source. Mutually exclusive with --json (JSON wins).",
     ),
+    csv_dialect: str = typer.Option(
+        "csv", "--csv-dialect",
+        help="CSV dialect: 'csv' (default; RFC 4180 comma-separated) or "
+             "'tsv' (tab-separated). Only meaningful with --csv.",
+    ),
     no_header: bool = typer.Option(
         False, "--no-header",
         help="Suppress the CSV header row. Only meaningful with --csv.",
@@ -820,8 +833,7 @@ def sources_list(
     # (v1.7.29) for symmetry with `sources config` read-only output. The
     # config dict is JSON-encoded for the cell.
     if csv_output:
-        import csv as _csv
-        writer = _csv.writer(sys.stdout, lineterminator="\n")
+        writer = build_csv_writer(sys.stdout, csv_dialect)
         if not no_header:
             writer.writerow([
                 "source_id", "source_type", "display_name", "enabled",
@@ -1384,6 +1396,11 @@ def audit(
              "per audit entry. The 'details' column is JSON-encoded. "
              "Mutually exclusive with --json (JSON wins).",
     ),
+    csv_dialect: str = typer.Option(
+        "csv", "--csv-dialect",
+        help="CSV dialect: 'csv' (default; RFC 4180 comma-separated) or "
+             "'tsv' (tab-separated). Only meaningful with --csv.",
+    ),
     no_header: bool = typer.Option(
         False, "--no-header",
         help="Suppress the CSV header row. Only meaningful with --csv.",
@@ -1418,8 +1435,7 @@ def audit(
     # is dict-shaped; JSON-encode it for the cell so downstream tools
     # can re-parse if needed.
     if csv_output:
-        import csv as _csv
-        writer = _csv.writer(sys.stdout, lineterminator="\n")
+        writer = build_csv_writer(sys.stdout, csv_dialect)
         if not no_header:
             writer.writerow([
                 "audit_id", "occurred_at", "actor", "action",
@@ -3523,6 +3539,11 @@ def forecast_cmd(
         help="Emit CSV instead of the pretty display or JSON. One row "
              "per drive. Mutually exclusive with --json (JSON wins).",
     ),
+    csv_dialect: str = typer.Option(
+        "csv", "--csv-dialect",
+        help="CSV dialect: 'csv' (default; RFC 4180 comma-separated) or "
+             "'tsv' (tab-separated). Only meaningful with --csv.",
+    ),
     no_header: bool = typer.Option(
         False, "--no-header",
         help="Suppress the CSV header row. Only meaningful with --csv.",
@@ -3579,8 +3600,7 @@ def forecast_cmd(
 
     # v1.7.33: CSV output -- one row per drive
     if csv_output:
-        import csv as _csv
-        writer = _csv.writer(sys.stdout, lineterminator="\n")
+        writer = build_csv_writer(sys.stdout, csv_dialect)
         if not no_header:
             writer.writerow([
                 "drive_path", "current_used_gb", "current_total_gb",
@@ -3859,6 +3879,11 @@ def scan_pii_cmd(
              "row per file (source, match_count, has_high, by_pattern). "
              "Mutually exclusive with --json (JSON wins).",
     ),
+    csv_dialect: str = typer.Option(
+        "csv", "--csv-dialect",
+        help="CSV dialect: 'csv' (default; RFC 4180 comma-separated) or "
+             "'tsv' (tab-separated). Only meaningful with --csv.",
+    ),
     no_header: bool = typer.Option(
         False, "--no-header",
         help="Suppress the CSV header row. Only meaningful with --csv.",
@@ -3935,9 +3960,8 @@ def scan_pii_cmd(
     # CSV output (v1.7.22) - one row per match if --show-matches, else
     # one row per file. Mirrors v1.7.19's audit-summary --csv pattern.
     if csv_output:
-        import csv as _csv
         import sys as _sys
-        writer = _csv.writer(_sys.stdout, lineterminator="\n")
+        writer = build_csv_writer(_sys.stdout, csv_dialect)
         if show_matches:
             # Per-match rows: lets users grep / sort / pivot by pattern
             if not no_header:
@@ -4084,6 +4108,11 @@ def export_clean_cmd(
         help="Emit CSV instead of the pretty summary or JSON. One row per "
              "file result. Mutually exclusive with --json (JSON wins).",
     ),
+    csv_dialect: str = typer.Option(
+        "csv", "--csv-dialect",
+        help="CSV dialect: 'csv' (default; RFC 4180 comma-separated) or "
+             "'tsv' (tab-separated). Only meaningful with --csv.",
+    ),
     no_header: bool = typer.Option(
         False, "--no-header",
         help="Suppress the CSV header row. Only meaningful with --csv.",
@@ -4171,8 +4200,7 @@ def export_clean_cmd(
 
     # v1.7.33: CSV output -- one row per file result
     if csv_output:
-        import csv as _csv
-        writer = _csv.writer(sys.stdout, lineterminator="\n")
+        writer = build_csv_writer(sys.stdout, csv_dialect)
         if not no_header:
             writer.writerow([
                 "source", "destination", "outcome",
@@ -4308,6 +4336,11 @@ def tier_cmd(
              "per candidate (limited by --limit if set). Mutually "
              "exclusive with --json (JSON wins).",
     ),
+    csv_dialect: str = typer.Option(
+        "csv", "--csv-dialect",
+        help="CSV dialect: 'csv' (default; RFC 4180 comma-separated) or "
+             "'tsv' (tab-separated). Only meaningful with --csv.",
+    ),
     no_header: bool = typer.Option(
         False, "--no-header",
         help="Suppress the CSV header row. Only meaningful with --csv.",
@@ -4425,8 +4458,7 @@ def tier_cmd(
 
     # v1.7.33: CSV output -- one row per candidate
     if csv_output:
-        import csv as _csv
-        writer = _csv.writer(sys.stdout, lineterminator="\n")
+        writer = build_csv_writer(sys.stdout, csv_dialect)
         if not no_header:
             writer.writerow([
                 "curator_id", "source_id", "source_path",
@@ -4705,6 +4737,11 @@ def audit_summary_cmd(
              "pretty table. Useful for spreadsheet imports. Mutually "
              "exclusive with --json (JSON wins if both are set).",
     ),
+    csv_dialect: str = typer.Option(
+        "csv", "--csv-dialect",
+        help="CSV dialect: 'csv' (default; RFC 4180 comma-separated) or "
+             "'tsv' (tab-separated). Only meaningful with --csv.",
+    ),
     no_header: bool = typer.Option(
         False, "--no-header",
         help="Suppress the CSV header row. Useful when piping into "
@@ -4831,9 +4868,8 @@ def audit_summary_cmd(
     # JSON wins if both flags are set (the early-return above means we
     # never reach this branch when --json was set).
     if csv_output:
-        import csv as _csv
         import sys as _sys
-        writer = _csv.writer(_sys.stdout, lineterminator="\n")
+        writer = build_csv_writer(_sys.stdout, csv_dialect)
         # v1.7.20: --no-header suppresses the header row
         if not no_header:
             writer.writerow(["actor", "action", "count", "first", "last"])
@@ -4981,7 +5017,9 @@ def audit_export_cmd(
     ),
     fmt: str = typer.Option(
         "jsonl", "--format", "-f",
-        help="Output format: 'jsonl' (default, one JSON object per line) or 'csv' (with header).",
+        help="Output format: 'jsonl' (default, one JSON object per line), "
+             "'csv' (with header, comma-separated), or 'tsv' (with header, "
+             "tab-separated). v1.7.37 added 'tsv'.",
     ),
     limit: int = typer.Option(
         1_000_000, "--limit",
@@ -5007,10 +5045,10 @@ def audit_export_cmd(
     rt: CuratorRuntime = ctx.obj
 
     # Validate format
-    if fmt not in ("jsonl", "csv"):
+    if fmt not in ("jsonl", "csv", "tsv"):
         raise _err_exit(
             rt,
-            f"--format must be 'jsonl' or 'csv'; got {fmt!r}",
+            f"--format must be 'jsonl', 'csv', or 'tsv'; got {fmt!r}",
         )
 
     # Mutual exclusion of time filters
@@ -5089,9 +5127,12 @@ def audit_export_cmd(
                     "entity_id": e.entity_id,
                     "details": e.details,
                 }, default=str) + "\n")
-        else:  # csv
-            import csv as _csv  # local import; avoids polluting module namespace
-            writer = _csv.writer(out_handle)
+        else:  # csv or tsv (v1.7.37)
+            # v1.7.37: use build_csv_writer helper so CSV and TSV share
+            # the same lineterminator='\n' fix from v1.7.36. fmt is
+            # either 'csv' or 'tsv' here (validated above); both are
+            # accepted dialects of build_csv_writer.
+            writer = build_csv_writer(out_handle, fmt)
             writer.writerow([
                 "audit_id", "occurred_at", "actor", "action",
                 "entity_type", "entity_id", "details_json",

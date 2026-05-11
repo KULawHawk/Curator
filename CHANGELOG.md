@@ -4,6 +4,125 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.37] — 2026-05-11 — TSV dialect option (closes v1.7.33 + v1.7.36 limitations)
+
+**Headline:** New `--csv-dialect csv|tsv` flag on all 9 stdout-CSV commands, plus `tsv` as a third value for `audit-export --format`. The TSV dialect emits tab-separated output instead of comma-separated — useful for tools that prefer tabs (awk pipelines, some database imports, spreadsheets that don't auto-parse commas correctly). All CSV/TSV writers now share a single helper (`build_csv_writer` in `cli/util.py`), so the v1.7.36 `lineterminator='\n'` fix and the new dialect parameter stay centralized in one place.
+
+### Why this matters
+
+v1.7.36 completed CSV parity across all 10 list commands but only emitted comma-separated output. Several legitimate workflows prefer tabs:
+
+* **awk pipelines** — `awk -F','` requires careful quoting handling around JSON-encoded cells; `awk -F'\t'` is simpler
+* **Spreadsheet imports** — some tools (older Excel, Numbers, R's `read.delim`) treat TSV as the default tabular format
+* **Database imports** — `psql \COPY ... DELIMITER E'\t'` is the canonical Postgres bulk-load format
+* **Log integration** — many existing log-shipping pipelines expect tab-delimited records
+
+v1.7.37 adds opt-in TSV without changing the CSV default. Existing scripts that pipe `--csv` output continue to work unchanged.
+
+### What's new
+
+**`--csv-dialect` flag** on 9 stdout-CSV commands:
+
+| Command | Since | Now supports |
+|---|---|---|
+| `audit-summary` | v1.7.18 | `--csv-dialect csv\|tsv` |
+| `scan-pii` | v1.7.6 | `--csv-dialect csv\|tsv` |
+| `forecast` | v1.7.33 | `--csv-dialect csv\|tsv` |
+| `export-clean` | v1.7.33 | `--csv-dialect csv\|tsv` |
+| `tier` | v1.7.33 | `--csv-dialect csv\|tsv` |
+| `audit` | v1.7.36 | `--csv-dialect csv\|tsv` |
+| `lineage` | v1.7.36 | `--csv-dialect csv\|tsv` |
+| `bundles list` | v1.7.36 | `--csv-dialect csv\|tsv` |
+| `sources list` | v1.7.36 | `--csv-dialect csv\|tsv` |
+
+**`tsv` as a third value for `audit-export --format`**: the audit-export command uses `--format jsonl|csv|tsv` rather than the `--csv-dialect` pattern (since its primary flag was already `--format`, not `--csv`). Same TSV output, file-write path.
+
+**New shared helper** `build_csv_writer(stream, dialect="csv")` in `src/curator/cli/util.py`:
+  * Always uses `lineterminator='\n'` (v1.7.36 Windows blank-line fix)
+  * Switches `delimiter` between `,` (csv) and `\t` (tsv)
+  * Raises `ValueError` on unknown dialects so CLI commands can surface clean errors
+  * Imported by main.py and used at every CSV/TSV writer site (10 total: 7 stdout + 2 _sys.stdout + 1 file)
+
+**Examples:**
+
+```bash
+# Filter audit log by actor, dump as TSV for awk
+curator audit --actor admin --csv --csv-dialect tsv \
+    | awk -F'\t' '$4 ~ /^migration\./ {print $2, $4}'
+
+# Source inventory as TSV for spreadsheet import
+curator sources list --csv --csv-dialect tsv > sources.tsv
+
+# Audit-export as TSV for Postgres COPY
+curator audit-export --to /tmp/audit.tsv --format tsv
+psql -c "\COPY audit_archive FROM '/tmp/audit.tsv' DELIMITER E'\t' CSV HEADER"
+
+# Default (CSV) unchanged — back-compatible
+curator audit --csv > audit.csv  # still RFC 4180 comma-separated
+```
+
+**New test module** `tests/integration/test_cli_csv_dialect.py` (+13 tests):
+  * **TestBuildCsvWriter** (7 unit tests): helper-level behavior
+    * `test_default_dialect_is_csv`
+    * `test_csv_dialect_explicit`
+    * `test_tsv_dialect_uses_tab_delimiter`
+    * `test_lineterminator_is_lf_for_csv` (v1.7.36 regression guard)
+    * `test_lineterminator_is_lf_for_tsv`
+    * `test_unknown_dialect_raises_valueerror`
+    * `test_quoting_works_for_tsv_cells_with_tabs`
+  * **CLI subprocess tests** (6 integration tests):
+    * `test_audit_csv_dialect_tsv`
+    * `test_bundles_list_csv_dialect_tsv`
+    * `test_sources_list_csv_dialect_tsv`
+    * `test_csv_default_dialect_unchanged` (back-compat)
+    * `test_audit_export_format_tsv`
+    * `test_audit_export_format_invalid_value`
+
+### Files changed
+
+- `src/curator/cli/util.py` — +50 lines (new `build_csv_writer()` helper)
+- `src/curator/cli/main.py` — +52 / -16 lines net (9 × `csv_dialect` flag + 10 × writer call-site update + audit-export validation/help text)
+- `tests/integration/test_cli_csv_dialect.py` — NEW (236 lines, 13 tests)
+- `CHANGELOG.md` — v1.7.37 entry
+- `docs/releases/v1.7.37.md` — release notes
+
+### Verification
+
+- **All 13 new TSV-dialect tests pass** in 13.90s
+- **Full pytest baseline**: ✅ **1486 passed**, 9 skipped, 0 failed in 160s (was 1473 at v1.7.36; +13 new tests, all passing)
+- **Helper smoke**: `build_csv_writer(io.StringIO(), 'tsv')` produces correct tab-delimited rows with `\n` terminators
+- **CLI smoke**: `audit --csv --csv-dialect tsv` produces tab-delimited output verified via `repr(stdout)` (tabs present, commas absent in header, no `\n\n` blank lines)
+- **Back-compat smoke**: `sources list --csv` (no dialect) still produces comma-separated output
+- **audit-export smoke**: `audit-export --to file.tsv --format tsv` writes a valid TSV file; `--format xml` rejected cleanly with exit 1
+- **Lesson #50 lint**: still passing on every commit
+
+### Authoritative-principle catches (this turn)
+
+**1 test bug caught and fixed.** First test run failed because two audit-export tests used `--out` instead of the actual flag name `--to`. Quick diagnosis from typer's error message ("No such option: --out (Possible options: --format, --to)"). The flag name is `--to` per the v1.7.31 ship's design (semantic: "export TO this path"). Fix: 2-character edit in 2 tests. Easy to catch, easy to fix.
+
+**0 production bugs caught.** The implementation was clean throughout. The v1.7.36 `lineterminator` fix extended naturally to TSV (same helper, both dialects). The audit-export `--format` accepted tsv as a third value without complication.
+
+**1 design choice: helper consolidation.** Rather than duplicating the dialect-switching logic across 10 sites, introduced `build_csv_writer()` in `cli/util.py`. The helper now owns both the v1.7.36 lineterminator fix AND the v1.7.37 dialect parameter. Future ships that need to extend CSV behavior (custom quoting, escape characters, encoding) have one place to add it. This is consistent with the v1.7.30+ pattern of centralizing CLI helpers in `cli/util.py` alongside the glyph constants.
+
+### Limitations
+
+- **Invalid dialect produces a Python traceback instead of a clean error.** The `build_csv_writer` helper raises `ValueError` on unknown dialects, but the CLI doesn't catch it before the writer is invoked, so the exception propagates and produces a Rich traceback rather than a typer-style error message. Functional but ugly. Fix in v1.7.38: wrap each `if csv_output:` branch with `try: ... except ValueError as e: raise _err_exit(rt, str(e))`, or validate upfront via a typer Option callback. ~10–20 lines.
+- **No semicolon or pipe dialects.** Only `csv` and `tsv` supported. Other RFC 4180-compatible delimiters (`;` for European Excel, `|` for some log formats) would require a `--csv-delimiter` flag with arbitrary character; we don't expose that today.
+- **No QUOTING control.** All output uses Python `csv` module's default `QUOTE_MINIMAL`. Tools that need `QUOTE_ALL` (e.g. for tools that hate unquoted dates) must post-process.
+- **No encoding override.** All CSV/TSV output is UTF-8 (matching the rest of Curator). Tools expecting Latin-1 or other encodings must transcode externally.
+- **GUI doesn't expose dialect.** The GUI uses programmatic API access for data display, not subprocess CSV. Adding a dialect picker to GUI export dialogs is out of scope for this ship.
+- **`--csv-dialect` accepts arbitrary strings at the typer layer.** No `Enum`-backed validation. Invalid values are caught at the helper layer (one layer too deep for clean errors — see first limitation). Tradeoff: keeps the option declaration simple at all 9 sites.
+
+### Cumulative arc state (after v1.7.37)
+
+- **37 ships**, all tagged, all baselines green
+- **pytest**: 1486 / 9 / 0 (+13 from v1.7.36, all v1.7.37 TSV-dialect tests)
+- **CLI commands with CSV/TSV output**: 10 (was 10; same surface, now bilingual)
+- **CSV writers using `build_csv_writer()` helper**: 10 (was 0; centralized via util.py)
+- **Defensive layers for lesson #50**: 4 (code, tests, docs, git hook) — unchanged
+- **Lessons in commit-message corpus**: #46–#56 — no new lesson this ship
+- **v1.7.33 + v1.7.36 dialect limitations**: closed
+
 ## [1.7.36] — 2026-05-11 — CSV completeness for list commands + Windows blank-line fix
 
 **Headline:** Four list-output CLI commands gain `--csv` / `--no-header` flags: `audit`, `lineage`, `bundles list`, `sources list`. Now every Curator command that emits a record-shaped dataset supports the same three output modes (Rich table / JSON / CSV). **Bonus fix**: caught and patched a Windows-specific blank-line issue affecting ALL 7 stdout CSV writers — csv.writer + Python's text-mode stdout was producing `\r\n\r\n` per row (extra blank lines between rows). Single-line fix (`lineterminator="\n"`) applied across the entire CSV surface.

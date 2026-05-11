@@ -139,3 +139,53 @@ BLOCK = _const("\u2588")      # "\u2588" or "#"
 TIMES = _const("\u00d7")      # "\u00d7" or "x"
 WARN = _const("\u26a0")       # "\u26a0" or "!"   (v1.7.30)
 SUPER2 = _const("\u00b2")     # "\u00b2" or "^2"  (v1.7.33, R-squared)
+
+
+# ---------------------------------------------------------------------------
+# CSV writer helper (v1.7.37)
+# ---------------------------------------------------------------------------
+#
+# Centralizes the CSV writer construction so the v1.7.36 lineterminator
+# fix and the v1.7.37 dialect parameter stay in one place. Every CLI
+# command that emits record-shaped data to stdout calls this instead
+# of constructing a csv.writer directly.
+#
+# Two dialects supported:
+#   - 'csv' (default): RFC 4180 comma-separated, QUOTE_MINIMAL
+#   - 'tsv'          : tab-separated, no quoting changes (csv.writer
+#                      still quotes cells containing tabs/newlines/
+#                      delimiters per RFC 4180 semantics)
+#
+# The lineterminator='\n' setting is the v1.7.36 fix for the Windows
+# blank-line bug (csv.writer default '\r\n' + text-mode stdout newline
+# translation = '\r\n\r\n' per row on Windows). Keeping it here means
+# every CSV-emitting command gets the fix automatically.
+
+
+def build_csv_writer(stream, dialect: str = "csv"):
+    """Build a csv.writer with the requested dialect.
+
+    Args:
+        stream: Any writable text-mode stream (typically ``sys.stdout``
+            or an open file handle).
+        dialect: ``'csv'`` (default, RFC 4180 comma-separated) or
+            ``'tsv'`` (tab-separated). Unknown values raise
+            :class:`ValueError` so CLI commands can surface a clean
+            error to the user before any rows are emitted.
+
+    Returns:
+        A configured :class:`csv.writer` instance. Always uses
+        ``lineterminator='\\n'`` to prevent the Windows blank-line
+        bug fixed in v1.7.36.
+
+    Raises:
+        ValueError: if ``dialect`` is not ``'csv'`` or ``'tsv'``.
+    """
+    import csv as _csv
+    if dialect not in ("csv", "tsv"):
+        raise ValueError(
+            f"unknown csv dialect: {dialect!r}. "
+            f"Valid: 'csv', 'tsv'"
+        )
+    delimiter = "\t" if dialect == "tsv" else ","
+    return _csv.writer(stream, delimiter=delimiter, lineterminator="\n")
