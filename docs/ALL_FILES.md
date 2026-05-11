@@ -1,153 +1,198 @@
-# Curator — Flat Filename List
+# Curator — Authoritative Flat Filename List
 
-**Every single file across the Curator ecosystem, no descriptions, just filenames.**
-Generated 2026-05-10 from recursive walk of `Curator/`, `curatorplug-atrium-safety/`, `curatorplug-atrium-citation/` (excluding `.venv`, `__pycache__`, `.git`, `.pytest_cache`, etc.).
+**Generated 2026-05-10 directly from `git ls-files` across all three repos.**
+This is the **100% accurate** list. No omissions possible — `git ls-files` is the source of truth.
 
-**Total: 218 files** across 7 categories.
-
----
-
-## Production Python source (96 files)
-
-### Top-level + vendored
-
-```
-curator/__init__.py
-curator/_vendored/__init__.py
-curator/_vendored/ppdeep/__init__.py
-curator/_vendored/send2trash/__init__.py
-curator/_vendored/send2trash/exceptions.py
-curator/_vendored/send2trash/mac/__init__.py
-curator/_vendored/send2trash/plat_freedesktop.py
-curator/_vendored/send2trash/util.py
-curator/_vendored/send2trash/win/__init__.py
-curator/_vendored/send2trash/win/legacy.py
-curator/_vendored/send2trash/win/recycle_bin.py
-```
-
-### CLI
-
-```
-curator/cli/__init__.py
-curator/cli/main.py
-curator/cli/mcp_keys.py
-curator/cli/runtime.py
-```
-
-### Config
-
-```
-curator/config/__init__.py
-curator/config/defaults.py
-```
-
-### GUI
-
-```
-curator/gui/__init__.py
-curator/gui/dialogs.py
-curator/gui/launcher.py
-curator/gui/lineage_view.py
-curator/gui/main_window.py
-curator/gui/migrate_signals.py
-curator/gui/models.py
-```
-
-### MCP server
-
-```
-curator/mcp/__init__.py
-curator/mcp/auth.py
-curator/mcp/middleware.py
-curator/mcp/server.py
-curator/mcp/tools.py
-```
-
-### Models
-
-```
-curator/models/__init__.py
-curator/models/audit.py
-curator/models/base.py
-curator/models/bundle.py
-curator/models/file.py
-curator/models/jobs.py
-curator/models/lineage.py
-curator/models/migration.py
-curator/models/results.py
-curator/models/source.py
-curator/models/trash.py
-curator/models/types.py
-```
-
-### Plugins
-
-```
-curator/plugins/__init__.py
-curator/plugins/hookspecs.py
-curator/plugins/manager.py
-curator/plugins/core/__init__.py
-curator/plugins/core/audit_writer.py
-curator/plugins/core/classify_filetype.py
-curator/plugins/core/gdrive_source.py
-curator/plugins/core/lineage_filename.py
-curator/plugins/core/lineage_fuzzy_dup.py
-curator/plugins/core/lineage_hash_dup.py
-curator/plugins/core/local_source.py
-```
-
-### Services
-
-```
-curator/services/__init__.py
-curator/services/audit.py
-curator/services/bundle.py
-curator/services/classification.py
-curator/services/cleanup.py
-curator/services/code_project.py
-curator/services/document.py
-curator/services/fuzzy_index.py
-curator/services/gdrive_auth.py
-curator/services/hash_pipeline.py
-curator/services/lineage.py
-curator/services/migration.py
-curator/services/migration_retry.py
-curator/services/music.py
-curator/services/musicbrainz.py
-curator/services/organize.py
-curator/services/photo.py
-curator/services/safety.py
-curator/services/scan.py
-curator/services/trash.py
-curator/services/watch.py
-```
-
-### Storage
-
-```
-curator/storage/__init__.py
-curator/storage/connection.py
-curator/storage/exceptions.py
-curator/storage/migrations.py
-curator/storage/queries.py
-curator/storage/repositories/__init__.py
-curator/storage/repositories/_helpers.py
-curator/storage/repositories/audit_repo.py
-curator/storage/repositories/bundle_repo.py
-curator/storage/repositories/file_repo.py
-curator/storage/repositories/hash_cache_repo.py
-curator/storage/repositories/job_repo.py
-curator/storage/repositories/lineage_repo.py
-curator/storage/repositories/migration_job_repo.py
-curator/storage/repositories/source_repo.py
-curator/storage/repositories/trash_repo.py
-```
+**Total tracked files: 282** (246 Curator + 17 atrium-safety + 19 atrium-citation)
 
 ---
 
-## Tests (84 files)
+## CURATOR REPO — 246 files
 
-### Test infrastructure
+### Top-level files (8)
+
+```
+.gitignore
+BUILD_TRACKER.md
+CHANGELOG.md
+DESIGN.md
+DESIGN_PHASE_DELTA.md
+ECOSYSTEM_DESIGN.md
+README.md
+pyproject.toml
+```
+
+### Github/ — repo metadata (2 files)
+
+```
+Github/CURATOR_RESEARCH_NOTES.md
+Github/PROCUREMENT_INDEX.md
+```
+
+### examples/ — sample/demo code (1 files)
+
+```
+examples/watch_demo.py
+```
+
+### src/ — Python source (93 files)
+
+**`src/curator/(top-level)/`** — 2 files
+
+```
+src/curator/__init__.py
+src/curator/py.typed
+```
+
+**`src/curator/_vendored/`** — 3 files
+
+```
+src/curator/_vendored/LICENSE-PPDEEP.txt
+src/curator/_vendored/LICENSE-SEND2TRASH.txt
+src/curator/_vendored/__init__.py
+```
+
+**`src/curator/_vendored/ppdeep/`** — 1 files
+
+```
+src/curator/_vendored/ppdeep/__init__.py
+```
+
+**`src/curator/_vendored/send2trash/`** — 8 files
+
+```
+src/curator/_vendored/send2trash/__init__.py
+src/curator/_vendored/send2trash/exceptions.py
+src/curator/_vendored/send2trash/mac/__init__.py
+src/curator/_vendored/send2trash/plat_freedesktop.py
+src/curator/_vendored/send2trash/util.py
+src/curator/_vendored/send2trash/win/__init__.py
+src/curator/_vendored/send2trash/win/legacy.py
+src/curator/_vendored/send2trash/win/recycle_bin.py
+```
+
+**`src/curator/cli/`** — 4 files
+
+```
+src/curator/cli/__init__.py
+src/curator/cli/main.py
+src/curator/cli/mcp_keys.py
+src/curator/cli/runtime.py
+```
+
+**`src/curator/config/`** — 2 files
+
+```
+src/curator/config/__init__.py
+src/curator/config/defaults.py
+```
+
+**`src/curator/gui/`** — 7 files
+
+```
+src/curator/gui/__init__.py
+src/curator/gui/dialogs.py
+src/curator/gui/launcher.py
+src/curator/gui/lineage_view.py
+src/curator/gui/main_window.py
+src/curator/gui/migrate_signals.py
+src/curator/gui/models.py
+```
+
+**`src/curator/mcp/`** — 5 files
+
+```
+src/curator/mcp/__init__.py
+src/curator/mcp/auth.py
+src/curator/mcp/middleware.py
+src/curator/mcp/server.py
+src/curator/mcp/tools.py
+```
+
+**`src/curator/models/`** — 12 files
+
+```
+src/curator/models/__init__.py
+src/curator/models/audit.py
+src/curator/models/base.py
+src/curator/models/bundle.py
+src/curator/models/file.py
+src/curator/models/jobs.py
+src/curator/models/lineage.py
+src/curator/models/migration.py
+src/curator/models/results.py
+src/curator/models/source.py
+src/curator/models/trash.py
+src/curator/models/types.py
+```
+
+**`src/curator/plugins/`** — 11 files
+
+```
+src/curator/plugins/__init__.py
+src/curator/plugins/core/__init__.py
+src/curator/plugins/core/audit_writer.py
+src/curator/plugins/core/classify_filetype.py
+src/curator/plugins/core/gdrive_source.py
+src/curator/plugins/core/lineage_filename.py
+src/curator/plugins/core/lineage_fuzzy_dup.py
+src/curator/plugins/core/lineage_hash_dup.py
+src/curator/plugins/core/local_source.py
+src/curator/plugins/hookspecs.py
+src/curator/plugins/manager.py
+```
+
+**`src/curator/services/`** — 21 files
+
+```
+src/curator/services/__init__.py
+src/curator/services/audit.py
+src/curator/services/bundle.py
+src/curator/services/classification.py
+src/curator/services/cleanup.py
+src/curator/services/code_project.py
+src/curator/services/document.py
+src/curator/services/fuzzy_index.py
+src/curator/services/gdrive_auth.py
+src/curator/services/hash_pipeline.py
+src/curator/services/lineage.py
+src/curator/services/migration.py
+src/curator/services/migration_retry.py
+src/curator/services/music.py
+src/curator/services/musicbrainz.py
+src/curator/services/organize.py
+src/curator/services/photo.py
+src/curator/services/safety.py
+src/curator/services/scan.py
+src/curator/services/trash.py
+src/curator/services/watch.py
+```
+
+**`src/curator/storage/`** — 17 files
+
+```
+src/curator/storage/__init__.py
+src/curator/storage/connection.py
+src/curator/storage/exceptions.py
+src/curator/storage/migrations.py
+src/curator/storage/queries.py
+src/curator/storage/repositories/__init__.py
+src/curator/storage/repositories/_helpers.py
+src/curator/storage/repositories/audit_repo.py
+src/curator/storage/repositories/bundle_repo.py
+src/curator/storage/repositories/file_repo.py
+src/curator/storage/repositories/hash_cache_repo.py
+src/curator/storage/repositories/job_repo.py
+src/curator/storage/repositories/lineage_repo.py
+src/curator/storage/repositories/migration_job_repo.py
+src/curator/storage/repositories/source_repo.py
+src/curator/storage/repositories/trash_repo.py
+src/curator/storage/schema_v1.sql
+```
+
+### tests/ — test suites (94 files)
+
+**`tests/infra/`** (infrastructure) — 7 files
 
 ```
 tests/conftest.py
@@ -159,7 +204,7 @@ tests/unit/__init__.py
 tests/unit/mcp/__init__.py
 ```
 
-### GUI tests (9)
+**`tests/gui/`** (gui (pytest-qt)) — 9 files
 
 ```
 tests/gui/test_gui_audit.py
@@ -173,7 +218,7 @@ tests/gui/test_gui_mutations.py
 tests/gui/test_gui_settings.py
 ```
 
-### Integration tests (25)
+**`tests/integration/`** (integration) — 25 files
 
 ```
 tests/integration/mcp/test_stdio.py
@@ -203,7 +248,7 @@ tests/integration/test_trash_restore.py
 tests/integration/test_watch_smoke.py
 ```
 
-### Unit tests (37)
+**`tests/unit/`** (unit) — 39 files
 
 ```
 tests/unit/mcp/test_tools.py
@@ -247,36 +292,54 @@ tests/unit/test_storage.py
 tests/unit/test_watch.py
 ```
 
-### Property + perf (4)
+**`tests/property/`** (property (Hypothesis)) — 1 files
 
 ```
-tests/perf/test_lineage_throughput.py
 tests/property/test_lineage_normalization.py
 ```
 
----
+**`tests/perf/`** (perf) — 1 files
 
-## Scripts (13 files)
+```
+tests/perf/test_lineage_throughput.py
+```
+
+**`tests/perf_results/`** (perf/results (JSON benchmarks)) — 12 files
+
+```
+tests/perf/results/index_build_scaling-20260506T205150.json
+tests/perf/results/index_build_scaling-20260506T212007.json
+tests/perf/results/index_build_scaling-20260506T223806.json
+tests/perf/results/lineage_throughput_n100-20260506T205107.json
+tests/perf/results/lineage_throughput_n100-20260506T211942.json
+tests/perf/results/lineage_throughput_n100-20260506T223749.json
+tests/perf/results/lineage_throughput_n1000-20260506T205110.json
+tests/perf/results/lineage_throughput_n1000-20260506T211944.json
+tests/perf/results/lineage_throughput_n1000-20260506T223750.json
+tests/perf/results/lineage_throughput_n10000-20260506T205135.json
+tests/perf/results/lineage_throughput_n10000-20260506T211959.json
+tests/perf/results/lineage_throughput_n10000-20260506T223800.json
+```
+
+### scripts/ — workflow + helper scripts (13 files)
 
 ```
 scripts/setup_gdrive_source.py
-scripts/workflows/_common.ps1
-scripts/workflows/01_initial_scan.ps1
 scripts/workflows/01_initial_scan.bat
-scripts/workflows/02_find_duplicates.ps1
+scripts/workflows/01_initial_scan.ps1
 scripts/workflows/02_find_duplicates.bat
-scripts/workflows/03_cleanup_junk.ps1
+scripts/workflows/02_find_duplicates.ps1
 scripts/workflows/03_cleanup_junk.bat
-scripts/workflows/04_audit_summary.ps1
+scripts/workflows/03_cleanup_junk.ps1
 scripts/workflows/04_audit_summary.bat
-scripts/workflows/05_health_check.ps1
+scripts/workflows/04_audit_summary.ps1
 scripts/workflows/05_health_check.bat
+scripts/workflows/05_health_check.ps1
 scripts/workflows/README.md
+scripts/workflows/_common.ps1
 ```
 
----
-
-## Installer (3 files)
+### installer/ — one-click installer (3 files)
 
 ```
 installer/Install-Curator.bat
@@ -284,24 +347,21 @@ installer/Install-Curator.ps1
 installer/README.md
 ```
 
----
-
-## Documentation — docs/ (23 files)
+### docs/ — documentation + screenshots (32 files)
 
 ```
 docs/AD_ASTRA_CONSTELLATION.md
+docs/ALL_FILES.md
 docs/APEX_INFO_REQUEST.md
 docs/APEX_INFO_RESPONSE.md
 docs/BUILDING_BLOCKS.md
 docs/CONCLAVE_LENSES_v2.md
 docs/CONCLAVE_PROPOSAL.md
+docs/CURATORPLUG_ATRIUM_CITATION_DESIGN.md
 docs/CURATOR_AUDIT_EVENT_HOOKSPEC_DESIGN.md
 docs/CURATOR_INVENTORY.md
 docs/CURATOR_MCP_HTTP_AUTH_DESIGN.md
 docs/CURATOR_MCP_SERVER_DESIGN.md
-docs/CURATORPLUG_ATRIUM_CITATION_DESIGN.md
-docs/design/GUI_V2_DESIGN.md
-docs/lessons/2026-05-09_install_mcp_session.md
 docs/NEXT_SESSION_CHECKLIST.md
 docs/PHASE_BETA_LSH.md
 docs/PHASE_BETA_WATCH.md
@@ -312,36 +372,33 @@ docs/TRACER_PHASE_3_DESIGN.md
 docs/TRACER_PHASE_4_DESIGN.md
 docs/TRACER_SESSION_B_RUNBOOK.md
 docs/USER_GUIDE.md
+docs/design/GUI_V2_DESIGN.md
+docs/lessons/2026-05-09_install_mcp_session.md
+docs/v034_gui_screenshot.png
+docs/v036_inspect_dialog.png
+docs/v037_audit_log.png
+docs/v038_settings.png
+docs/v039_inbox.png
+docs/v041_lineage_graph.png
+docs/v043_bundle_editor.png
+docs/v100a1_migration_demo.txt
 ```
 
 ---
 
-## Top-level Curator/ files (8 files)
+## CURATORPLUG-ATRIUM-SAFETY — 17 files
 
 ```
 .gitignore
-BUILD_TRACKER.md
 CHANGELOG.md
 DESIGN.md
-DESIGN_PHASE_DELTA.md
-ECOSYSTEM_DESIGN.md
-pyproject.toml
 README.md
-```
-
----
-
-## External plugin: curatorplug-atrium-safety (15 files)
-
-```
-CHANGELOG.md
-DESIGN.md
 pyproject.toml
-README.md
 src/curatorplug/atrium_safety/__init__.py
 src/curatorplug/atrium_safety/enforcer.py
 src/curatorplug/atrium_safety/exceptions.py
 src/curatorplug/atrium_safety/plugin.py
+src/curatorplug/atrium_safety/py.typed
 src/curatorplug/atrium_safety/verifier.py
 tests/conftest.py
 tests/integration/test_curator_runtime.py
@@ -353,19 +410,21 @@ tests/unit/test_verifier.py
 
 ---
 
-## External plugin: curatorplug-atrium-citation (17 files)
+## CURATORPLUG-ATRIUM-CITATION — 19 files
 
 ```
+.gitignore
 CHANGELOG.md
 DESIGN.md
 DESIGN_V0_2.md
-pyproject.toml
 README.md
+pyproject.toml
 src/curatorplug/atrium_citation/__init__.py
 src/curatorplug/atrium_citation/audit.py
 src/curatorplug/atrium_citation/cli.py
 src/curatorplug/atrium_citation/exceptions.py
 src/curatorplug/atrium_citation/plugin.py
+src/curatorplug/atrium_citation/py.typed
 src/curatorplug/atrium_citation/sweep.py
 tests/__init__.py
 tests/conftest.py
@@ -377,228 +436,34 @@ tests/unit/test_sweep.py
 
 ---
 
-## Total count by category
+## File extension breakdown (all 3 repos)
 
-| Category | Files |
+| Extension | Count |
 |---|---:|
-| Production Python source | 96 |
-| Curator tests | 84 |
-| Scripts (.ps1 / .bat / .py / .md) | 13 |
-| Installer | 3 |
-| docs/ markdown | 23 |
-| Top-level Curator/ files | 8 |
-| curatorplug-atrium-safety | 15 |
-| curatorplug-atrium-citation | 17 |
-| **TOTAL** | **218 files** |
+| `.py` | 196 |
+| `.md` | 41 |
+| `.json` | 12 |
+| `.png` | 7 |
+| `.ps1` | 7 |
+| `.bat` | 6 |
+| `.gitignore` | 3 |
+| `.txt` | 3 |
+| `.toml` | 3 |
+| `.typed` | 3 |
+| `.sql` | 1 |
+
+**Total: 282 files**
 
 ---
 
-## Just filenames (no paths) — alphabetical
+## Verification command
 
-If you want to search/grep for any single filename without worrying about directory structure:
+Reproduce this list at any time:
 
+```powershell
+cd C:\Users\jmlee\Desktop\AL\Curator;                                git ls-files | Measure-Object
+cd C:\Users\jmlee\Desktop\AL\curatorplug-atrium-safety;               git ls-files | Measure-Object
+cd C:\Users\jmlee\Desktop\AL\curatorplug-atrium-citation;             git ls-files | Measure-Object
 ```
-__init__.py                              (many copies)
-_common.ps1
-_helpers.py
-.gitignore
-01_initial_scan.bat
-01_initial_scan.ps1
-02_find_duplicates.bat
-02_find_duplicates.ps1
-03_cleanup_junk.bat
-03_cleanup_junk.ps1
-04_audit_summary.bat
-04_audit_summary.ps1
-05_health_check.bat
-05_health_check.ps1
-AD_ASTRA_CONSTELLATION.md
-APEX_INFO_REQUEST.md
-APEX_INFO_RESPONSE.md
-audit.py                                 (4 copies)
-audit_repo.py
-audit_writer.py
-auth.py
-base.py
-bundle.py                                (3 copies)
-bundle_repo.py
-BUILD_TRACKER.md
-BUILDING_BLOCKS.md
-CHANGELOG.md                             (3 copies — Curator, safety, citation)
-classification.py
-classify_filetype.py
-cleanup.py
-cli.py                                   (atrium-citation)
-code_project.py
-CONCLAVE_LENSES_v2.md
-CONCLAVE_PROPOSAL.md
-conftest.py                              (3 copies)
-connection.py
-CURATOR_AUDIT_EVENT_HOOKSPEC_DESIGN.md
-CURATOR_INVENTORY.md
-CURATOR_MCP_HTTP_AUTH_DESIGN.md
-CURATOR_MCP_SERVER_DESIGN.md
-CURATORPLUG_ATRIUM_CITATION_DESIGN.md
-defaults.py
-DESIGN.md                                (3 copies — Curator, safety, citation)
-DESIGN_PHASE_DELTA.md
-DESIGN_V0_2.md
-dialogs.py
-document.py
-ECOSYSTEM_DESIGN.md
-enforcer.py
-exceptions.py                            (3 copies)
-file.py
-file_repo.py
-fuzzy_index.py
-gdrive_auth.py
-gdrive_source.py
-GUI_V2_DESIGN.md
-hash_cache_repo.py
-hash_pipeline.py
-hookspecs.py
-Install-Curator.bat
-Install-Curator.ps1
-job_repo.py
-jobs.py
-launcher.py
-legacy.py
-lineage.py                               (2 copies — model + service)
-lineage_filename.py
-lineage_fuzzy_dup.py
-lineage_hash_dup.py
-lineage_repo.py
-lineage_view.py
-local_source.py
-main.py
-main_window.py
-manager.py
-mcp_keys.py
-middleware.py
-migrate_signals.py
-migration.py                             (2 copies — model + service)
-migration_job_repo.py
-migration_retry.py
-migrations.py
-models.py                                (2 copies — gui/ + models/)
-music.py
-musicbrainz.py
-NEXT_SESSION_CHECKLIST.md
-organize.py
-photo.py
-PHASE_BETA_LSH.md
-PHASE_BETA_WATCH.md
-plat_freedesktop.py
-plugin.py                                (2 copies — safety, citation)
-PLUGIN_INIT_HOOKSPEC_DESIGN.md
-ppdeep/__init__.py
-pyproject.toml                           (3 copies — Curator, safety, citation)
-queries.py
-README.md                                (5 copies — Curator, workflows, installer, safety, citation)
-recycle_bin.py
-results.py
-ROADMAP.md
-runtime.py
-safety.py
-scan.py
-server.py
-setup_gdrive_source.py
-source.py
-source_repo.py
-sweep.py
-test_audit_emission.py
-test_audit_writer.py
-test_cleanup.py
-test_cleanup_duplicates.py
-test_cleanup_fuzzy_duplicates.py
-test_cleanup_index_sync.py
-test_cli.py                              (atrium-citation)
-test_cli_bundles.py
-test_cli_cleanup.py
-test_cli_cleanup_duplicates.py
-test_cli_gdrive_auth.py
-test_cli_migrate.py
-test_cli_organize.py
-test_cli_organize_code.py
-test_cli_read_commands.py
-test_cli_safety.py
-test_cli_scan_group_doctor.py
-test_cli_sources.py
-test_cli_stage.py
-test_cli_trash_restore.py
-test_code_project.py
-test_curator_runtime.py
-test_curator_source_rename.py
-test_document.py
-test_enforcer.py
-test_fuzzy_index.py
-test_gdrive_auth.py
-test_gdrive_source.py
-test_gdrive_source_v151_config_resolution.py
-test_gui_audit.py
-test_gui_bundle_editor.py
-test_gui_inbox.py
-test_gui_inspect.py
-test_gui_lineage.py
-test_gui_migrate.py
-test_gui_models.py
-test_gui_mutations.py
-test_gui_settings.py
-test_lineage_detectors.py
-test_lineage_lsh_equivalence.py
-test_lineage_normalization.py
-test_lineage_throughput.py
-test_mcp_auth.py
-test_mcp_http_auth.py
-test_mcp_keys_cli.py
-test_migration.py
-test_migration_cross_source.py
-test_migration_phase2.py
-test_migration_phase3_conflict.py
-test_migration_phase3_retry.py
-test_migration_phase4_cross_source_conflict.py
-test_migration_v141_sentinel_defaults.py
-test_models.py
-test_music.py
-test_music_enrichment.py
-test_music_mb_enrichment.py
-test_organize.py
-test_organize_apply.py
-test_organize_document.py
-test_organize_flow.py
-test_organize_index_sync.py
-test_organize_mb_enrichment.py
-test_organize_music.py
-test_organize_photo.py
-test_organize_stage.py
-test_photo.py
-test_plugin.py                           (2 copies — safety, citation)
-test_plugin_manager.py
-test_re_read_verification.py
-test_recycle_bin.py
-test_safety.py
-test_scan_flow.py
-test_scan_paths.py
-test_send2trash_cross_platform.py
-test_source_write_hook.py
-test_stdio.py
-test_storage.py
-test_sweep.py
-test_tools.py
-test_trash_restore.py
-test_verifier.py
-test_watch.py
-test_watch_smoke.py
-tools.py
-TRACER_PHASE_2_DESIGN.md
-TRACER_PHASE_3_DESIGN.md
-TRACER_PHASE_4_DESIGN.md
-TRACER_SESSION_B_RUNBOOK.md
-trash.py                                 (2 copies — model + service)
-trash_repo.py
-types.py
-USER_GUIDE.md
-util.py
-verifier.py
-watch.py
-```
+
+As of 2026-05-10: Curator=246, atrium-safety=17, atrium-citation=19, TOTAL=282.

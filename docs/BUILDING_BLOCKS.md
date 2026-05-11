@@ -29,12 +29,14 @@ Organized by architectural tier from the inside out: **Models → Storage → Pl
 
 ---
 
-## Tier 1.5: Vendored libraries (`src/curator/_vendored/`) — 10 files
+## Tier 1.5: Vendored libraries (`src/curator/_vendored/`) — 12 files
 
 Third-party libraries bundled directly into Curator (no external pip dependency). Vendored to keep the install footprint small and avoid version drift.
 
 ```
 _vendored/__init__.py                       Subpackage marker
+_vendored/LICENSE-PPDEEP.txt                BSD license for ppdeep (required by terms)
+_vendored/LICENSE-SEND2TRASH.txt            BSD license for send2trash (required by terms)
 _vendored/ppdeep/__init__.py                (8 KB)  Pure-Python ssdeep fuzzy hash implementation
 _vendored/send2trash/__init__.py            (2 KB)  Cross-platform send2trash entry point
 _vendored/send2trash/exceptions.py          send2trash error types
@@ -46,7 +48,7 @@ _vendored/send2trash/win/legacy.py          (7 KB)  Pre-Vista shell API path
 _vendored/send2trash/win/recycle_bin.py     (9 KB)  Modern IFileOperation API path
 ```
 
-**Why this matters:** `send2trash` powers `curator trash` (sends files to OS Recycle Bin reversibly). `ppdeep` powers the `lineage_fuzzy_dup` plugin's NEAR_DUPLICATE detection. Both are bundled so users don't need extra pip installs.
+**Why this matters:** `send2trash` powers `curator trash` (sends files to OS Recycle Bin reversibly). `ppdeep` powers the `lineage_fuzzy_dup` plugin's NEAR_DUPLICATE detection. Both are bundled so users don't need extra pip installs. The LICENSE-*.txt files are required by both libraries' BSD licenses.
 
 ---
 
@@ -58,6 +60,46 @@ config/defaults.py    (2 KB)  Default values + path resolution (db_path, log lev
 ```
 
 **Why this matters:** Every entry point (CLI, GUI, MCP) starts by calling `Config.load()`. Reads `curator.toml` per the search order, applies env overrides (`CURATOR_CONFIG`, `CURATOR_LOG_LEVEL`), then CLI flags. Returns a frozen Config that everything else consumes.
+
+---
+
+---
+
+## Examples (`Curator/examples/`) — 1 file
+
+```
+examples/watch_demo.py        Minimal demo of `curator watch` programmatic API — useful as an embedding-Curator template
+```
+
+---
+
+## Documentation assets (in `docs/`)
+
+In addition to the 23 markdown files, `docs/` contains 8 binary/data files:
+
+```
+docs/v034_gui_screenshot.png       PySide6 main window v0.34 (initial GUI release)
+docs/v036_inspect_dialog.png       FileInspectDialog v0.36 (metadata + lineage + bundles tabs)
+docs/v037_audit_log.png            Audit Log tab v0.37
+docs/v038_settings.png             Settings tab v0.38
+docs/v039_inbox.png                Inbox tab v0.39 (default landing tab)
+docs/v041_lineage_graph.png        Lineage Graph tab v0.41 (networkx-rendered)
+docs/v043_bundle_editor.png        BundleEditorDialog v0.43
+docs/v100a1_migration_demo.txt     Plain-text dump of the v1.0.0a1 Tracer Phase 1 migration demo run
+```
+
+**Why this matters:** These screenshots are referenced in CHANGELOG entries and README.md to show what each GUI iteration looked like. Useful when comparing the current state vs historical baselines.
+
+---
+
+## Repo metadata (`Curator/Github/`) — 2 files
+
+```
+Github/CURATOR_RESEARCH_NOTES.md       Notes file for GitHub-side research / link curation (~external)
+Github/PROCUREMENT_INDEX.md            Index of procurement / sourcing notes
+```
+
+**Why this matters:** Loose collection of notes that didn't fit anywhere else but were worth tracking in the repo. Not part of the runtime.
 
 ---
 
@@ -84,7 +126,7 @@ models/types.py                FileInfo, FileStat, ChangeEvent, ChangeKind, Sour
 
 ---
 
-## Tier 3: Storage Primitives (`src/curator/storage/`) — 5 files
+## Tier 3: Storage Primitives (`src/curator/storage/`) — 6 files
 
 The SQLite plumbing under the repositories.
 
@@ -94,9 +136,10 @@ storage/connection.py          CuratorDB — wraps sqlite3 with WAL mode, init()
 storage/exceptions.py          StorageError + 3 subclasses (EntityNotFoundError, DuplicateEntityError, MigrationError)
 storage/migrations.py          Schema migration runner — 2 numbered migrations (001_initial, 002_migration_jobs_and_progress)
 storage/queries.py             FileQuery — composable filter object (source_id, path-glob, size, mtime, file_type)
+storage/schema_v1.sql          The canonical schema DDL — every CREATE TABLE / INDEX statement. Migration 001 reads this.
 ```
 
-**Why this matters:** All DB access goes through `CuratorDB`. WAL mode is configured here. Schema versioning lives in `migrations.py`.
+**Why this matters:** All DB access goes through `CuratorDB`. WAL mode is configured here. Schema versioning lives in `migrations.py`. `schema_v1.sql` is the readable source-of-truth for the table layouts (the migrations.py Python just executes this).
 
 ---
 
@@ -298,6 +341,41 @@ Plus external plugin tests:
 
 ---
 
+## Performance test result snapshots (`tests/perf/results/`) — 12 JSON files
+
+Benchmark results from 3 historical runs of the two perf tests, captured at gates v0.45 / v0.46 / v0.47 (2026-05-06):
+
+```
+tests/perf/results/index_build_scaling-20260506T205150.json
+tests/perf/results/index_build_scaling-20260506T212007.json
+tests/perf/results/index_build_scaling-20260506T223806.json
+tests/perf/results/lineage_throughput_n100-20260506T205107.json
+tests/perf/results/lineage_throughput_n100-20260506T211942.json
+tests/perf/results/lineage_throughput_n100-20260506T223749.json
+tests/perf/results/lineage_throughput_n1000-20260506T205110.json
+tests/perf/results/lineage_throughput_n1000-20260506T211944.json
+tests/perf/results/lineage_throughput_n1000-20260506T223750.json
+tests/perf/results/lineage_throughput_n10000-20260506T205135.json
+tests/perf/results/lineage_throughput_n10000-20260506T211959.json
+tests/perf/results/lineage_throughput_n10000-20260506T223800.json
+```
+
+Used for regression comparison: a future perf run's JSON gets diffed against the last snapshot to detect throughput drops.
+
+---
+
+## PEP 561 type-marker files — 3 files
+
+Empty files that tell Python type checkers (`mypy`, `pyright`) the package ships inline type annotations:
+
+```
+src/curator/py.typed                                  Curator's marker
+curatorplug-atrium-safety/src/curatorplug/atrium_safety/py.typed       Safety plugin marker
+curatorplug-atrium-citation/src/curatorplug/atrium_citation/py.typed   Citation plugin marker
+```
+
+---
+
 ## Workflow scripts (`Curator/scripts/workflows/`) — 13 files
 
 ```
@@ -376,24 +454,36 @@ Curator/ECOSYSTEM_DESIGN.md         (37 KB)    Where Curator fits in the Ad Astr
 
 ---
 
-## File counts by tier
+## File counts by tier (verified against git ls-files)
 
-| Tier | Files | Total KB | Largest single file |
-|---|---:|---:|---|
-| Models | 12 | 27 | `results.py` (4 KB) |
-| Storage primitives | 5 | 17 | `connection.py` (5 KB) |
-| Repositories | 11 | 67 | `migration_job_repo.py` (16 KB) |
-| Plugin framework | 11 | 87 | `gdrive_source.py` (32 KB) |
-| Services | 21 | 396 | `migration.py` (131 KB) |
-| CLI | 4 | 141 | `main.py` (117 KB) |
-| GUI | 7 | 165 | `main_window.py` (61 KB) |
-| MCP | 5 | 66 | `tools.py` (30 KB) |
-| Tests (Curator) | 81 | ~500 | various |
-| External plugins | 11 | 86 | `plugin.py` atrium-safety (20 KB) |
-| Workflows | 6 | 30 | `03_cleanup_junk.ps1` (10 KB) |
-| Installer | 3 | 40 | `Install-Curator.ps1` (32 KB) |
-| **Curator total (no tests)** | **96** | **1,036** | — |
-| **With tests** | **177** | **~1,536** | — |
+| Tier / Category | Files | Notes |
+|---|---:|---|
+| Vendored libraries | 12 | send2trash + ppdeep + LICENSE files |
+| Config | 2 | Config dataclass + defaults |
+| Models | 12 | Pydantic dataclasses |
+| Storage primitives | 6 | DB + 2 migrations + schema_v1.sql |
+| Repositories | 11 | One per entity table |
+| Plugin framework | 11 | hookspecs + 9 built-in plugins |
+| Services | 21 | Business logic |
+| CLI | 4 | Typer subcommands |
+| GUI | 7 | PySide6 desktop |
+| MCP server | 5 | FastMCP tools + auth |
+| PEP 561 markers | 1 | py.typed |
+| **Curator src/ total** | **92** | All Python + SQL + py.typed + LICENSE |
+| Tests (production) | 82 | Excludes perf/results JSON |
+| Tests (perf results JSON) | 12 | Historical benchmark snapshots |
+| **Curator tests/ total** | **94** | All test artifacts |
+| Workflow scripts | 13 | .ps1 + .bat + README |
+| Installer | 3 | .bat + .ps1 + README |
+| docs/ markdown | 23 | Design + user docs |
+| docs/ binary assets | 8 | 7 PNGs + 1 demo TXT |
+| Github/ | 2 | Loose metadata notes |
+| examples/ | 1 | watch_demo.py |
+| Top-level Curator/ | 8 | pyproject + .gitignore + 6 design/changelog .md |
+| **CURATOR REPO TOTAL** | **246** | Verified via `git ls-files` |
+| atrium-safety | 17 | 6 src + 6 tests + 5 metadata |
+| atrium-citation | 19 | 7 src + 6 tests + 6 metadata |
+| **GRAND TOTAL (all 3 repos)** | **282** | |
 
 ---
 
@@ -416,4 +506,27 @@ installer/Install-Curator.ps1             If install / re-install behaves weirdl
 
 ---
 
-**Total source surface: ~96 production files + 81 test files = 177 Python/PowerShell artifacts** that together comprise the Curator runtime, plus the 21 doc files (the `INVENTORY` doc covers those separately).
+**Verifying the counts:**
+
+```powershell
+cd C:\Users\jmlee\Desktop\AL\Curator;                              git ls-files | Measure-Object | Select-Object -Expand Count    # → 246
+cd C:\Users\jmlee\Desktop\AL\curatorplug-atrium-safety;             git ls-files | Measure-Object | Select-Object -Expand Count    # → 17
+cd C:\Users\jmlee\Desktop\AL\curatorplug-atrium-citation;           git ls-files | Measure-Object | Select-Object -Expand Count    # → 19
+```
+
+The authoritative cross-reference document with every file individually listed is `docs/ALL_FILES.md` — regenerated from `git ls-files` so it can never drift from the truth.
+
+---
+
+**Total source surface: 282 git-tracked files** across the Curator repo and two plugin repos. Of these:
+- **196 are Python** (`.py`)
+- **41 are Markdown** (`.md`)
+- **12 are JSON** (perf result snapshots)
+- **7 are PNG screenshots**
+- **7 are PowerShell** (`.ps1`)
+- **6 are batch** (`.bat`)
+- **3 are TOML** (`pyproject.toml` x 3)
+- **3 are LICENSE/demo TXT**
+- **3 are PEP 561 `py.typed` markers**
+- **3 are `.gitignore`**
+- **1 is SQL** (`schema_v1.sql`)
