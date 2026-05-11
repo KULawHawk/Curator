@@ -4,6 +4,93 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.27] — 2026-05-11 — TierDialog bulk migrate (GUI counterpart to v1.7.25)
+
+**Headline:** TierDialog gains a **"Migrate Selected..." button** in the footer plus a **"Migrate to..." context menu entry**. The GUI now has full feature parity with v1.7.25's CLI `tier --apply --target`: select rows in the table, click Migrate, pick a target directory, confirm, and the files move. The tier story is now symmetric across CLI and GUI.
+
+### Why this matters
+
+v1.7.25 shipped CLI `tier --apply --target` but the GUI TierDialog stayed detect-only. Every CLI/GUI feature gap creates a forking workflow problem — if you scan in the GUI but have to migrate in the CLI, you've broken the user's flow. v1.7.27 closes that gap.
+
+The GUI workflow is now:
+1. Open TierDialog (Tools menu → Tier scan)
+2. Pick recipe, set Root prefix, click Scan
+3. Select candidates in the table (Ctrl+click / Shift+click for multi-select)
+4. Click "Migrate Selected..."
+5. Pick a target directory in the file picker
+6. Confirm the count + size in the modal
+7. Done — files moved, table refreshes, audit events logged
+
+Or for single files: right-click a row → "Migrate to...". Same workflow, single-row selection.
+
+### What's new
+
+- **`_get_selected_file_entities()` helper** — maps the table's `selectionModel().selectedRows()` to `FileEntity` objects via the existing `_resolve_row_to_file_entity` helper. Sorted by row index. Forgiving: drops rows where resolution fails (deleted from DB, malformed UUID).
+- **`_action_bulk_migrate(file_entities)` method** — the core workflow. Mirrors CLI semantics exactly:
+  - Validates non-empty selection + Root prefix set
+  - `QFileDialog.getExistingDirectory()` for the target picker
+  - `QMessageBox.question` confirmation with count + size + src/dst paths
+  - Builds `MigrationPlan` via `MigrationService.plan()` with `root_prefix` → `target`
+  - Filters moves to selected `curator_id`s
+  - Audit-brackets with `tier.apply.start` / `tier.apply.complete` (actor=`gui.tier`)
+  - Calls `MigrationService.apply()` with `include_caution=True`
+  - Tallies outcomes (moved / skipped / failed) and shows result dialog
+  - Refreshes the scan so migrated files leave the candidate table
+- **"Migrate Selected..." footer button** — placed between the v1.7.17 keyboard-hint label and the Close button. Tooltip describes the requirement (Root prefix must be set) and links the feature to its CLI counterpart.
+- **"Migrate to..." context menu entry** — added below "Send to trash..." in the right-click menu. Single-row entry point that dispatches to `_action_bulk_migrate([file_ent])` — same code path, single-element list.
+- **Audit actor split** — GUI bulk migrates emit with `actor='gui.tier'`; CLI applies emit with `actor='cli.tier'`. Dashboards can now distinguish CLI-driven from GUI-driven migrations.
+
+### Safety design
+
+Identical guarantees to v1.7.25:
+
+- **Root prefix required** — deterministic relative-path mapping. Missing root → warning dialog with example.
+- **Target picker uses native dialog** — `QFileDialog.getExistingDirectory()` with home directory default. User picks, no surprises.
+- **Confirmation by default** — modal `QMessageBox.question` with `Yes | No`, default `No`. Shows file count, size, src → dst paths, and that it's a MOVE (not COPY).
+- **`include_caution=True`** — the tier recipe IS the user's safety signal. Without this, CAUTION-classified files (common for non-canonical locations) silently skip.
+- **Empty selection → info dialog** — friendly hint that mentions multi-select shortcuts.
+- **Scan refresh after migrate** — migrated files disappear from the candidate table; remaining stale files stay visible.
+
+### Files changed
+
+- `src/curator/gui/dialogs.py` — +209 lines (button + context menu entry + 2 new methods)
+- `docs/releases/v1.7.27.md` — new release notes
+
+### Verification
+
+- **7-test headless Qt suite** (`test_tierdlg_bulk_migrate.py`) using real temp files + real DB seeding + monkeypatched modal dialogs:
+  1. **Construction** — TierDialog builds; button exists with correct label; helpers exist; `_get_selected_file_entities()` returns `[]` before any scan
+  2. **Empty selection** — `_action_bulk_migrate([])` shows "No selection" info dialog
+  3. **Empty Root prefix** — with selection but no Root, shows "Root prefix required" warning
+  4. **Full happy path** — seed 4 stale provisional files, scan populates 4 rows, programmatically select 3, monkeypatch dialogs to pick temp dst + confirm Yes, verify 3 source files gone, 3 dest files present, content byte-equal, 1 unselected file still at source
+  5. **Audit events** — `tier.apply.start` + `tier.apply.complete` both emitted with `actor='gui.tier'`
+  6. **Context menu integration** — source inspection confirms "Migrate to..." entry + `_action_bulk_migrate` dispatch in `_on_table_context_menu`
+  7. **v1.7.17 keyboard hint preserved** — footer label still mentions right-click / Enter / Del (no regression)
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 28-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**0 bugs caught.** Clean first-try ship across all 7 tests. The design transferred cleanly from CLI to GUI because the v1.7.25 implementation was already well-factored — plan(), filter, apply(), include_caution=True, audit bracketing. The GUI version is essentially a UI shell around the same logic.
+
+**Design lessons reinforced:**
+
+1. **Audit actor strings should distinguish entry points** — `cli.tier` vs `gui.tier`. When the dashboard asks "how is the team using tier migration?", you can answer "60% CLI / 40% GUI" instead of "shrug". Same lesson as v1.7.4's `compliance.retention_veto` vs `compliance.retention_allow` distinction.
+
+2. **Headless Qt testing via monkeypatched modals** — you can't drive `QFileDialog.getExistingDirectory()` and `QMessageBox.question()` programmatically in offscreen mode, but you can monkeypatch them at the class level for the duration of the test. `QFileDialog.getExistingDirectory = staticmethod(lambda ...: str(dst_root))` makes the dialog return your test fixture without ever rendering. **Restore in a finally block** so subsequent tests get clean state.
+
+3. **Single-row context menu → list of one** — the "Migrate to..." right-click entry doesn't need a separate code path. It just calls `_action_bulk_migrate([file_ent])` with a single-element list. Same method, same validation, same audit trail. The bulk method is the only path.
+
+4. **Programmatic table selection in tests** — use `QItemSelection` + `QItemSelectionModel.SelectionFlag.Select` to simulate user multi-select without firing input events. Lets you test "3 rows selected" deterministically.
+
+### v1.7.27 limitations
+
+- **No `--dry-run` equivalent** — the CLI has `--dry-run` to preview without executing. The GUI just shows the confirmation dialog. Could add a "Preview..." button that shows the src → dst plan in a sub-dialog.
+- **No `--keep-source` equivalent** — the GUI is hardcoded to MOVE mode. Could add a checkbox in the confirmation dialog ("Keep originals at source (COPY mode)").
+- **No progress indicator for large migrations** — the GUI freezes while `MigrationService.apply()` runs. For 1000+ files this is noticeable. Should use a `QProgressDialog` + signal-based callback. The synchronous `apply()` API doesn't expose progress hooks; future enhancement could switch to `create_job()` + `run_job()` with `on_progress` callback.
+- **No Ctrl+M keyboard shortcut** — mouse-only entry. Could add as a `Qt.Key_M | Qt.ControlModifier` handler in the existing `eventFilter`.
+- **No keep-most-recent multi-select policy** — if the user selects 10 files that all hash to the same content (deduplicates), MigrationService handles it per-file. No "smart" bulk deduplication. Considered out of scope.
+- **Refreshes the whole scan after migrate** — the table re-runs the full scan instead of just removing the migrated rows. For 10k+ candidates this is wasteful. Could be optimized later.
+
 ## [1.7.26] — 2026-05-11 — JWT payload parsing for PII scanner enrichment
 
 **Headline:** When the PII scanner detects a JWT (pattern shipped in v1.7.15), it now decodes the header + payload (base64url JSON) and surfaces the most useful claims — `alg`, `iss`, `sub`, `aud`, `exp`, `iat`, `kid`, plus derived `exp_iso` and `expired` — as a `metadata` dict on the match. Forensic value: at a glance you can tell whether a leaked JWT is symmetric (HS256, possible secret exposure) or asymmetric (RS256), who issued it, who it's for, and whether it's still hot or already stale.

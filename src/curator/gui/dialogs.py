@@ -3513,6 +3513,7 @@ class TierDialog(QDialog):
         # v1.7.17: discoverability hint for the keyboard shortcuts shipped
         # in v1.7.16. Shown to the left of the Close button at low visual
         # weight (8pt, slate gray).
+        # v1.7.27: hint extended to mention bulk migrate button.
         footer = QHBoxLayout()
         self._kbd_hint_label = QLabel(
             "<i>Tip: right-click for actions • "
@@ -3523,6 +3524,20 @@ class TierDialog(QDialog):
         )
         footer.addWidget(self._kbd_hint_label)
         footer.addStretch(1)
+        # v1.7.27: bulk migrate button (GUI counterpart to CLI tier --apply,
+        # shipped in v1.7.25). Operates on whatever rows are selected at
+        # click time; requires Root prefix to be set for path mapping.
+        self._btn_migrate = QPushButton("Migrate Selected...")
+        self._btn_migrate.setToolTip(
+            "Migrate selected candidate files to a chosen target directory.\n"
+            "Requires the 'Root prefix' field to be set. MOVE mode with\n"
+            "hash-verified deletion of source after successful copy.\n"
+            "(GUI counterpart to: curator tier <recipe> --apply --target X --root Y)"
+        )
+        self._btn_migrate.clicked.connect(
+            lambda: self._action_bulk_migrate(self._get_selected_file_entities())
+        )
+        footer.addWidget(self._btn_migrate)
         btn_close = QPushButton("Close")
         btn_close.clicked.connect(self.accept)
         footer.addWidget(btn_close)
@@ -3764,6 +3779,16 @@ class TierDialog(QDialog):
             lambda _checked=False, f=file_ent: self._action_send_to_trash(f)
         )
 
+        # --- v1.7.27: Bulk migrate (single-row entry point) ---
+        # Same action as the footer button, but operates on the
+        # right-clicked row instead of the table selection. This lets
+        # the user migrate one file at a time without clicking it first.
+        menu.addSeparator()
+        act_migrate = menu.addAction("Migrate to...")
+        act_migrate.triggered.connect(
+            lambda _checked=False, f=file_ent: self._action_bulk_migrate([f])
+        )
+
         menu.exec(self._table.viewport().mapToGlobal(pos))
 
     def _action_inspect(self, file_ent) -> None:
@@ -3848,6 +3873,216 @@ class TierDialog(QDialog):
             return
 
         # Re-run the scan so the trashed file disappears from the table
+        self._on_scan_clicked()
+
+    # ------------------------------------------------------------------
+    # v1.7.27: bulk migrate — GUI counterpart to CLI 'tier --apply --target'
+    # (shipped in v1.7.25). Mirrors the CLI's semantics:
+    #   - Requires Root prefix (deterministic relative-path mapping)
+    #   - Uses MigrationService.plan() + filter pattern
+    #   - Passes include_caution=True (the tier classification IS the
+    #     user's explicit safety signal)
+    #   - Emits tier.apply.start + tier.apply.complete audit events
+    #     with actor='gui.tier' (distinct from CLI's 'cli.tier')
+    # ------------------------------------------------------------------
+    def _get_selected_file_entities(self) -> list:
+        """Return FileEntity objects for every currently selected table row.
+
+        Sorted by row index (top-down). Rows that fail row->entity
+        resolution (deleted from DB, malformed UUID, etc.) are silently
+        dropped — the same forgiving behavior as the existing context
+        menu and keyboard shortcut paths.
+        """
+        sel_model = self._table.selectionModel()
+        if sel_model is None:
+            return []
+        rows = sorted({idx.row() for idx in sel_model.selectedRows()})
+        out: list = []
+        for row in rows:
+            ent = self._resolve_row_to_file_entity(row)
+            if ent is not None:
+                out.append(ent)
+        return out
+
+    def _action_bulk_migrate(self, file_entities: list) -> None:
+        """GUI counterpart to CLI 'curator tier --apply --target' (v1.7.27).
+
+        Workflow:
+          1. Validate input (non-empty, Root prefix set)
+          2. Pick a target directory via QFileDialog
+          3. Confirm with file count + total size
+          4. Build a MigrationPlan from Root prefix -> target, filter to
+             the selected curator_ids, dispatch to MigrationService.apply()
+          5. Show outcome summary; refresh the scan so migrated files
+             disappear from the candidate table
+
+        Audit-bracketed with tier.apply.start / tier.apply.complete events
+        (actor='gui.tier', distinct from CLI's 'cli.tier' so dashboards
+        can separate CLI-driven from GUI-driven applies).
+        """
+        from PySide6.QtWidgets import QFileDialog
+        from pathlib import Path as _Path
+
+        if not file_entities:
+            QMessageBox.information(
+                self, "No selection",
+                "Select at least one row in the table before clicking "
+                "Migrate. Use Ctrl+click or Shift+click to multi-select.",
+            )
+            return
+
+        root_prefix = self._le_root.text().strip()
+        if not root_prefix:
+            QMessageBox.warning(
+                self, "Root prefix required",
+                "Bulk migrate needs the 'Root prefix' field to be set so "
+                "source paths can be mapped to relative destination paths.\n\n"
+                "Fill in 'Root prefix' (e.g. C:/Users/jmlee/Work), re-scan, "
+                "then try again.\n\n"
+                "(The CLI equivalent requires the same: "
+                "--root <prefix> --target <dst>.)",
+            )
+            return
+
+        # Pick target dir
+        target = QFileDialog.getExistingDirectory(
+            self, "Choose migration target directory",
+            str(_Path.home()),
+        )
+        if not target:
+            return  # user cancelled
+
+        # Confirm
+        total_size = sum(f.size or 0 for f in file_entities)
+        size_mb = total_size / (1024 * 1024) if total_size else 0
+        confirm = QMessageBox.question(
+            self, "Confirm migration",
+            f"Migrate {len(file_entities)} file(s) ({size_mb:.1f} MB)?\n\n"
+            f"From: {root_prefix}\n"
+            f"To:   {target}\n\n"
+            f"This is a MOVE operation - source files will be deleted "
+            f"after a verified hash match at destination.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        # Resolve source_id (use form's selection, fall back to 'local')
+        selected_src = self._cb_source.currentData()
+        src_sid = selected_src if selected_src else "local"
+
+        # Build + filter plan
+        try:
+            full_plan = self.runtime.migration.plan(
+                src_source_id=src_sid,
+                src_root=root_prefix,
+                dst_root=target,
+            )
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "Plan failed",
+                f"Could not build migration plan:\n{type(e).__name__}: {e}",
+            )
+            return
+
+        selected_ids = {f.curator_id for f in file_entities}
+        filtered_moves = [
+            m for m in full_plan.moves if m.curator_id in selected_ids
+        ]
+        full_plan.moves = filtered_moves
+
+        if not filtered_moves:
+            QMessageBox.warning(
+                self, "No matching moves",
+                "Could not match any selected files to the migration plan. "
+                "This usually means the selected files live outside the "
+                "Root prefix, or have been removed/moved since the scan ran.",
+            )
+            return
+
+        # Audit: start
+        self.runtime.audit.log(
+            actor="gui.tier",
+            action="tier.apply.start",
+            entity_type="tier_apply",
+            entity_id="bulk",
+            details={
+                "src_root": root_prefix,
+                "target": target,
+                "candidate_count": len(filtered_moves),
+                "total_size_bytes": total_size,
+            },
+        )
+
+        # Execute
+        try:
+            migration_report = self.runtime.migration.apply(
+                full_plan,
+                keep_source=False,
+                include_caution=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "Migration failed",
+                f"{type(e).__name__}: {e}",
+            )
+            return
+
+        # Tally outcomes
+        moved = 0
+        failed = 0
+        skipped = 0
+        failures: list[tuple] = []
+        for m in migration_report.moves:
+            if m.outcome is None:
+                continue
+            name = m.outcome.name.upper()
+            if "MOVED" in name or "COPIED" in name:
+                moved += 1
+            elif "SKIPPED" in name:
+                skipped += 1
+            else:
+                failed += 1
+                failures.append((m.src_path, m.error or m.outcome.value))
+
+        # Audit: complete
+        self.runtime.audit.log(
+            actor="gui.tier",
+            action="tier.apply.complete",
+            entity_type="tier_apply",
+            entity_id="bulk",
+            details={
+                "moved": moved,
+                "failed": failed,
+                "skipped": skipped,
+                "total_size_bytes": total_size,
+            },
+        )
+
+        # Result dialog
+        summary = (
+            f"Moved/copied: {moved}\n"
+            f"Skipped:      {skipped}\n"
+            f"Failed:       {failed}"
+        )
+        if failures:
+            summary += "\n\nFailures:\n" + "\n".join(
+                f"  {p}: {e}" for p, e in failures[:5]
+            )
+            if len(failures) > 5:
+                summary += f"\n  ... and {len(failures) - 5} more"
+
+        icon = (
+            QMessageBox.Icon.Critical if failed
+            else QMessageBox.Icon.Information
+        )
+        result_msg = QMessageBox(
+            icon, "Migration complete", summary, parent=self,
+        )
+        result_msg.exec()
+
+        # Refresh the scan so migrated files leave the candidate table
         self._on_scan_clicked()
 
     @property
