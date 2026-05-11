@@ -42,6 +42,7 @@ from curator.services import (
 )
 from curator.services.forecast import ForecastService
 from curator.services.pii_scanner import PIIScanner
+from curator.services.metadata_stripper import MetadataStripper
 from curator.storage import CuratorDB
 from curator.storage.repositories import (
     AuditRepository,
@@ -101,6 +102,7 @@ class CuratorRuntime:
     migration: MigrationService
     forecast: ForecastService
     pii_scanner: PIIScanner
+    metadata_stripper: MetadataStripper
 
     # Output controls (set by CLI flags)
     json_output: bool = False
@@ -222,6 +224,7 @@ def build_runtime(
     )
     forecast = ForecastService(db)
     pii_scanner = PIIScanner()
+    metadata_stripper = MetadataStripper()
 
     return CuratorRuntime(
         config=config,
@@ -252,6 +255,7 @@ def build_runtime(
         migration=migration,
         forecast=forecast,
         pii_scanner=pii_scanner,
+        metadata_stripper=metadata_stripper,
         json_output=json_output,
         no_color=no_color,
         verbosity=verbosity,

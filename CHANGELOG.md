@@ -4,6 +4,72 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.7] — 2026-05-11 — T-B07 Metadata-Stripping Export Pipelines
+
+**Headline:** New `curator export-clean <src> <dst>` command copies files while stripping privacy-leaking metadata. Handles **images (EXIF/XMP/IPTC/PNG-text), DOCX (author/company props), and PDF (metadata dict)** in one pass. Source files never modified.
+
+### Why this matters
+
+Forensic + clinical work generates a steady stream of files that get shared externally — case reports to clients, scanned docs to lawyers, photos to colleagues. Embedded metadata in these files is a privacy leak: EXIF GPS coords reveal the photo's exact location, DOCX `dc:creator` reveals the author, PDF `/Producer` reveals what software opened a sensitive scan. A clean export pipeline solves this in one command.
+
+### What's new
+
+- **`services/metadata_stripper.py`** — new module (~330 lines) with:
+  - `MetadataStripper` service (stateless after init; thread-safe; pure functions of (src, dst))
+  - `StripResult` (per-file: outcome, bytes_in/out, fields_removed, error)
+  - `StripReport` (aggregate: duration, total/stripped/passthrough/skipped/failed counts)
+  - `StripOutcome` enum: STRIPPED / PASSTHROUGH / SKIPPED / FAILED
+- **4 format handlers:**
+  - **Images** (.jpg/.jpeg/.png/.tiff/.tif/.webp): Pillow re-save with detached metadata. EXIF, XMP, IPTC/Photoshop block, PNG text chunks (tEXt/iTXt/zTXt), JPEG comments all dropped. ICC profile kept by default (preserves color rendering on wide-gamut monitors; toggle off with `--drop-icc` for maximum scrub).
+  - **DOCX** (.docx/.docm/.dotx/.dotm): `docProps/core.xml` + `docProps/app.xml` replaced with minimal empty stubs via stdlib `zipfile`. `docProps/custom.xml` dropped entirely. Document content (`word/document.xml`, styles, media) preserved byte-for-byte.
+  - **PDF**: pypdf `PdfWriter` re-emit clears the metadata dict (`/Author /Creator /Producer /Title /Subject /Keywords /CreationDate /ModDate`). Pages preserved.
+  - **Other types**: byte-for-byte passthrough copy (caller can detect via `StripResult.outcome == PASSTHROUGH`).
+- **`curator export-clean <src> <dst>` CLI command** with flags:
+  - `--recursive / --no-recursive` (default: recursive for directory sources)
+  - `--ext .EXT` (repeatable; filter by extension)
+  - `--drop-icc` (also strip ICC color profiles from images)
+  - `--show-files` (print per-file outcomes; default = summary + failures only)
+  - `--json` (machine-readable output)
+- **`CuratorRuntime.metadata_stripper`** — wired into the runtime container for downstream consumers (future organize integration, MCP tools, GUI dialogs).
+
+### Files changed
+
+- `src/curator/services/metadata_stripper.py` — new module, +330 lines
+- `src/curator/cli/runtime.py` — +5 lines (import + field + construct + pass-through)
+- `src/curator/cli/main.py` — +141 lines (`export-clean` command; appended via concat-pattern after last release's de-indent lesson)
+- `docs/FEATURE_TODO.md` — T-B07 status proposed → shipped
+- `docs/releases/v1.7.7.md` — new release notes
+
+### Verification
+
+- **8-test headless suite** against synthetic JPEG (with GPS EXIF) + PNG (with text chunks) + DOCX (with author/company) + PDF (with metadata) + CSV (passthrough) + missing path (error) + corrupt JPEG (graceful failure) + directory walk with extension filter:
+  1. JPEG: EXIF dropped, image dimensions preserved
+  2. PNG: text chunks dropped, image preserved
+  3. DOCX: `dc:creator='Jake Leese'` removed; `word/document.xml` content (`'Hello world'`) preserved
+  4. PDF: `/Author='Jake Leese'` removed, pages preserved (1 page in, 1 page out)
+  5. Unknown type passthrough (CSV byte-identical)
+  6. Missing source returns FAILED with error
+  7. Corrupt JPEG returns FAILED gracefully (no partial output)
+  8. Directory walk: 2 jpgs + 1 png + 1 csv with `--ext .jpg --ext .png` filter → 3 stripped + 1 skipped, tree mirrored
+- **Live CLI smoke test**: `curator export-clean <jpg> <out> --show-files` produces correct Rich output
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 8-feature arc)
+
+### Authoritative-principle catch (this turn)
+
+**1 Pillow API bug caught immediately** by Test 1:
+- `Image.save(..., quality='keep')` fails with `ValueError: Cannot use 'keep' when original image is not a JPEG` after `im.copy()` strips the format markers. Caught on first test run; fixed by defaulting to numeric `jpeg_quality=95`. The `'keep'` mode requires preserving the original JPEG quantization tables, which `im.copy()` discards — a subtle interaction that's not obvious from the Pillow docs.
+
+**Append-pattern lesson applied:** v1.7.6 was bitten by a `Filesystem:edit_file` append diff silently de-indenting adjacent untouched code. This release used a **read-content-then-string-substitute** PowerShell pattern instead: load main.py as a single string, find the unique `if __name__ == '__main__':` marker, insert the new command before it, write back, then `ast.parse` to verify. Zero collateral damage on adjacent code.
+
+### v1.7.7 limitations
+
+- **No per-source policy** — you have to run `curator export-clean` explicitly. A future `SourceConfig.strip_metadata` / `share_visibility` field will auto-gate migration destinations
+- **No integration with `curator migrate` or `curator organize --stage`** yet. Drop-in candidate for a v1.8 hookspec
+- **No XMP-in-PDF stripping** — some PDFs embed XMP packets in the file body (not just the metadata dict). pypdf doesn't strip these on re-emit. A `qpdf --remove-metadata` shell-out would catch them but adds a system dep
+- **JPEG re-encode is lossy** — even at `quality=95`, re-encoding incurs a tiny quality loss. `quality='keep'` would be lossless but breaks after `im.copy()` (see authoritative-principle catch above). Acceptable trade-off for a privacy-export pipeline
+- **DOCX `relationships`** — we don't currently update `_rels/.rels` to drop references to deleted `docProps/custom.xml`. Most readers tolerate orphan references but a strict validator could complain
+- **No GUI integration** — CLI-only for now
+
 ## [1.7.6] — 2026-05-11 — T-B04 PII Regex Scanner
 
 **Headline:** New `curator scan-pii` command detects **SSN, credit card, US phone, and email** patterns via regex with severity-graded reporting and last-4-char redaction. Detect-only baseline; downstream routing/quarantine hooks deferred until false-positive rates are measured on real data.

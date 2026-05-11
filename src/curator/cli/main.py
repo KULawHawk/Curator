@@ -3729,5 +3729,162 @@ def scan_pii_cmd(
                 )
 
 
+
+
+# ------------------------------------------------------------------
+# v1.7.7 (T-B07): curator export-clean - metadata stripping for sharing
+# ------------------------------------------------------------------
+
+@app.command(name="export-clean")
+def export_clean_cmd(
+    ctx: typer.Context,
+    source: str = typer.Argument(
+        ..., help="Source file or directory.",
+    ),
+    destination: str = typer.Argument(
+        ..., help="Destination path. Parent dirs are created as needed.",
+    ),
+    recursive: bool = typer.Option(
+        True, "--recursive/--no-recursive",
+        help="For directory sources, walk subdirectories (default: yes).",
+    ),
+    extension: list[str] = typer.Option(
+        None, "--ext",
+        help="File extension filter (with dot, lowercase). Repeatable.",
+    ),
+    drop_icc: bool = typer.Option(
+        False, "--drop-icc",
+        help="Also strip ICC color profiles from images (default: keep them; "
+             "without ICC profile, color rendering breaks on wide-gamut monitors).",
+    ),
+    show_files: bool = typer.Option(
+        False, "--show-files",
+        help="Print per-file outcome (every file). Default: only summary + failures.",
+    ),
+) -> None:
+    """Strip embedded metadata from files during export (T-B07, v1.7.7).
+
+    Copies files from SOURCE to DESTINATION, removing privacy-leaking
+    metadata along the way:
+
+      - Images (.jpg/.jpeg/.png/.tiff/.webp): EXIF (incl. GPS coords),
+        XMP, IPTC, PNG text chunks. ICC color profile is kept by default.
+      - DOCX (.docx/.docm/.dotx/.dotm): docProps/core.xml + app.xml
+        author/company metadata. Document content is preserved.
+      - PDF: /Author /Creator /Producer /Title /Subject /Keywords
+        /CreationDate /ModDate. Pages are preserved.
+      - Other types: byte-for-byte passthrough copy.
+
+    SOURCE files are NEVER modified. Output goes to DESTINATION.
+
+    Examples:
+        curator export-clean ./photos ./photos_clean
+        curator export-clean ./client_notes.docx ./shareable.docx
+        curator export-clean ./client_data ./public --ext .pdf --ext .docx
+    """
+    rt: CuratorRuntime = ctx.obj
+    console = _console(rt)
+
+    # Build a custom stripper if --drop-icc was specified
+    if drop_icc:
+        from curator.services.metadata_stripper import MetadataStripper as _MS
+        stripper = _MS(keep_icc_profile=False)
+    else:
+        stripper = rt.metadata_stripper
+
+    from pathlib import Path as _Path
+    src_path = _Path(source)
+    dst_path = _Path(destination)
+
+    if src_path.is_file():
+        # Single-file mode
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        result = stripper.strip_file(src_path, dst_path)
+        results = [result]
+        from datetime import datetime as _dt
+        from curator.services.metadata_stripper import StripReport as _SR
+        report = _SR(
+            started_at=_dt.utcnow(), completed_at=_dt.utcnow(),
+            results=results,
+        )
+    elif src_path.is_dir():
+        report = stripper.strip_directory(
+            src_path, dst_path,
+            recursive=recursive,
+            extensions=list(extension) if extension else None,
+        )
+    else:
+        console.print(f"[red]Source not found: {source}[/]")
+        raise typer.Exit(code=1)
+
+    if rt.json_output:
+        import json as _json
+        payload = {
+            "duration_seconds": report.duration_seconds,
+            "total_count": report.total_count,
+            "stripped_count": report.stripped_count,
+            "passthrough_count": report.passthrough_count,
+            "skipped_count": report.skipped_count,
+            "failed_count": report.failed_count,
+            "results": [
+                {
+                    "source": r.source,
+                    "destination": r.destination,
+                    "outcome": r.outcome.value,
+                    "bytes_in": r.bytes_in,
+                    "bytes_out": r.bytes_out,
+                    "metadata_fields_removed": r.metadata_fields_removed,
+                    "error": r.error,
+                }
+                for r in report.results
+            ],
+        }
+        typer.echo(_json.dumps(payload, indent=2))
+        return
+
+    # Rich pretty-print
+    console.print(f"\n[bold]Metadata export-clean[/]")
+    console.print(f"  Source:           {source}")
+    console.print(f"  Destination:      {destination}")
+    console.print(f"  Duration:         {report.duration_seconds:.2f}s")
+    console.print(f"  Total files:      {report.total_count:,}")
+    if report.stripped_count:
+        console.print(f"  [green]Stripped:[/]         {report.stripped_count:,}")
+    if report.passthrough_count:
+        console.print(f"  [dim]Passthrough:[/]      {report.passthrough_count:,}")
+    if report.skipped_count:
+        console.print(f"  [yellow]Skipped (filter):[/] {report.skipped_count:,}")
+    if report.failed_count:
+        console.print(f"  [red]Failed:[/]           {report.failed_count:,}")
+
+    # Always show failures
+    failures = [r for r in report.results if r.outcome.value == "failed"]
+    if failures:
+        console.print("\n[red]Failures:[/]")
+        for r in failures[:20]:
+            console.print(f"  [red]X[/] {r.source}")
+            if r.error:
+                console.print(f"      [dim]{r.error}[/]")
+        if len(failures) > 20:
+            console.print(f"  [dim]... and {len(failures) - 20} more[/]")
+
+    # Optionally show per-file outcomes for the stripped/passthrough set
+    if show_files:
+        console.print("\n[bold]Per-file outcomes:[/]")
+        for r in report.results:
+            if r.outcome.value == "failed":
+                continue  # already shown above
+            color = {"stripped": "green", "passthrough": "dim",
+                     "skipped": "yellow"}.get(r.outcome.value, "white")
+            fields = ""
+            if r.metadata_fields_removed:
+                fields = f" [dim]({', '.join(r.metadata_fields_removed)})[/]"
+            console.print(
+                f"  [{color}]{r.outcome.value:>11}[/]  {r.source}{fields}"
+            )
+
+    if report.failed_count > 0:
+        raise typer.Exit(code=1)
+
 if __name__ == "__main__":  # pragma: no cover
     app()

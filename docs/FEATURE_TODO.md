@@ -107,11 +107,12 @@ New code, but slots cleanly into existing services.
 - **Notes:** Mark the *semantic indexing* layer as a Conclave hookspec (`curator_index_semantic`). Curator ships the OCR-to-text part; Conclave later replaces the dumb keyword index with an embedding index.
 
 ### `T-B07` — Metadata-Stripping Export Pipelines
-- **Status:** proposed
+- **Status:** **shipped v1.7.7** (standalone `curator export-clean` CLI; per-source policy gating deferred to v1.8)
 - **Effort:** S-M
 - **Depends on:** `services/organize.py` staging
 - **What:** When destination source is flagged "shareable," strip EXIF from photos (Pillow/piexif — already installed) and DOCX author metadata before staging the move.
-- **Notes:** Needs per-source policy. New field on `SourceConfig`: `strip_metadata: bool` or `share_visibility: 'private' | 'team' | 'public'`.
+- **v1.7.7 delivery:** `services/metadata_stripper.py` with `MetadataStripper`, `StripResult`, `StripReport`, `StripOutcome`. Handles images (EXIF/XMP/IPTC/PNG-text via Pillow re-save), DOCX (docProps/core.xml + app.xml stub-replacement via stdlib zipfile), PDF (metadata-dict clear via pypdf re-emit), and passthrough for unknown types. CLI: `curator export-clean <src> <dst> [--ext .jpg --drop-icc --show-files --json]`. Source files never modified; ICC profiles kept by default (color rendering).
+- **Notes:** Per-source policy gating (`SourceConfig.strip_metadata: bool` or `share_visibility: 'private' | 'team' | 'public'`) is the v1.8 follow-up; v1.7.7 ships the stripper as a standalone CLI command so it's usable today without touching the migration/organize integration surface.
 
 ### `T-B08` — Smart OS-Level Deduplication (hardlinks)
 - **Status:** proposed (cautious)
