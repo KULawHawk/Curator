@@ -4,6 +4,70 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.15] — 2026-05-11 — T-B04 v5: JWT + GitLab + Atlassian patterns
+
+**Headline:** `curator scan-pii` gains 3 more HIGH-severity patterns: **JWT** (with the dual `eyJ` prefix trick that distinguishes it from Discord's 3-segment format), **GitLab Personal Access Token**, **Atlassian API token** (Jira/Confluence/Bitbucket). Total patterns: **17** (was 14).
+
+### Why this matters
+
+JWT is THE most-leaked token type in modern web stacks — every Auth0/Cognito/Firebase/custom-OIDC app emits them, and they end up pasted into Slack, committed in test fixtures, and dumped in `.env` files. The dual-eyJ trick (both header and payload base64-encode an object literal `{"..."}` so both start with `eyJ`) is what makes JWT detection precise vs. just "some 3-segment dot-separated base64." That property cleanly distinguishes JWT from Discord bot tokens (which are also 3-segment) without false-positive bleed.
+
+GitLab and Atlassian round out the "corporate SaaS" coverage — these are the most common tokens in enterprise dev/ops configs after AWS/GitHub/Slack.
+
+### What's new
+
+3 new default patterns:
+
+| Name | Severity | Regex |
+|---|---|---|
+| `jwt` | HIGH | `\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{20,}\b` |
+| `gitlab_pat` | HIGH | `\bglpat-[A-Za-z0-9_\-]{20,}\b` |
+| `atlassian_api_token` | HIGH | `\bATATT3xFfGF0[A-Za-z0-9_\-=]{20,}\b` |
+
+### The dual-eyJ insight
+
+JWT base64-encodes a JSON header `{"alg":...}` and payload `{"sub":...}`, both of which start with `{"`. Base64 encoding of `{"` is **always** `eyJ`. So every legitimate JWT has the form `eyJ<...>.eyJ<...>.<sig>`. Requiring both segments to start with `eyJ` cleanly rejects:
+
+- Discord bot tokens: `[MN]<...>.<...>.<...>` — wrong prefix
+- Random 3-segment dotted strings: very unlikely to start with `eyJ` twice by coincidence
+- Test fixtures with `xxx.yyy.zzz` patterns: don't match the prefix
+
+Verified by Test 4 of the new suite (JWT and Discord don't double-match).
+
+### Files changed
+
+- `src/curator/services/pii_scanner.py` — +40 lines (3 new PIIPattern entries)
+- `docs/FEATURE_TODO.md` — T-B04 entry updated with v1.7.15 delivery
+- `docs/releases/v1.7.15.md` — new release notes
+
+### Verification
+
+- **7-test headless suite** (`test_tb04_v5.py`):
+  1. JWT: matches dual-eyJ format; rejects single-eyJ, wrong-payload-prefix, too-short signature
+  2. GitLab PAT: matches `glpat-` prefix; rejects `gitlab-` and too-short
+  3. Atlassian: matches `ATATT3xFfGF0` prefix; rejects `ATATT4xFfGF0` and too-short
+  4. **JWT vs Discord collision check**: each token matched only its own pattern; no double-counting
+  5. `DEFAULT_PATTERNS` count is exactly 17
+  6. Combined scan with all 17 pattern types in one text → all 17 present
+  7. Backward compat: v1.7.12 patterns (Twilio, Mailgun, Discord) still work correctly
+- **Live CLI smoke**: `curator scan-pii <temp file>` correctly detects JWT + GitLab + Atlassian with proper redaction
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 16-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**0 bugs caught.** Clean first-try ship. Lesson #45 (programmatic test data construction) was applied from the start — no manual char counting, no length assertion failures.
+
+The dual-eyJ design insight worked first try: JWT and Discord both have 3-segment dot formats but their prefix constraints (`eyJ` vs `[MN]`) keep them mutually exclusive. Test 4 explicitly verifies this.
+
+### v1.7.15 limitations
+
+- **No JWT signature validation** — we detect the format, not whether the signature is cryptographically valid (would require knowing the secret/public key; out of scope)
+- **No JWT payload parsing** — we don't extract claims (e.g. `iss`, `sub`, `exp`) for analysis. A future v1.8 could optionally base64-decode the payload for an audit-log enrichment.
+- **No GitLab CI/CD job token (`glcbt-`) or deploy token (`glcdt-`)** — less common; only `glpat-` shipped. Could add as variants if demand surfaces.
+- **No Bitbucket app password** — these don't have a distinctive prefix (just `ATBB`-prefixed sometimes). Deferred.
+- **No Linear/Notion/Vercel/Sentry API tokens** — each has unique format; could batch-add if these become common in Jake's workflow.
+- **No Conclave hookspec for custom validators** — still on the v1.8 list.
+
 ## [1.7.14] — 2026-05-11 — TierDialog right-click context menu (T-B05 GUI v2)
 
 **Headline:** The Tier scan dialog table now has a **right-click context menu** with three actions: **Inspect...**, **Set status →** (vital/active/provisional/junk submenu), and **Send to trash...**. Closes the GUI gap from v1.7.9 where the dialog was purely informational — users can now act on candidates without switching to CLI.

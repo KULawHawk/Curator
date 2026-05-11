@@ -371,6 +371,46 @@ def _build_default_patterns() -> list[PIIPattern]:
             severity=PIISeverity.HIGH,
             description="Discord bot token (3-segment dot format, M/N prefix)",
         ),
+        # ----- v1.7.15 additions: JWT + GitLab + Atlassian ----------------
+        PIIPattern(
+            name="jwt",
+            # JSON Web Token: 3 base64url-encoded segments separated by dots.
+            # The first two segments ALWAYS start with 'eyJ' (which is the
+            # base64 encoding of '{"'). This dual-eyJ constraint is what
+            # distinguishes JWTs from arbitrary 3-segment base64 strings
+            # (like Discord bot tokens, which don't have this property).
+            # Header: eyJ + 10+ chars; Payload: eyJ + 10+ chars; Signature: 20+ chars.
+            pattern=re.compile(
+                r"\beyJ[A-Za-z0-9_\-]{10,}"
+                r"\.eyJ[A-Za-z0-9_\-]{10,}"
+                r"\.[A-Za-z0-9_\-]{20,}\b"
+            ),
+            severity=PIISeverity.HIGH,
+            description="JSON Web Token (header.payload.signature, dual eyJ prefix)",
+        ),
+        PIIPattern(
+            name="gitlab_pat",
+            # GitLab Personal Access Token: distinctive 'glpat-' prefix +
+            # 20+ chars of [A-Za-z0-9_-]. GitLab docs document this format
+            # as the standard PAT shape; CI tokens use glcbt-, deploy use
+            # glcdt-, etc. We match the most common (PAT) variant.
+            pattern=re.compile(r"\bglpat-[A-Za-z0-9_\-]{20,}\b"),
+            severity=PIISeverity.HIGH,
+            description="GitLab Personal Access Token (glpat- prefix)",
+        ),
+        PIIPattern(
+            name="atlassian_api_token",
+            # Atlassian API tokens (Jira, Confluence, Bitbucket Cloud):
+            # ATATT3xFfGF0 is the documented prefix for cloud API tokens,
+            # followed by base64url-style chars including '=' padding.
+            # Length varies; we require at least 20 body chars to avoid
+            # false matches on truncated test data.
+            pattern=re.compile(
+                r"\bATATT3xFfGF0[A-Za-z0-9_\-=]{20,}\b"
+            ),
+            severity=PIISeverity.HIGH,
+            description="Atlassian API token (Jira/Confluence/Bitbucket Cloud)",
+        ),
     ]
 
 
