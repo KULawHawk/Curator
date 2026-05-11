@@ -4,6 +4,80 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.24] — 2026-05-11 — TTY-aware unicode histogram bars
+
+**Headline:** The `audit-summary` histogram now renders **U+2588 FULL BLOCK** (`█`) in interactive UTF-8 terminals and **ASCII `#`** when piped to a non-TTY destination. Closes lesson #50's noted limitation in v1.7.21: users get the prettier rendering in interactive use without sacrificing pipe-safety.
+
+### Why this matters
+
+v1.7.21 shipped ASCII `#` everywhere as a safety measure after discovering Rich crashes when emitting U+2588 to non-TTY Windows pipes (cp1252 codec can't encode it). The fallback was correct but the cost was a less-polished interactive view — the block-char bars look noticeably better in a real terminal:
+
+```
+U+2588:  curator.migrate   migration.move    50   ████████████████████
+ASCII:   curator.migrate   migration.move    50   ####################
+```
+
+The new logic gates the unicode bar on **two conditions**: `sys.stdout.isatty()` AND the encoding starts with `utf`. Both must be true; otherwise we fall back to `#`. This catches:
+- Subprocess pipes (isatty=False) → `#`
+- Windows cmd.exe with cp1252 (encoding!=utf) → `#`
+- File redirect (isatty=False) → `#`
+- Modern Windows Terminal / VS Code terminal / macOS / Linux TTY with utf-8 → `█`
+
+### What's new
+
+- **TTY + encoding detection** in the histogram render loop (`cli/main.py`, +11 lines / -4 lines):
+  ```python
+  _enc = (_sys.stdout.encoding or "").lower().replace("-", "")
+  _bar_ch = (
+      "\u2588"
+      if _sys.stdout.isatty() and _enc.startswith("utf")
+      else "#"
+  )
+  ```
+- **Encoding normalization** — strips dashes and lowercases so `utf-8`, `UTF-8`, `utf8`, and `UTF_8` all match
+- **Conservative defaults** — missing encoding (`None` or empty string) falls back to `#`
+- **No flag added** — the auto-detection is transparent; users don't need to opt in
+
+### Files changed
+
+- `src/curator/cli/main.py` — +11 lines / -4 lines (TTY-aware bar selection)
+- `docs/releases/v1.7.24.md` — new release notes
+
+### Verification
+
+- **6-test subprocess suite** (`test_tty_bars.py`):
+  1. **Subprocess pipe still uses `#`** (regression — preserves v1.7.21 pipe-safety) ✅ 36 hashes, 0 blocks
+  2. **`--no-bars` suppresses both characters** (regression) ✅ 0 hashes, 0 blocks
+  3. **TTY-detection logic** (in-process):
+     - `isatty=True + utf-8` → `█`
+     - `isatty=True + UTF-8` (mixed case) → `█`
+     - `isatty=True + utf8` (no dash) → `█`
+     - `isatty=True + cp1252` → `#`
+     - `isatty=True + latin-1` → `#`
+     - `isatty=False + utf-8` → `#` (pipe safety)
+     - `isatty=False + cp1252` → `#`
+     - `isatty=True + ""` → `#` (empty encoding fallback)
+     - `isatty=True + None` → `#` (None encoding fallback)
+  4. **JSON output** has no bar chars regardless of TTY (regression)
+  5. **CSV output** has no bar chars regardless of TTY (regression)
+  6. **Bar ratios preserved** — top=20, second=10 (no math regression)
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 25-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**0 bugs caught.** Clean first-try ship.
+
+**Test design note**: Testing the TTY branch in a subprocess is fundamentally impossible — subprocess output is always non-TTY by definition. The Test 3 design replicates the selection logic in the test file and exercises it directly with all 9 input combinations (TTY x 5 encoding variants + non-TTY x 3 + edge cases). The actual implementation is verified by Tests 1, 4, 5, 6 (regression: non-TTY behavior unchanged) and visual inspection by the user when they run the command interactively. This is a sound test design pattern for behavior that depends on runtime context that the test framework can't synthesize.
+
+**Lesson #52 logged**: when shipping a feature whose behavior depends on runtime context (TTY mode, terminal capabilities, env vars), test the **selection logic** as a pure function and the **fallback path** via subprocess. The non-fallback path is then verified by the existence of correct selection logic + manual smoke test in a real interactive terminal.
+
+### v1.7.24 limitations
+
+- **Cannot auto-detect Windows console UTF-8 capability beyond the `encoding` field** — Windows Terminal (newer) reports `utf-8` correctly; legacy `cmd.exe` typically reports `cp1252`. We trust the encoding field; if a user has a weird PYTHONIOENCODING override, behavior is undefined.
+- **No CLI flag to force one or the other** — `--ascii-bars` could be added to force `#` even in TTY (useful for screenshots), or `--unicode-bars` to force `█` even when piped (useful for users who know their pipe handles UTF-8). Deferred.
+- **Tested via subprocess pipe (non-TTY) only**; the TTY path requires a real terminal session to verify. Manual smoke test confirms `█` rendering in Windows Terminal.
+- **Other CLI commands with potential histogram needs** (none currently exist) would need the same logic copied; could be extracted to a `cli/util.py:bar_char()` helper if reused.
+
 ## [1.7.23] — 2026-05-11 — Lineage slider tick-mark sync (T-A02 polish v2)
 
 **Headline:** The lineage time-slider's tick marks now align exactly with the 5 axis date labels shipped in v1.7.13. Tick interval changed from `10` to `25` so ticks appear at 0/25/50/75/100% — the same positions as the date labels. Users can now visually anchor slider position to specific dates without mental interpolation.

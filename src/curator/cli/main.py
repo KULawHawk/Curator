@@ -4376,12 +4376,20 @@ def audit_summary_cmd(
             f"{g['count']:,}",
         ]
         if not no_bars:
-            # ASCII '#' for portability — unicode block chars (U+2588)
-            # render beautifully in TTY mode but Rich crashes piping to
-            # non-TTY Windows pipes (cp1252 codec can't encode them).
-            # '#' has good visual weight, works everywhere.
+            # v1.7.24: TTY-aware bar character.
+            # In an interactive UTF-8 terminal use U+2588 FULL BLOCK for
+            # prettier rendering; when piped (or on a non-UTF-8 console)
+            # fall back to ASCII '#' to avoid the cp1252 encoder crash
+            # diagnosed in v1.7.21 (lesson #50).
+            import sys as _sys
+            _enc = (_sys.stdout.encoding or "").lower().replace("-", "")
+            _bar_ch = (
+                "\u2588"
+                if _sys.stdout.isatty() and _enc.startswith("utf")
+                else "#"
+            )
             bar_len = max(1, round(g["count"] / max_count * BAR_WIDTH))
-            row.append("#" * bar_len)
+            row.append(_bar_ch * bar_len)
         row.extend([_ago(g["first"]), _ago(g["last"])])
         table.add_row(*row)
     console.print(table)
