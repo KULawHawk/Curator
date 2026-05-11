@@ -43,6 +43,7 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import Callable
 
 
 # ---------------------------------------------------------------------------
@@ -53,8 +54,61 @@ from pathlib import Path
 class PIISeverity(str, Enum):
     """Severity buckets for PII patterns."""
 
-    HIGH = "high"      # SSN, credit card
+    HIGH = "high"      # SSN, credit card, API keys
     MEDIUM = "medium"  # phone, email
+    LOW = "low"        # IP addresses (informational)
+
+
+# ---------------------------------------------------------------------------
+# Validation helpers (v1.7.10)
+# ---------------------------------------------------------------------------
+
+
+def _luhn_valid(value: str) -> bool:
+    """Luhn checksum: standard credit card / IMEI validation.
+
+    Extracts digits from ``value`` (separators ignored), then runs the
+    Luhn algorithm: double every second digit from the right, sum
+    digit-by-digit, return True iff the total mod 10 is zero.
+
+    Rejects strings with fewer than 13 or more than 19 digits to
+    avoid spurious matches on order numbers, tracking codes, etc.
+    """
+    digits = [int(c) for c in value if c.isdigit()]
+    if len(digits) < 13 or len(digits) > 19:
+        return False
+    checksum = 0
+    for i, d in enumerate(reversed(digits)):
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        checksum += d
+    return checksum % 10 == 0
+
+
+def _ipv4_valid(value: str) -> bool:
+    """Octet-range check on a dotted-quad string.
+
+    The regex matches 1-3 digits in each of 4 positions; this validator
+    rejects strings with any octet > 255. Catches false positives like
+    ``999.888.777.666`` and ``800.123.456.789`` (which look IP-shaped
+    but aren't valid). Also rejects leading-zero octets except for
+    a literal ``0`` (so ``192.168.001.001`` is rejected since it's
+    typically a typo, not a real IP).
+    """
+    parts = value.split(".")
+    if len(parts) != 4:
+        return False
+    for p in parts:
+        if not p.isdigit():
+            return False
+        # Reject leading zeros (except plain "0")
+        if len(p) > 1 and p[0] == "0":
+            return False
+        if int(p) > 255:
+            return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -64,12 +118,28 @@ class PIIPattern:
     ``redact`` returns a string suitable for display logs (e.g.
     "XXX-XX-1234" instead of the full SSN). Useful for surfacing a
     finding without re-leaking the PII in a log file.
+
+    v1.7.10: optional ``validator`` callable. When set, matches that
+    fail validation are dropped — used to enforce Luhn on credit cards
+    and octet-range on IPv4 addresses. Cuts false positives
+    substantially (Luhn alone eliminates ~90% of bogus credit card
+    matches on random numeric strings).
     """
 
     name: str
     pattern: re.Pattern[str]
     severity: PIISeverity
     description: str
+    validator: Callable[[str], bool] | None = None
+
+    def is_valid(self, value: str) -> bool:
+        """Run the optional validator. True if no validator is set."""
+        if self.validator is None:
+            return True
+        try:
+            return bool(self.validator(value))
+        except Exception:  # noqa: BLE001 -- never let a validator crash a scan
+            return False
 
     def redact(self, value: str) -> str:
         """Return a redacted version of ``value`` for safe logging.
@@ -150,14 +220,21 @@ def _build_default_patterns() -> list[PIIPattern]:
         PIIPattern(
             name="credit_card",
             # 13-16 digit cards, optionally separated by spaces or dashes.
-            # No Luhn validation yet; FEATURE_TODO says regex baseline.
-            # Adding Luhn would cut false positives ~10x but is its own
-            # mini-feature; defer.
+            # v1.7.10: Luhn validator wired so matches like "1234-5678-9012-3456"
+            # (regex-valid but checksum-invalid) get filtered out. Cuts ~10x
+            # of false positives on random numeric strings.
+            #
+            # NOTE: the final `\d` (not `\d[ -]?`) prevents the inner optional
+            # separator from greedily consuming a trailing space, which would
+            # extend the match past the last digit and break last-4 redaction.
+            # Pattern: 12-15 reps of "digit + optional separator" + final digit
+            # = total of 13-16 digits.
             pattern=re.compile(
-                r"\b(?:\d[ -]?){13,16}\b"
+                r"\b(?:\d[ -]?){12,15}\d\b"
             ),
             severity=PIISeverity.HIGH,
-            description="Credit card number (13-16 digits, no Luhn check)",
+            description="Credit card number (Luhn-validated, 13-16 digits)",
+            validator=_luhn_valid,
         ),
         PIIPattern(
             name="phone_us",
@@ -180,6 +257,47 @@ def _build_default_patterns() -> list[PIIPattern]:
             ),
             severity=PIISeverity.MEDIUM,
             description="Email address",
+        ),
+        # ----- v1.7.10 additions ------------------------------------------
+        PIIPattern(
+            name="ipv4",
+            # Dotted-quad regex; octet ranges enforced by _ipv4_valid.
+            # Word boundaries via \b on each end so we don't match
+            # partial matches inside longer numeric runs.
+            pattern=re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
+            severity=PIISeverity.LOW,
+            description="IPv4 address (octet-range validated)",
+            validator=_ipv4_valid,
+        ),
+        PIIPattern(
+            name="github_pat",
+            # Personal Access Tokens: ghp_ (classic), gho_ (OAuth user-to-server),
+            # ghu_ (user-to-server), ghs_ (server-to-server), ghr_ (refresh).
+            # Token body is 36 chars of [A-Za-z0-9] for ghp_ and 40 chars
+            # for the newer fine-grained variants (github_pat_).
+            pattern=re.compile(
+                r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b"
+            ),
+            severity=PIISeverity.HIGH,
+            description="GitHub Personal Access Token",
+        ),
+        PIIPattern(
+            name="aws_access_key_id",
+            # AKIA followed by 16 uppercase alphanumeric (IAM user keys).
+            # ASIA prefix is also used for temporary STS credentials; cover both.
+            pattern=re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
+            severity=PIISeverity.HIGH,
+            description="AWS Access Key ID",
+        ),
+        PIIPattern(
+            name="slack_token",
+            # Slack tokens: xoxb (bot), xoxp (user), xoxa (workspace),
+            # xoxr (refresh). Format: prefix-numeric-numeric-alphanumeric.
+            pattern=re.compile(
+                r"\bxox[abprs]-\d{10,}-\d{10,}-[A-Za-z0-9]{20,}\b"
+            ),
+            severity=PIISeverity.HIGH,
+            description="Slack API token",
         ),
     ]
 
@@ -230,11 +348,18 @@ class PIIScanner:
         Returns a fully-populated :class:`PIIScanReport`. The ``source``
         kwarg is a label for the report (e.g. a path); doesn't affect
         scanning logic.
+
+        v1.7.10: per-pattern validator hook is consulted; matches
+        that fail validation (e.g. credit cards failing Luhn,
+        IPv4 strings with octets > 255) are silently dropped.
         """
         matches: list[PIIMatch] = []
         for pat in self.patterns:
             for m in pat.pattern.finditer(text):
                 matched = m.group(0)
+                # v1.7.10: drop matches that fail the optional validator
+                if not pat.is_valid(matched):
+                    continue
                 offset = m.start()
                 # Compute 1-based line number cheaply via slice count
                 line = text.count("\n", 0, offset) + 1

@@ -4,6 +4,74 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.10] — 2026-05-11 — T-B04 enhancement: Luhn validation + 4 new PII patterns
+
+**Headline:** `curator scan-pii` gains **8 patterns** (up from 4) and a **Luhn validator** that cuts ~10x of credit-card false positives. New patterns target the highest-leverage gaps: **IPv4 addresses** (with octet-range check), **GitHub Personal Access Tokens**, **AWS Access Key IDs**, **Slack API tokens**. Each high-value-secret pattern has unambiguous prefix structure that makes detection both precise and high-recall.
+
+### Why this matters
+
+The v1.7.6 baseline shipped 4 patterns and got the FP-on-credit-cards problem flagged in its own release notes ("No Luhn validation — cuts ~10x of false positives but is its own mini-feature"). On real client data, a 16-digit order ID or tracking number looks identical to a credit card under regex alone. Luhn validation drops those misses without affecting recall on real cards.
+
+The 4 new patterns target the next-most-common privacy leaks Jake's workflow generates: configuration files containing API tokens (GitHub, AWS, Slack) and network traffic logs containing IP addresses. All four have distinctive prefixes that make false-positive rates effectively zero — these are not heuristics, they're structural matches against well-known token formats.
+
+### What's new
+
+- **`PIIPattern.validator: Callable[[str], bool] | None`** — optional per-pattern validator hook. When set, matches that fail validation are silently dropped. Pluggable design so adding more validators later doesn't require core-scanner changes.
+  - `is_valid(value)` method runs the validator (or returns True if none); validator crashes return False (safe-by-default).
+- **`_luhn_valid(value)`** — standard credit card / IMEI Luhn checksum. Extracts digits, doubles every second-from-right, sums digit-by-digit, validates `total % 10 == 0`. Rejects fewer than 13 or more than 19 digits.
+- **`_ipv4_valid(value)`** — octet-range check on dotted-quad strings. Rejects octets > 255 and leading-zero octets (since `192.168.001.001` is typically a typo).
+- **`PIISeverity.LOW`** — new tier for informational-only patterns (IPv4 currently the only LOW pattern).
+- **4 new default patterns** (total now 8):
+
+| Name | Severity | Regex | Validator |
+|---|---|---|---|
+| `ipv4` | LOW | `\b(?:\d{1,3}\.){3}\d{1,3}\b` | `_ipv4_valid` |
+| `github_pat` | HIGH | `\b(?:ghp\|gho\|ghu\|ghs\|ghr)_[A-Za-z0-9]{36,}\b` | (none; prefix is unique) |
+| `aws_access_key_id` | HIGH | `\b(?:AKIA\|ASIA)[0-9A-Z]{16}\b` | (none; prefix is unique) |
+| `slack_token` | HIGH | `\bxox[abprs]-\d{10,}-\d{10,}-[A-Za-z0-9]{20,}\b` | (none; prefix is unique) |
+
+- **`credit_card` pattern updated:**
+  - **Luhn validator wired** (`validator=_luhn_valid`)
+  - **Regex tightened** to prevent the trailing-separator greedy-match bug: `\b(?:\d[ -]?){12,15}\d\b` (was `\b(?:\d[ -]?){13,16}\b`). Same total digit count (13-16) but the final element is forced to be a digit, not an optional separator. Prevents matched_text from extending into trailing whitespace, which would have broken last-4 redaction.
+
+### Files changed
+
+- `src/curator/services/pii_scanner.py` — +120 lines, -10 lines (validator hook + 2 helper functions + 4 new patterns + Luhn integration + regex tightening)
+- `docs/FEATURE_TODO.md` — T-B04 status updated with v1.7.10 delivery notes
+- `docs/releases/v1.7.10.md` — new release notes
+
+### Verification
+
+- **10-test headless suite** (`test_tb04_v2.py`):
+  1. `_luhn_valid` correctness: 5 valid test cards (Visa, MC, AmEx, Diners) + 5 invalid (random, off-by-one, all-9s, too-short, leading-zeros)
+  2. Scanner drops Luhn-invalid credit-card-shaped strings (mixed text with 1 valid + 2 invalid → 1 match)
+  3. `_ipv4_valid` correctness: 5 valid + 6 invalid (octet > 255, wrong segment count, non-numeric, leading zeros)
+  4. Scanner only finds valid IPv4 (text with mixed valid + invalid + version-string → correct count)
+  5. GitHub PAT detection (ghp_, gho_, ghr_ variants; rejects truncated)
+  6. AWS Access Key ID (AKIA + ASIA; case-sensitive)
+  7. Slack token (xoxb + xoxp; rejects malformed)
+  8. Backward compat: v1.7.6 SSN/phone/email still work
+  9. Combined scan: text with all 7 pattern types → 7 matches; bogus card correctly filtered
+  10. `PIIPattern.is_valid` contract: validator-set, no-validator, and crashing-validator cases all behave correctly
+- **Live CLI smoke test**: `curator scan-pii <temp file>` against mixed-pattern text correctly shows 5 matches (SSN + valid card + IP + GitHub PAT + AWS key) with bogus card and bad IP filtered
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 11-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**1 regex greedy-match bug caught immediately** by Test 2 of the new suite:
+- Original `credit_card` regex `\b(?:\d[ -]?){13,16}\b` greedily consumed the trailing space after a card number (the inner optional `[ -]?` and the outer `\b` happily matched at the space→word transition). This made `matched_text == "4532015112830366 "` (17 chars, trailing space), which broke last-4 redaction (showed `*************366` with 3 visible chars instead of `************0366` with 4). Caught by exact-match assertion on `redacted`.
+- **Fix**: tightened to `\b(?:\d[ -]?){12,15}\d\b` — 12-15 reps of "digit + optional separator" plus one final digit. Same total digit range (13-16) but forces the match to end on a digit.
+- **Lesson logged**: when an inner regex element ends with an optional separator, and the outer `\b` anchors at the end, the engine WILL greedily consume the separator if it leads to a valid boundary. **For "matches digits with optional separators between them," always anchor on a required digit at both ends**, not on the optional-separator pattern.
+
+### v1.7.10 limitations
+
+- **No IPv6 detection** — the regex for IPv6 is non-trivial (`::`, mixed notation, zone IDs); deferred until needed
+- **No private vs public IP distinction** — IPv4 LOW severity is uniform; could separate `10.0.0.0/8` etc. as INFO-only later
+- **No new AWS Secret Access Key pattern** — secret keys are 40 chars of base64 with no distinctive prefix; high false-positive rate without contextual analysis. Deferred.
+- **No `xoxc-` (Slack client token) variant** — these are extracted from the browser and not API-issued; format slightly different; deferred.
+- **No Google API key / Stripe key / Mailgun key / Discord token** — each has distinctive prefix and could be added in a v1.7.11 batch if demand surfaces.
+- **No Conclave hookspec for custom validators** — the `validator` field is Python-callable but not yet pluggable from outside the module. A v1.8 task could expose registration via a curator_pii_validator hookspec.
+
 ## [1.7.9] — 2026-05-11 — T-B05 GUI extension: Tier scan dialog
 
 **Headline:** New **Tools → Tier scan** menu item launches a `TierDialog` matching the v1.7.8 CLI: pick a recipe (cold / expired / archive), tune min-age, optionally filter by source/root, click Scan, see candidates in an interactive table. Audit-event-equivalent to the CLI (`gui.tier` actor, `tier.suggest` action).
