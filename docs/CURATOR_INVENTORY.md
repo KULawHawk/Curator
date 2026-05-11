@@ -1,12 +1,12 @@
 # Curator — Complete Inventory of Tools, Utilities, and Assets
 
-**As of Curator v1.7.0 (HEAD a41840d) — 2026-05-11**
+**As of Curator v1.7.2 (HEAD 0a1f827) — 2026-05-11**
 
 Everything you can click, run, or open. Copy any code block as-is. Items grouped by surface (CLI / GUI / MCP / Workflows / Plugins / Files).
 
 ---
 
-## 1. CLI Commands (43 total)
+## 1. CLI Commands (44 total)
 
 The CLI is your primary surface. Activate the venv first, then run any command below.
 
@@ -348,20 +348,24 @@ Edit → Edit selected bundle           (Ctrl+E)
 
 ### Tools menu
 
-**As of v1.7.0: all 5 items are real dialogs/tabs. Zero placeholders.**
+**As of v1.7.2: 7 items, all real dialogs/tabs. Zero placeholders.**
 
 ```
 Tools → Scan folder...                       → ScanDialog          (v1.7-alpha.2)
 Tools → Find duplicates...                   → GroupDialog         (v1.7-alpha.3)
 Tools → Cleanup junk / empty / symlinks...   → CleanupDialog       (v1.7-alpha.4)
 Tools → Sources manager...                   → Sources tab pivot   (v1.7-alpha.5)
+Tools → Version stacks (fuzzy)...            → VersionStackDialog  (v1.7.1, T-A01)
+Tools → Drive capacity forecast...           → ForecastDialog      (v1.7.2, T-B01)
 Tools → Health check                         → HealthCheckDialog   (v1.7-alpha.1)
 ```
 
 - **`ScanDialog`** — folder + source picker → background QThread runs `runtime.scan.scan()` → renders ScanReport (counts + errors + timings).
 - **`GroupDialog`** — 2-phase duplicate finder: configure (source, keep strategy, match kind) → Find (background) → review groups with keepers highlighted → Apply (background, trash duplicates).
 - **`CleanupDialog`** — 3-mode picker (junk files / empty dirs / broken symlinks) backed by `CleanupFindWorker` + `CleanupApplyWorker`. Duplicates mode delegates to GroupDialog via a shortcut button.
-- **`Sources tab pivot`** — switches to the new Sources tab rather than opening a modal, so the user sees existing sources first.
+- **`Sources tab pivot`** — switches to the new Sources tab rather than opening a modal.
+- **`VersionStackDialog`** — read-only viewer for fuzzy-match version stacks (NEAR_DUPLICATE + VERSION_OF connected components). Filter by min-confidence + edge kind. Apply deferred to v1.8.
+- **`ForecastDialog`** — per-drive capacity projections (linear fit on files.size by month). Surfaces "already past threshold" warnings.
 - **`HealthCheckDialog`** — 8-section diagnostic running 22 checks in ~4 seconds. Refresh + Copy-to-clipboard buttons.
 
 ### Workflows menu
@@ -644,7 +648,7 @@ docs/lessons/2026-05-09_install_mcp_session.md
 ```
 https://github.com/KULawHawk/Curator
 ```
-Main Curator repo (HEAD = v1.7.0 tag at commit `a41840d`).
+Main Curator repo (HEAD = v1.7.2 tag at commit `0a1f827`).
 
 ```
 https://github.com/KULawHawk/curatorplug-atrium-safety
@@ -692,6 +696,6 @@ See the last day's activity.
 
 ---
 
-**Total surface count (v1.7.0):** 43 CLI commands + 9 MCP tools + 9 GUI tabs + 14 GUI menu actions + 5 workflow scripts + 9 plugins + 24 doc files + 3 installer files + 3 config files + 4 GitHub repos = **123 discrete clickable items**.
+**Total surface count (v1.7.2):** 44 CLI commands + 9 MCP tools + 9 GUI tabs + 16 GUI menu actions + 5 workflow scripts + 9 plugins + 27 doc files + 3 installer files + 3 config files + 4 GitHub repos = **129 discrete clickable items**.
 
-**Delta v1.6.5 → v1.7.0:** +1 GUI tab (Sources), +0 menu actions (5 placeholders graduated to real dialogs), +3 doc files (FEATURE_TODO, BUILDING_BLOCKS, ALL_FILES), +0 new CLI commands or MCP tools.
+**Delta v1.6.5 → v1.7.2:** +1 GUI tab (Sources), +5 menu actions (Tools placeholders → real dialogs + 2 NEW: Version stacks + Forecast), +6 doc files (FEATURE_TODO, BUILDING_BLOCKS, ALL_FILES, CURATOR_INVENTORY, 3 release notes), +1 CLI command (`forecast`), +0 new MCP tools, +1 new service (ForecastService).

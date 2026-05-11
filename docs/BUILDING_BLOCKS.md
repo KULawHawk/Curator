@@ -1,7 +1,7 @@
 # Curator — Building Blocks (source-level inventory)
 
 **The actual `.py` files, scripts, and source artifacts that make Curator work.**
-As of v1.7.0 (HEAD a41840d) — 2026-05-11.
+As of v1.7.2 (HEAD 0a1f827) — 2026-05-11.
 
 Organized by architectural tier from the inside out: **Models → Storage → Plugins → Services → CLI / GUI / MCP → External plugins → Tests → Scripts → Installer**.
 
@@ -466,26 +466,26 @@ Curator/ECOSYSTEM_DESIGN.md         (37 KB)    Where Curator fits in the Ad Astr
 | Storage primitives | 6 | DB + 2 migrations + schema_v1.sql |
 | Repositories | 11 | One per entity table |
 | Plugin framework | 11 | hookspecs + 9 built-in plugins |
-| Services | 21 | Business logic |
+| Services | 22 | Business logic (+forecast.py in v1.7.2) |
 | CLI | 4 | Typer subcommands |
 | GUI | 9 | PySide6 desktop (5 dialogs + 9 tabs + 2 signal bridges) |
 | MCP server | 5 | FastMCP tools + auth |
 | PEP 561 markers | 1 | py.typed |
-| **Curator src/ total** | **95** | All Python + SQL + py.typed + LICENSE (+2 signal modules added in v1.7)  |
+| **Curator src/ total** | **96** | All Python + SQL + py.typed + LICENSE (+forecast.py in v1.7.2) |
 | Tests (production) | 82 | Excludes perf/results JSON |
 | Tests (perf results JSON) | 12 | Historical benchmark snapshots |
 | **Curator tests/ total** | **94** | All test artifacts |
 | Workflow scripts | 13 | .ps1 + .bat + README |
 | Installer | 3 | .bat + .ps1 + README |
-| docs/ markdown | 25 | Design + user docs (+FEATURE_TODO + BUILDING_BLOCKS + ALL_FILES + CURATOR_INVENTORY in v1.7) |
+| docs/ markdown | 29 | Design + user docs (+3 release notes files for v1.7.0, v1.7.1, v1.7.2 in v1.7.x doc-refresh pass) |
 | docs/ binary assets | 8 | 7 PNGs + 1 demo TXT |
 | Github/ | 2 | Loose metadata notes |
 | examples/ | 1 | watch_demo.py |
 | Top-level Curator/ | 8 | pyproject + .gitignore + 6 design/changelog .md |
-| **CURATOR REPO TOTAL** | **249** | Verified via `git ls-files` on 2026-05-11 |
+| **CURATOR REPO TOTAL** | **253** | Verified via `git ls-files` on 2026-05-11 (v1.7.2 + full release notes set) |
 | atrium-safety | 17 | 6 src + 6 tests + 5 metadata |
 | atrium-citation | 19 | 7 src + 6 tests + 6 metadata |
-| **GRAND TOTAL (all 3 repos)** | **285** | |
+| **GRAND TOTAL (all 3 repos)** | **289** | |
 
 ---
 
