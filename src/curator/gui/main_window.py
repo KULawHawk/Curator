@@ -150,17 +150,24 @@ class CuratorMainWindow(QMainWindow):
         menu_edit.addAction(self._act_bundle_edit)
 
         # v1.6.2: Tools menu — placeholders for v1.7 native dialogs.
+        # v1.7 alpha: Health check is now wired to the real HealthCheckDialog
+        # (first native dialog replacing a placeholder). The other 4 still
+        # surface the 'coming in v1.7' placeholder for now.
         menu_tools = self.menuBar().addMenu("&Tools")
         for label, key in [
             ("&Scan folder...", "scan"),
             ("Find &duplicates...", "group"),
             ("&Cleanup junk...", "cleanup"),
             ("&Sources manager...", "sources"),
-            ("&Health check", "health"),
         ]:
             act = QAction(label, self)
             act.triggered.connect(lambda checked=False, k=key: self._slot_tools_placeholder(k))
             menu_tools.addAction(act)
+
+        # v1.7 alpha: real HealthCheckDialog (native PySide6, in-process).
+        act_health = QAction("&Health check", self)
+        act_health.triggered.connect(self._slot_open_health_check)
+        menu_tools.addAction(act_health)
 
         # v1.6.2: Workflows menu — spawns the PowerShell .bat scripts
         # shipped at scripts/workflows/ as separate console windows.
@@ -1338,6 +1345,30 @@ class CuratorMainWindow(QMainWindow):
     # v1.6.2: Tools menu placeholders + Workflows menu launchers
     # ------------------------------------------------------------------
 
+    def _slot_open_health_check(self) -> None:
+        """Open the native HealthCheckDialog (v1.7 alpha).
+
+        First Tools-menu item to graduate from placeholder to a real
+        in-process PySide6 dialog. Runs the same 8-section diagnostic
+        as ``scripts/workflows/05_health_check.ps1`` but without
+        spawning a console window. See :class:`HealthCheckDialog` in
+        ``curator.gui.dialogs`` for the rendering details.
+
+        Imported lazily so a broken health-check module can't prevent
+        the main window from opening.
+        """
+        try:
+            from curator.gui.dialogs import HealthCheckDialog
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self,
+                "Health check unavailable",
+                f"Could not import HealthCheckDialog: {e}",
+            )
+            return
+        dlg = HealthCheckDialog(self.runtime, self)
+        dlg.exec()
+
     def _slot_tools_placeholder(self, key: str) -> None:
         """Show 'coming in v1.7' notice for a Tools menu item.
 
@@ -1345,6 +1376,10 @@ class CuratorMainWindow(QMainWindow):
         dialog in v1.7 per docs/design/GUI_V2_DESIGN.md. Until then,
         this surfaces what the dialog will do and points the user at
         the closest CLI / Workflows alternative they can use today.
+
+        v1.7 alpha note: Health check is no longer routed through
+        this method; see :meth:`_slot_open_health_check` for the
+        first real dialog.
         """
         guidance = {
             "scan": (
@@ -1370,11 +1405,9 @@ class CuratorMainWindow(QMainWindow):
                 "<b>Today:</b> use <code>curator sources add|list|show|enable|disable|remove</code>"
                 " in PowerShell."
             ),
-            "health": (
-                "<b>Health Check</b> dialog will show a live green/red dashboard."
-                " Coming in v1.7.<br><br>"
-                "<b>Today:</b> use Workflows → Health check."
-            ),
+            # v1.7 alpha: 'health' key removed — HealthCheckDialog now opens
+            # directly via _slot_open_health_check. Kept here as a comment
+            # so future maintainers don't re-add it.
         }
         msg = guidance.get(key, "This dialog is planned for v1.7.")
         QMessageBox.information(self, "Coming in v1.7", msg)

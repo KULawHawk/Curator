@@ -1,38 +1,51 @@
-"""GUI dialogs (Phase Beta gate 4 v0.36).
+"""GUI dialogs (Phase Beta gate 4 v0.36, expanded v1.7 alpha).
 
-Currently houses :class:`FileInspectDialog` -- the modal shown when a
-user double-clicks a row in the Browser tab. It surfaces *everything*
-Curator knows about a file in three tabs:
+Houses Curator's modal dialogs:
 
-  * **Metadata** -- every fixed-schema field on the FileEntity plus
-    every flex attr, in a two-column key / value table.
-  * **Lineage Edges** -- every edge where this file appears (either
-    side), with the other file's path resolved from the file repo.
-  * **Bundle Memberships** -- every bundle this file belongs to with
-    role + confidence.
+  * :class:`FileInspectDialog` -- shown when a user double-clicks a row
+    in the Browser tab. Surfaces everything Curator knows about a file
+    in three tabs (metadata, lineage edges, bundle memberships).
 
-The dialog is read-only: this is the "what does Curator know about
-this file" view. Mutations (trash, dissolve) live on the main window
-context menus, not in here.
+  * :class:`BundleEditorDialog` -- bundle creation + editing.
 
-The constructor takes the runtime and the FileEntity; it queries
-synchronously at open time. For Curator's typical row counts this is
-trivially fast (a single file has at most a few dozen edges + a few
-bundle memberships in practice).
+  * :class:`HealthCheckDialog` (v1.7 alpha) -- the first native PySide6
+    dialog replacing a Tools-menu placeholder. Runs a full stack
+    diagnostic (filesystem layout, Python + venv versions, package
+    versions, GUI dependencies, DB integrity, plugins registered, MCP
+    config, real MCP probe) and renders a green/red dashboard. Synchronous
+    today; can be made async if any single check goes >100ms.
+
+The dialogs are read-only views over the runtime state; they don't
+carry mutation logic. Mutations live on the main window's context menus.
 """
 
 from __future__ import annotations
 
+import json
+import os
+import sqlite3
+import subprocess
+import sys
+from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDialog,
     QDialogButtonBox,
+    QFrame,
+    QGroupBox,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -688,4 +701,502 @@ class BundleEditorDialog(QDialog):
         return self._result
 
 
-__all__ = ["FileInspectDialog", "BundleEditorDialog", "BundleEditorResult"]
+__all__ = [
+    "FileInspectDialog",
+    "BundleEditorDialog",
+    "BundleEditorResult",
+    "HealthCheckDialog",
+    "HealthCheckResult",
+]
+
+
+# ---------------------------------------------------------------------------
+# HealthCheckDialog (v1.7 alpha) -- first native dialog replacing a Tools
+# menu placeholder. Runs the same suite of checks as scripts/workflows/
+# 05_health_check.ps1 but in-process, with no console window pop-up.
+# ---------------------------------------------------------------------------
+
+# Color tokens for status indicators. Avoid hard pure-greens/reds so the
+# dialog reads cleanly in both light + dark Qt themes.
+_COLOR_PASS = QColor(0x2E, 0x7D, 0x32)   # mid green
+_COLOR_FAIL = QColor(0xC6, 0x28, 0x28)   # mid red
+_COLOR_WARN = QColor(0xEF, 0x6C, 0x00)   # mid orange (for non-fatal issues)
+_COLOR_INFO = QColor(0x5C, 0x6B, 0xC0)   # muted indigo (for informational rows)
+
+
+@dataclass
+class _CheckResult:
+    """Outcome of one health check row."""
+    label: str
+    passed: bool
+    detail: str = ""
+    severity: str = "fail"  # 'fail' | 'warn' | 'info' -- only used when passed=False
+
+
+@dataclass
+class HealthCheckResult:
+    """Aggregate result of the full health-check run.
+
+    Surfaced via :meth:`HealthCheckDialog.last_result` so tests and
+    scripts can introspect what the dialog rendered without having to
+    parse Qt widgets.
+    """
+    sections: dict[str, list[_CheckResult]] = field(default_factory=dict)
+    started_at: datetime = field(default_factory=datetime.now)
+    elapsed_ms: int = 0
+
+    @property
+    def total(self) -> int:
+        return sum(len(rows) for rows in self.sections.values())
+
+    @property
+    def passed(self) -> int:
+        return sum(1 for rows in self.sections.values() for r in rows if r.passed)
+
+    @property
+    def failed(self) -> int:
+        return sum(1 for rows in self.sections.values() for r in rows if not r.passed and r.severity == "fail")
+
+    @property
+    def all_green(self) -> bool:
+        return self.failed == 0
+
+
+class HealthCheckDialog(QDialog):
+    """Curator stack health diagnostic, in-process.
+
+    Sections (matching scripts/workflows/05_health_check.ps1):
+      1. Filesystem layout (canonical paths exist)
+      2. Python + venv detection
+      3. Curator + plugin versions
+      4. GUI dependencies (PySide6 + networkx)
+      5. DB integrity check (PRAGMA integrity_check)
+      6. Plugins registered (from runtime.pm)
+      7. Claude Desktop MCP config (file present + curator entry valid)
+      8. Real MCP probe (spawn curator-mcp, initialize, tools/list)
+
+    The dialog runs all checks synchronously at construction (and on
+    Refresh). Each section takes well under 100 ms except the MCP probe
+    which spawns a subprocess (~500 ms). Tolerable for a button click;
+    can be moved off the main thread if it ever degrades.
+
+    The dialog never raises -- every check is wrapped in a try/except
+    that converts unexpected errors into a `_CheckResult(passed=False)`
+    with the exception text in the detail.
+    """
+
+    def __init__(self, runtime: "CuratorRuntime", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.runtime = runtime
+        self._last_result: HealthCheckResult | None = None
+        self.setWindowTitle("Curator Health Check")
+        self.setMinimumSize(640, 560)
+        self._build_ui()
+        self.refresh()
+
+    # ---- public API ----
+
+    @property
+    def last_result(self) -> HealthCheckResult | None:
+        """The result of the most recent check run, or None if none."""
+        return self._last_result
+
+    def refresh(self) -> None:
+        """Re-run all health checks and re-render the UI."""
+        started = datetime.now()
+        result = HealthCheckResult(started_at=started)
+
+        result.sections["Filesystem layout"] = self._check_filesystem()
+        result.sections["Python + venv"] = self._check_python()
+        result.sections["Curator + plugin versions"] = self._check_versions()
+        result.sections["GUI dependencies"] = self._check_gui_deps()
+        result.sections["DB integrity"] = self._check_db_integrity()
+        result.sections["Plugins registered"] = self._check_plugins()
+        result.sections["Claude Desktop MCP config"] = self._check_mcp_config()
+        result.sections["Real MCP probe"] = self._check_mcp_probe()
+
+        result.elapsed_ms = int((datetime.now() - started).total_seconds() * 1000)
+        self._last_result = result
+        self._render(result)
+
+    # ---- check implementations ----
+    # Each returns list[_CheckResult]; never raises.
+
+    def _check_filesystem(self) -> list[_CheckResult]:
+        out: list[_CheckResult] = []
+        try:
+            db_path = Path(self.runtime.config.db_path)
+            repo_root = db_path.parent.parent  # .curator/curator.db -> AL/
+            out.append(_CheckResult(
+                "Canonical DB exists",
+                db_path.exists(),
+                str(db_path),
+            ))
+            out.append(_CheckResult(
+                "Repo root accessible",
+                repo_root.exists() and os.access(repo_root, os.R_OK),
+                str(repo_root),
+            ))
+            curator_repo = repo_root / "Curator"
+            out.append(_CheckResult(
+                "Curator source tree present",
+                curator_repo.exists(),
+                str(curator_repo),
+            ))
+        except Exception as e:  # noqa: BLE001
+            out.append(_CheckResult("Filesystem check raised", False, str(e)))
+        return out
+
+    def _check_python(self) -> list[_CheckResult]:
+        out: list[_CheckResult] = []
+        out.append(_CheckResult(
+            "Python version",
+            sys.version_info >= (3, 11),
+            f"{sys.version.split()[0]} ({sys.executable})",
+            severity="fail" if sys.version_info < (3, 11) else "info",
+        ))
+        # Venv check: is sys.executable inside a venv?
+        in_venv = hasattr(sys, "real_prefix") or (
+            hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix
+        )
+        out.append(_CheckResult(
+            "Running in venv",
+            in_venv,
+            sys.prefix,
+        ))
+        return out
+
+    def _check_versions(self) -> list[_CheckResult]:
+        out: list[_CheckResult] = []
+        try:
+            import curator
+            out.append(_CheckResult("curator package", True, curator.__version__, severity="info"))
+        except Exception as e:  # noqa: BLE001
+            out.append(_CheckResult("curator package", False, str(e)))
+        for mod_name, label in [
+            ("curatorplug.atrium_citation", "atrium-citation"),
+            ("curatorplug.atrium_safety", "atrium-safety"),
+        ]:
+            try:
+                mod = __import__(mod_name, fromlist=["__version__"])
+                out.append(_CheckResult(label, True, getattr(mod, "__version__", "?"), severity="info"))
+            except Exception as e:  # noqa: BLE001
+                out.append(_CheckResult(label, False, str(e)))
+        return out
+
+    def _check_gui_deps(self) -> list[_CheckResult]:
+        out: list[_CheckResult] = []
+        try:
+            import PySide6
+            out.append(_CheckResult("PySide6", True, PySide6.__version__, severity="info"))
+        except Exception as e:  # noqa: BLE001
+            out.append(_CheckResult("PySide6", False, str(e)))
+        try:
+            import networkx
+            out.append(_CheckResult("networkx (lineage graph)", True, networkx.__version__, severity="info"))
+        except ImportError:
+            out.append(_CheckResult(
+                "networkx (lineage graph)",
+                False,
+                "not installed; lineage graph tab will show 'unavailable'",
+                severity="warn",
+            ))
+        return out
+
+    def _check_db_integrity(self) -> list[_CheckResult]:
+        out: list[_CheckResult] = []
+        try:
+            db_path = Path(self.runtime.config.db_path)
+            c = sqlite3.connect(str(db_path))
+            try:
+                row = c.execute("PRAGMA integrity_check").fetchone()
+                ok = row is not None and row[0] == "ok"
+                out.append(_CheckResult(
+                    "PRAGMA integrity_check",
+                    ok,
+                    row[0] if row else "no result",
+                ))
+                # File count for context (info row)
+                fc = c.execute("SELECT COUNT(*) FROM files WHERE deleted_at IS NULL").fetchone()[0]
+                out.append(_CheckResult(
+                    "Indexed files (active)",
+                    True,
+                    f"{fc:,}",
+                    severity="info",
+                ))
+                sc = c.execute("SELECT COUNT(*) FROM sources WHERE enabled=1").fetchone()[0]
+                out.append(_CheckResult(
+                    "Sources enabled",
+                    True,
+                    str(sc),
+                    severity="info",
+                ))
+            finally:
+                c.close()
+        except Exception as e:  # noqa: BLE001
+            out.append(_CheckResult("DB integrity check raised", False, str(e)))
+        return out
+
+    def _check_plugins(self) -> list[_CheckResult]:
+        out: list[_CheckResult] = []
+        try:
+            plugin_names = [name for name, _p in self.runtime.pm.list_name_plugin()]
+            # We expect at least 9 plugins (audit + classify + 3 lineage + 2 sources + 2 atrium)
+            out.append(_CheckResult(
+                f"Total plugins registered",
+                len(plugin_names) >= 9,
+                f"{len(plugin_names)} plugins (expected ≥ 9)",
+            ))
+            # Spot-check the critical ones
+            for required in [
+                "curator.core.local_source",
+                "curator.core.gdrive_source",
+                "curator.core.audit_writer",
+            ]:
+                present = required in plugin_names
+                out.append(_CheckResult(required, present, severity="info" if present else "fail"))
+        except Exception as e:  # noqa: BLE001
+            out.append(_CheckResult("Plugin enumeration raised", False, str(e)))
+        return out
+
+    def _check_mcp_config(self) -> list[_CheckResult]:
+        out: list[_CheckResult] = []
+        cfg_path = Path(os.environ.get("APPDATA", "")) / "Claude" / "claude_desktop_config.json"
+        if not cfg_path.exists():
+            out.append(_CheckResult(
+                "claude_desktop_config.json",
+                False,
+                f"not found at {cfg_path}",
+                severity="warn",
+            ))
+            return out
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            servers = cfg.get("mcpServers", {})
+            curator_entry = servers.get("curator")
+            out.append(_CheckResult("Config file exists", True, str(cfg_path), severity="info"))
+            out.append(_CheckResult("Has curator MCP entry", curator_entry is not None))
+            if curator_entry:
+                cmd = curator_entry.get("command", "")
+                env = curator_entry.get("env", {})
+                out.append(_CheckResult(
+                    "Command points at curator-mcp.exe",
+                    "curator-mcp" in cmd.lower(),
+                    cmd,
+                ))
+                cfg_env_target = env.get("CURATOR_CONFIG", "")
+                expected_toml = Path(self.runtime.config.db_path).parent / "curator.toml"
+                # Resolve both for fair comparison
+                env_ok = bool(cfg_env_target) and Path(cfg_env_target).resolve() == expected_toml.resolve()
+                out.append(_CheckResult(
+                    "CURATOR_CONFIG env var set",
+                    env_ok,
+                    cfg_env_target or "<not set>",
+                    severity="warn" if not env_ok else "info",
+                ))
+        except json.JSONDecodeError as e:
+            out.append(_CheckResult("Config JSON valid", False, f"parse error: {e}"))
+        except Exception as e:  # noqa: BLE001
+            out.append(_CheckResult("Config check raised", False, str(e)))
+        return out
+
+    def _check_mcp_probe(self) -> list[_CheckResult]:
+        """Spawn curator-mcp and complete MCP handshake; assert >=9 tools.
+
+        This is the same probe used by Install-Curator.ps1 Step 9.
+        Done synchronously; takes ~500ms.
+        """
+        out: list[_CheckResult] = []
+        # Locate curator-mcp.exe in the venv
+        venv_scripts = Path(sys.prefix) / "Scripts"
+        mcp_exe = venv_scripts / "curator-mcp.exe"
+        if not mcp_exe.exists():
+            mcp_exe = venv_scripts / "curator-mcp"  # POSIX fallback
+        if not mcp_exe.exists():
+            out.append(_CheckResult(
+                "curator-mcp executable found",
+                False,
+                f"missing at {mcp_exe}",
+            ))
+            return out
+
+        # Build env with CURATOR_CONFIG pinned
+        env = os.environ.copy()
+        canonical_toml = Path(self.runtime.config.db_path).parent / "curator.toml"
+        if canonical_toml.exists():
+            env["CURATOR_CONFIG"] = str(canonical_toml)
+
+        # Spawn + handshake
+        try:
+            proc = subprocess.Popen(
+                [str(mcp_exe)],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=env, text=True, encoding="utf-8",
+            )
+            try:
+                # MCP initialize
+                init_msg = {
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "HealthCheckDialog", "version": "1.0"},
+                    },
+                }
+                proc.stdin.write(json.dumps(init_msg) + "\n")
+                proc.stdin.flush()
+                proc.stdout.readline()  # init response
+                proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+                proc.stdin.flush()
+                # tools/list
+                proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}) + "\n")
+                proc.stdin.flush()
+                tools_resp = proc.stdout.readline()
+                if not tools_resp:
+                    out.append(_CheckResult("MCP handshake", False, "no tools/list response"))
+                    return out
+                tools = json.loads(tools_resp).get("result", {}).get("tools", [])
+                out.append(_CheckResult(
+                    f"MCP tools advertised",
+                    len(tools) >= 9,
+                    f"{len(tools)} tools (expected ≥ 9)",
+                ))
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        except Exception as e:  # noqa: BLE001
+            out.append(_CheckResult("MCP probe raised", False, str(e)))
+        return out
+
+    # ---- UI construction ----
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+
+        # Header label + summary row
+        self._header = QLabel("Running checks…")
+        font = QFont()
+        font.setPointSize(13)
+        font.setBold(True)
+        self._header.setFont(font)
+        layout.addWidget(self._header)
+
+        self._summary = QLabel("")
+        self._summary.setStyleSheet("color: #666; padding-bottom: 6px;")
+        layout.addWidget(self._summary)
+
+        # Scrollable area for the check sections
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll_inner = QWidget()
+        self._scroll_layout = QVBoxLayout(self._scroll_inner)
+        self._scroll_layout.setSpacing(8)
+        self._scroll.setWidget(self._scroll_inner)
+        layout.addWidget(self._scroll, stretch=1)
+
+        # Button row: Refresh + Copy to clipboard + Close
+        btn_row = QHBoxLayout()
+        self._refresh_btn = QPushButton("&Refresh")
+        self._refresh_btn.clicked.connect(self.refresh)
+        btn_row.addWidget(self._refresh_btn)
+
+        self._copy_btn = QPushButton("&Copy to clipboard")
+        self._copy_btn.clicked.connect(self._copy_result)
+        btn_row.addWidget(self._copy_btn)
+
+        btn_row.addStretch(1)
+
+        close_btn = QPushButton("&Close")
+        close_btn.setDefault(True)
+        close_btn.clicked.connect(self.accept)
+        btn_row.addWidget(close_btn)
+
+        layout.addLayout(btn_row)
+
+    def _render(self, result: HealthCheckResult) -> None:
+        # Clear existing section widgets
+        while self._scroll_layout.count():
+            item = self._scroll_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        # Header + summary
+        if result.all_green:
+            self._header.setText(f"✓ All checks passed ({result.passed} of {result.total})")
+            self._header.setStyleSheet(f"color: {_COLOR_PASS.name()};")
+        else:
+            self._header.setText(
+                f"✗ {result.failed} of {result.total} checks failed"
+            )
+            self._header.setStyleSheet(f"color: {_COLOR_FAIL.name()};")
+        self._summary.setText(
+            f"Curator stack diagnostic • ran in {result.elapsed_ms} ms • {result.started_at:%Y-%m-%d %H:%M:%S}"
+        )
+
+        # One QGroupBox per section
+        for section_name, rows in result.sections.items():
+            box = QGroupBox(section_name)
+            box_layout = QVBoxLayout(box)
+            box_layout.setSpacing(4)
+            box_layout.setContentsMargins(10, 10, 10, 10)
+            for r in rows:
+                box_layout.addLayout(self._render_check_row(r))
+            self._scroll_layout.addWidget(box)
+
+        self._scroll_layout.addStretch(1)
+
+    def _render_check_row(self, r: _CheckResult) -> QHBoxLayout:
+        """One check row: [icon] [label] [detail]."""
+        row = QHBoxLayout()
+        row.setSpacing(8)
+
+        # Status icon (colored bullet)
+        icon = QLabel()
+        if r.passed:
+            color = _COLOR_PASS if r.severity == "fail" else _COLOR_INFO
+            text = "●"  # filled circle
+        else:
+            color = {"warn": _COLOR_WARN, "info": _COLOR_INFO}.get(r.severity, _COLOR_FAIL)
+            text = "●"
+        icon.setText(text)
+        icon.setStyleSheet(f"color: {color.name()}; font-size: 14pt; padding-right: 6px;")
+        icon.setFixedWidth(20)
+        row.addWidget(icon)
+
+        # Label
+        label = QLabel(r.label)
+        label.setMinimumWidth(220)
+        row.addWidget(label)
+
+        # Detail (italic, smaller, gray)
+        if r.detail:
+            detail = QLabel(r.detail)
+            detail.setStyleSheet("color: #555; font-style: italic;")
+            detail.setWordWrap(True)
+            detail.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            row.addWidget(detail, stretch=1)
+        else:
+            row.addStretch(1)
+        return row
+
+    def _copy_result(self) -> None:
+        """Copy a plain-text rendering of the check results to clipboard."""
+        if self._last_result is None:
+            return
+        lines = [
+            f"Curator Health Check  ({self._last_result.started_at:%Y-%m-%d %H:%M:%S})",
+            f"{self._last_result.passed} of {self._last_result.total} checks passed"
+            f" -- ran in {self._last_result.elapsed_ms} ms",
+            "",
+        ]
+        for section, rows in self._last_result.sections.items():
+            lines.append(f"## {section}")
+            for r in rows:
+                marker = "[ OK ]" if r.passed else f"[{r.severity.upper():4}]"
+                lines.append(f"  {marker} {r.label}" + (f": {r.detail}" if r.detail else ""))
+            lines.append("")
+        QApplication.clipboard().setText("\n".join(lines))
