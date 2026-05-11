@@ -21,7 +21,7 @@ import os
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 
 from curator.models.types import (
     ChangeEvent,
@@ -31,6 +31,9 @@ from curator.models.types import (
     SourcePluginInfo,
 )
 from curator.plugins.hookspecs import hookimpl
+
+if TYPE_CHECKING:
+    from curator.storage.repositories.source_repo import SourceRepository
 
 
 SOURCE_TYPE = "local"
@@ -70,9 +73,46 @@ class Plugin:
     All hook methods short-circuit (return ``None``) when the
     ``source_id`` doesn't belong to this plugin, so other source plugins
     registered for ``"gdrive"``, ``"onedrive"``, etc. won't conflict.
+
+    Source ownership (v1.6.4+):
+    The plugin claims a ``source_id`` if EITHER:
+      1. The source_id matches the legacy convention ("local" or
+         "local:<name>"), OR
+      2. The source_id is registered in Curator's sources table with
+         ``source_type='local'`` (looked up via the injected
+         :attr:`_source_repo`).
+
+    Rule 2 was added in v1.6.4 to fix a longstanding limitation: users
+    creating sources via ``curator sources add my_custom_id --type local``
+    could register the source but no plugin would dispatch scans to it.
+    The injection follows the same pattern established for gdrive in
+    v1.5.1 (:meth:`set_source_repo`).
     """
 
     SOURCE_TYPE = SOURCE_TYPE
+
+    def __init__(self) -> None:
+        # v1.6.4: source_repo is injected during build_runtime() so we
+        # can look up source_type for arbitrary source_ids. Pre-injection
+        # we fall back to legacy prefix-matching.
+        self._source_repo: "SourceRepository | None" = None
+
+    def set_source_repo(self, source_repo: "SourceRepository") -> None:
+        """Inject the source_repo for source_type lookup (v1.6.4).
+
+        Called by ``build_runtime`` once the source_repo is constructed.
+        Mirrors the v1.5.1 injection added for gdrive_source.
+
+        Without injection: ``_owns()`` only recognizes source_ids that
+        match the conventional ``"local"`` or ``"local:<name>"`` prefix.
+        Custom source_ids registered via ``sources add my_id --type local``
+        would be rejected with 'No source plugin registered'.
+
+        With injection: ``_owns()`` additionally queries the sources
+        table for source_type='local', so any source registered with
+        ``--type local`` is scannable regardless of its source_id.
+        """
+        self._source_repo = source_repo
 
     # ---- registration ----
 
@@ -342,6 +382,31 @@ class Plugin:
     # ---- helpers ----
 
     def _owns(self, source_id: str) -> bool:
-        """Return True if this plugin owns the given source_id."""
-        # Conventionally "local" or "local:<name>" for multi-root setups.
-        return source_id == SOURCE_TYPE or source_id.startswith(f"{SOURCE_TYPE}:")
+        """Return True if this plugin owns the given source_id.
+
+        Two checks (in order):
+        1. Legacy convention: source_id is ``"local"`` or starts with
+           ``"local:"`` (multi-root setups).
+        2. Database lookup (v1.6.4+): source_id is registered in the
+           sources table with ``source_type='local'``. Only runs if
+           :attr:`_source_repo` has been injected (it always is during
+           normal CLI / GUI / MCP operation).
+
+        Test contexts that construct the plugin directly without going
+        through build_runtime will see only check #1 active, matching
+        pre-v1.6.4 behavior.
+        """
+        if source_id == SOURCE_TYPE or source_id.startswith(f"{SOURCE_TYPE}:"):
+            return True
+        if self._source_repo is not None:
+            try:
+                source = self._source_repo.get(source_id)
+                if source is not None and source.source_type == SOURCE_TYPE:
+                    return True
+            except Exception:  # noqa: BLE001 -- defensive boundary
+                # Don't let a transient DB issue make scans fail with
+                # 'No source plugin registered' when prefix matching
+                # alone might still work. Caller will get a normal
+                # error from the underlying hookimpl if we return False.
+                pass
+        return False

@@ -167,6 +167,17 @@ def build_runtime(
     if gdrive_plugin is not None and hasattr(gdrive_plugin, "set_source_repo"):
         gdrive_plugin.set_source_repo(source_repo)
 
+    # v1.6.4: same injection for the local_source plugin so its _owns()
+    # can claim ANY source_id whose source_type='local' in the DB, not
+    # just ones matching the legacy "local" / "local:<name>" prefix.
+    # Closes the v1.6.x plugin-SDK limitation where users could register
+    # custom source_ids via `sources add my_id --type local` but the
+    # plugin would refuse to dispatch scans to them. See
+    # plugins/core/local_source.py Plugin.set_source_repo() docstring.
+    local_plugin = pm.get_plugin("curator.core.local_source")
+    if local_plugin is not None and hasattr(local_plugin, "set_source_repo"):
+        local_plugin.set_source_repo(source_repo)
+
     # Services
     audit = AuditService(audit_repo)
     classification = ClassificationService(pm)

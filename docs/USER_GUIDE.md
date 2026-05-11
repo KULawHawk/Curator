@@ -155,12 +155,12 @@ Source registration and toggling.
 ```powershell
 curator sources list                                            # all registered
 curator sources show local                                      # detail for one
-curator sources add work_drive --type local --name "Work"       # register a new source row
-#   (NOTE in v1.6: only the source TYPE's default source_id is
-#    automatically scannable. Custom source IDs are tracked in
-#    the DB but the plugin SDK doesn't yet dispatch scans to them.
-#    For now use the default 'local' / 'gdrive' source IDs only.)
-curator sources add gdrive_work --type gdrive
+curator sources add work_drive --type local --name "Work"       # register a new source
+#   (v1.6.4+: any source registered with --type local will be
+#    dispatched to by the local plugin, regardless of source_id.
+#    In v1.6.0–1.6.3 this required workarounds; the plugin SDK
+#    is now fixed and custom source IDs are first-class.)
+curator sources add gdrive_work --type gdrive                   # second Drive account
 curator sources config local --get root                         # read one config key
 curator sources config local --set root --value "C:\new\path"   # mutate
 curator sources enable local                                    # re-enable
@@ -168,7 +168,7 @@ curator sources disable local                                   # disable (keep 
 curator sources remove local --apply                            # delete (fails if files reference it)
 ```
 
-**When to use:** for v1.6, mostly just leave the auto-registered sources alone. The path you scan is passed to `curator scan`, not stored on the source.
+**When to use:** register a new source any time you want a separate logical bucket of files. Each source can have its own root, config, and scan history.
 
 ### `curator scan`
 
@@ -531,7 +531,7 @@ curator migrate --list
 curator migrate --status <job_id>
 ```
 
-**v1.6 caveat:** the `gdrive` source uses its plugin-assigned source_id (also `gdrive`). For multiple Drive accounts you'd need plugin-side support that doesn't ship in v1.6.
+**v1.6 note for cross-source migration:** in v1.6.0–1.6.3 only the default `gdrive` source_id worked for Drive operations. v1.6.4 lifted this for the local plugin (custom local source_ids work). Multi-account Drive scenarios (e.g. `gdrive_personal` and `gdrive_work` simultaneously) need the same fix applied to the gdrive plugin — not yet shipped.
 
 ### Recipe 5 — Audit query for the past day
 

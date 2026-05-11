@@ -4,6 +4,66 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.6.4] — 2026-05-09 — plugin SDK fix: custom source_ids now scannable for type='local'
+
+**Headline:** Closes the v1.6.x plugin-SDK limitation where users could register custom source_ids via `curator sources add my_id --type local` but the local plugin would refuse to dispatch scans to them with `RuntimeError: No source plugin registered for source_id='my_id'`. The local source plugin now claims **any** source registered with `source_type='local'`, regardless of source_id.
+
+### The bug
+
+In v1.6.0–v1.6.3, the local source plugin's `_owns(source_id)` method did pure string matching:
+
+```python
+def _owns(self, source_id: str) -> bool:
+    return source_id == "local" or source_id.startswith("local:")
+```
+
+A user running `curator sources add work_drive --type local` would get a row in the sources table with `source_id='work_drive'`, `source_type='local'`, but the local plugin's `_owns("work_drive")` returned False. Any subsequent `curator scan work_drive <path>` crashed with `RuntimeError: No source plugin registered`. Same problem affected the gdrive plugin symmetrically.
+
+### The fix
+
+v1.6.4 extends the v1.5.1 `set_source_repo()` injection pattern (originally added for gdrive's OAuth config resolution) to the local plugin. The plugin's `_owns()` now does two checks in order:
+
+1. Legacy prefix matching (`"local"` or `"local:<name>"`) — still works without DB access (test contexts, etc.)
+2. **Database lookup**: if `self._source_repo` is injected and the source_id is registered with `source_type='local'`, claim it.
+
+The injection happens in `cli/runtime.py:build_runtime()`, mirroring the existing gdrive injection at the same site.
+
+### Files changed
+
+- **`src/curator/plugins/core/local_source.py`** — added `_source_repo` attribute + `set_source_repo()` method + extended `_owns()` with DB lookup fallback. Defensive `except Exception` around the lookup so a transient DB issue can't make scans worse than they would be without the fix.
+- **`src/curator/cli/runtime.py`** — added `local_plugin.set_source_repo(source_repo)` call alongside the existing gdrive injection. Same pattern, same comment style.
+
+### Verified end-to-end
+
+```
+> curator sources add my_docs --type local --name "My Documents test"
+[ok] source.add my_docs
+
+> curator scan my_docs C:\Users\jmlee\Desktop\AL\Curator\installer
+Scan complete in 0.20s
+  files seen      |  3
+  new             |  3
+  files hashed    |  3
+  bytes read      |  43,039
+
+> curator sources list
+  source_id | type  | name              | status  | files
+  local     | local | Local Filesystem  | enabled | 86940
+  my_docs   | local | My Documents test | enabled |     3
+```
+
+Before v1.6.4 the scan step crashed with `RuntimeError: No source plugin registered for source_id='my_docs'`.
+
+### Test suite status
+
+- **1438 passed, 0 failed, 9 skipped** (every skip has a documented reason)
+- 74/74 targeted tests pass (everything touching `local_source`, `source_repo`, `runtime`, `sources`, `scan_service`, `plugin_manager`)
+- The previously-skipped `test_dst_source_id_different_exits_2` still skips correctly when PyDrive2 is installed (this skipif was added in v1.6.3)
+
+### USER_GUIDE.md update
+
+Removed the v1.6 caveat warning users not to use custom source_ids. Multiple-source-per-type is now first-class.
+
 ## [1.6.3] — 2026-05-09 — patch bundle: workflow JSON parsing + installer extras + USER_GUIDE corrections + test green
 
 **Headline:** Patch release bundling all the cleanup-pass fixes after v1.6.2 went out. Test suite is now fully green (1438 passed, 0 failed, 9 skipped — every skip has a documented reason). Workflow scripts and USER_GUIDE.md examples now use correct CLI syntax. Installer pulls in `[organize]` extra by default.
