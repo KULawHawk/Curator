@@ -502,6 +502,150 @@ def _parse_jwt(token: str) -> dict | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# v1.7.28: per-pattern enrichment parsers for non-JWT HIGH-severity patterns.
+# Each parser inspects the matched token's prefix/format and returns a flat
+# {key: value} dict surfacing the forensic triage signals. Stdlib-only.
+# ---------------------------------------------------------------------------
+
+
+def _parse_aws_key(token: str) -> dict | None:
+    """Parse AWS access key ID prefix.
+
+    AKIA -> long-term IAM user access key (rotation required if exposed)
+    ASIA -> temporary STS session key (short-lived, lower urgency)
+    """
+    if token.startswith("AKIA"):
+        return {
+            "key_type": "long_term",
+            "description": "IAM user access key (long-term credential)",
+        }
+    if token.startswith("ASIA"):
+        return {
+            "key_type": "temporary",
+            "description": "STS session key (short-lived, expires)",
+        }
+    return None
+
+
+def _parse_stripe_key(token: str) -> dict | None:
+    """Parse Stripe secret key prefix.
+
+    sk_live_ -> PRODUCTION credential (real money can move)
+    sk_test_ -> sandbox credential (test mode only)
+    """
+    if token.startswith("sk_live_"):
+        return {
+            "mode": "live",
+            "description": "PRODUCTION Stripe secret key (real charges possible)",
+        }
+    if token.startswith("sk_test_"):
+        return {
+            "mode": "test",
+            "description": "Stripe test-mode key (sandbox)",
+        }
+    return None
+
+
+def _parse_slack_token(token: str) -> dict | None:
+    """Parse Slack token type.
+
+    xoxa -> app token, xoxb -> bot, xoxp -> user, xoxr -> refresh, xoxs -> workspace
+    """
+    types = {
+        "a": ("app", "Slack app-level token (granular scopes)"),
+        "b": ("bot", "Slack bot user OAuth token"),
+        "p": ("user", "Slack user OAuth token (broad scopes)"),
+        "r": ("refresh", "Slack refresh token"),
+        "s": ("workspace", "Slack workspace-level token"),
+    }
+    if len(token) >= 4 and token[:3] == "xox" and token[3] in types:
+        t, desc = types[token[3]]
+        return {"token_type": t, "description": desc}
+    return None
+
+
+def _parse_github_pat(token: str) -> dict | None:
+    """Parse GitHub Personal Access Token type by prefix.
+
+    ghp -> classic personal access token (broad scopes, treat as password)
+    gho -> OAuth access token
+    ghu -> GitHub App user-to-server token
+    ghs -> GitHub App server-to-server installation token
+    ghr -> refresh token
+    """
+    types = {
+        "ghp": ("personal", "classic personal access token (broad scopes)"),
+        "gho": ("oauth", "OAuth access token"),
+        "ghu": ("user_to_server", "GitHub App user-to-server token"),
+        "ghs": ("server_to_server", "GitHub App installation token"),
+        "ghr": ("refresh", "GitHub App refresh token"),
+    }
+    prefix = token[:3]
+    if prefix in types:
+        t, desc = types[prefix]
+        return {"token_type": t, "description": desc}
+    return None
+
+
+def _parse_openai_key(token: str) -> dict | None:
+    """Parse OpenAI API key prefix.
+
+    sk-proj- -> project-scoped key (newer format, limited to one project)
+    sk-      -> standard user/org key (broader access)
+    """
+    if token.startswith("sk-proj-"):
+        return {
+            "key_type": "project",
+            "description": "OpenAI project-scoped key (limited to one project)",
+        }
+    if token.startswith("sk-"):
+        return {
+            "key_type": "standard",
+            "description": "OpenAI user/org-scoped key (broader access)",
+        }
+    return None
+
+
+def _parse_mailgun_key(token: str) -> dict | None:
+    """Parse Mailgun API key prefix.
+
+    key-     -> legacy API key (full account access)
+    private- -> private API key (send + manage)
+    pubkey-  -> public validation key (limited; safe-ish to expose)
+    """
+    if token.startswith("key-"):
+        return {
+            "key_type": "legacy_api",
+            "description": "Mailgun legacy API key (full account access)",
+        }
+    if token.startswith("private-"):
+        return {
+            "key_type": "private",
+            "description": "Mailgun private API key",
+        }
+    if token.startswith("pubkey-"):
+        return {
+            "key_type": "public",
+            "description": "Mailgun public validation key (limited)",
+        }
+    return None
+
+
+# Dispatch table: pattern_name -> parser callable. scan_text consults this
+# after every regex match to attach metadata. Patterns not in the table
+# get metadata=None.
+_PATTERN_PARSERS = {
+    "jwt": _parse_jwt,
+    "aws_access_key_id": _parse_aws_key,
+    "stripe_secret_key": _parse_stripe_key,
+    "slack_token": _parse_slack_token,
+    "github_pat": _parse_github_pat,
+    "openai_api_key": _parse_openai_key,
+    "mailgun_api_key": _parse_mailgun_key,
+}
+
+
 class PIIScanner:
     """Stateless PII detector.
 
@@ -562,7 +706,14 @@ class PIIScanner:
                     redacted=pat.redact(matched),
                     offset=offset,
                     line=line,
-                    metadata=_parse_jwt(matched) if pat.name == "jwt" else None,
+                    # v1.7.28: dispatch-table parser lookup (was hardcoded
+                    # JWT-only in v1.7.26). Patterns not in _PATTERN_PARSERS
+                    # get metadata=None.
+                    metadata=(
+                        _PATTERN_PARSERS[pat.name](matched)
+                        if pat.name in _PATTERN_PARSERS
+                        else None
+                    ),
                 ))
         # Stable sort: by offset
         matches.sort(key=lambda m: m.offset)

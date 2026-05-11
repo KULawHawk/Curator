@@ -3787,20 +3787,27 @@ def scan_pii_cmd(
                     f"      L{m.line:>4}  [{sev_color}]{m.pattern_name:>12}[/]  "
                     f"{m.redacted}"
                 )
-                # v1.7.26: surface JWT metadata under the match line.
-                # The parser exposes alg/iss/sub/exp_iso/expired - all
-                # critical for forensic triage of leaked tokens.
+                # v1.7.28: surface enrichment metadata under the match line.
+                # Generalized from v1.7.26's JWT-only render. All metadata
+                # keys are shown; high-risk signals trigger red coloring
+                # so the eye lands on the urgent rows.
                 if m.metadata:
-                    parts = []
-                    for k in ("alg", "iss", "sub", "exp_iso", "expired"):
-                        v = m.metadata.get(k)
-                        if v is not None:
-                            parts.append(f"{k}={v}")
-                    if parts:
-                        meta_color = "red" if m.metadata.get("expired") else "dim"
-                        console.print(
-                            f"             [{meta_color}]{'  '.join(parts)}[/]"
-                        )
+                    parts = [f"{k}={v}" for k, v in m.metadata.items()]
+                    # High-risk indicators (ACTIVE credentials, production
+                    # mode, long-term keys, broad-scope tokens). These are
+                    # the ones a forensic analyst should triage FIRST.
+                    high_risk = (
+                        m.metadata.get("expired") is False  # JWT still hot
+                        or m.metadata.get("mode") == "live"  # Stripe prod
+                        or m.metadata.get("key_type") == "long_term"  # AWS
+                        or m.metadata.get("key_type") == "legacy_api"  # Mailgun
+                        or m.metadata.get("token_type") == "personal"  # GitHub classic PAT
+                        or m.metadata.get("token_type") == "user"  # Slack user OAuth
+                    )
+                    meta_color = "red" if high_risk else "dim"
+                    console.print(
+                        f"             [{meta_color}]{'  '.join(parts)}[/]"
+                    )
 
 
 
