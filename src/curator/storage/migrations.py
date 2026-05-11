@@ -104,6 +104,51 @@ def migration_002_migration_jobs_and_progress(conn: sqlite3.Connection) -> None:
     )
 
 
+def migration_003_classification_taxonomy(conn: sqlite3.Connection) -> None:
+    """Add asset classification columns to the ``files`` table.
+
+    T-C02 from ``docs/FEATURE_TODO.md``. Adds three columns that let a user
+    (or future automation) classify file assets along orthogonal axes:
+
+      * ``status``         — One of 'vital' / 'active' / 'provisional' /
+                             'junk'. NOT NULL, defaults to 'active'.
+                             The 4 buckets are deliberately coarse to keep
+                             classification cheap; finer-grained metadata
+                             belongs in tags / bundles / lineage.
+      * ``supersedes_id``  — Soft UUID reference to another file that this
+                             one supersedes (e.g. v2 supersedes v1).
+                             NULLable. Not a FK because the referenced row
+                             might be deleted; we don't want CASCADE here.
+      * ``expires_at``     — Optional retention horizon. NULL = no expiry.
+                             Future tier-storage / cleanup rules can use
+                             this for automated archival policies.
+
+    Plus an index on ``status`` for fast bucket-filtering.
+
+    Migration is purely additive. Existing rows get ``status='active'``
+    and NULL for the other two; no row rewrites needed (SQLite ALTER
+    TABLE ADD COLUMN is metadata-only).
+
+    Status buckets (semantic):
+      vital       — Cannot be lost. Trash/migration veto target.
+      active      — Default. Working files; no special treatment.
+      provisional — Tentative. Candidates for cleanup if not promoted.
+      junk        — Slated for removal. Cleanup-tab targets.
+    """
+    conn.executescript(
+        """
+        ALTER TABLE files ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+        ALTER TABLE files ADD COLUMN supersedes_id TEXT;
+        ALTER TABLE files ADD COLUMN expires_at TIMESTAMP;
+
+        CREATE INDEX IF NOT EXISTS idx_files_status
+            ON files(status);
+        CREATE INDEX IF NOT EXISTS idx_files_expires_at
+            ON files(expires_at) WHERE expires_at IS NOT NULL;
+        """
+    )
+
+
 # ---------------------------------------------------------------------------
 # Migration registry
 # ---------------------------------------------------------------------------
@@ -113,6 +158,7 @@ def migration_002_migration_jobs_and_progress(conn: sqlite3.Connection) -> None:
 MIGRATIONS: list[tuple[str, MigrationFunc]] = [
     ("001_initial", migration_001_initial),
     ("002_migration_jobs_and_progress", migration_002_migration_jobs_and_progress),
+    ("003_classification_taxonomy", migration_003_classification_taxonomy),
 ]
 
 

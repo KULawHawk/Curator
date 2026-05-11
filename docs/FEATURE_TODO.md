@@ -146,11 +146,12 @@ Real new infrastructure.
 - **Why critical:** Several Tier A/B features (`T-A04`, `T-C04`, `T-C05`) depend on reversibility. Build this *before* any auto-destructive feature.
 
 ### `T-C02` — Asset Classification Taxonomy (status: vital/active/provisional/junk)
-- **Status:** designed, not built
+- **Status:** **shipped v1.7.3 (foundation)**
 - **Effort:** M-L
 - **Depends on:** Schema migration
 - **What:** Add `status`, `supersedes_id`, `expires_at` columns to `files` table. New `curator status set/get/report` subcommands. Matching MCP tool.
-- **Notes:** This is the foundation for `T-B05`, `T-A05`, `T-C03`. Worth building early.
+- **v1.7.3 delivery:** Migration 003 + FileEntity fields + 4 new FileRepository methods + 3 CLI subcommands. Applied transparently to canonical 86,943-file DB on first run. GUI/MCP integration deferred.
+- **Notes:** This is the foundation for `T-B02`, `T-B05`, `T-A05`, `T-C03`. Worth building early.
 
 ### `T-C03` — Virtual Project Overlays
 - **Status:** proposed

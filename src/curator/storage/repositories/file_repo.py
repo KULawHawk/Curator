@@ -50,6 +50,9 @@ class FileRepository:
             sqlite3.IntegrityError: if (source_id, source_path) already exists.
         """
         cid = uuid_to_str(file.curator_id)
+        supersedes_str = (
+            uuid_to_str(file.supersedes_id) if file.supersedes_id is not None else None
+        )
         with self.db.conn() as conn:
             conn.execute(
                 """
@@ -58,8 +61,9 @@ class FileRepository:
                     size, mtime, ctime, inode,
                     xxhash3_128, md5, fuzzy_hash,
                     file_type, extension, file_type_confidence,
-                    seen_at, last_scanned_at, deleted_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    seen_at, last_scanned_at, deleted_at,
+                    status, supersedes_id, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cid, file.source_id, file.source_path,
@@ -67,6 +71,7 @@ class FileRepository:
                     file.xxhash3_128, file.md5, file.fuzzy_hash,
                     file.file_type, file.extension, file.file_type_confidence,
                     file.seen_at, file.last_scanned_at, file.deleted_at,
+                    file.status, supersedes_str, file.expires_at,
                 ),
             )
             save_flex_attrs(conn, _FLEX_TABLE, _FLEX_PK, cid, file.flex)
@@ -78,6 +83,9 @@ class FileRepository:
         use :meth:`replace_flex_attrs` for full replacement).
         """
         cid = uuid_to_str(file.curator_id)
+        supersedes_str = (
+            uuid_to_str(file.supersedes_id) if file.supersedes_id is not None else None
+        )
         with self.db.conn() as conn:
             conn.execute(
                 """
@@ -86,7 +94,8 @@ class FileRepository:
                     size = ?, mtime = ?, ctime = ?, inode = ?,
                     xxhash3_128 = ?, md5 = ?, fuzzy_hash = ?,
                     file_type = ?, extension = ?, file_type_confidence = ?,
-                    seen_at = ?, last_scanned_at = ?, deleted_at = ?
+                    seen_at = ?, last_scanned_at = ?, deleted_at = ?,
+                    status = ?, supersedes_id = ?, expires_at = ?
                 WHERE curator_id = ?
                 """,
                 (
@@ -95,6 +104,7 @@ class FileRepository:
                     file.xxhash3_128, file.md5, file.fuzzy_hash,
                     file.file_type, file.extension, file.file_type_confidence,
                     file.seen_at, file.last_scanned_at, file.deleted_at,
+                    file.status, supersedes_str, file.expires_at,
                     cid,
                 ),
             )
@@ -283,11 +293,146 @@ class FileRepository:
         return cursor.fetchone()[0]
 
     # ------------------------------------------------------------------
+    # T-C02 classification (v1.7.3)
+    # ------------------------------------------------------------------
+
+    _VALID_STATUSES = frozenset({"vital", "active", "provisional", "junk"})
+
+    def update_status(
+        self,
+        curator_id: UUID,
+        status: str,
+        *,
+        supersedes_id: UUID | None = None,
+        expires_at: datetime | None = None,
+        clear_supersedes: bool = False,
+        clear_expires: bool = False,
+    ) -> None:
+        """Update classification fields without touching the rest of the row.
+
+        ``status`` must be one of ``vital`` / ``active`` / ``provisional`` /
+        ``junk``. ``supersedes_id`` and ``expires_at`` are optional; pass
+        ``clear_supersedes=True`` or ``clear_expires=True`` to NULL them out
+        explicitly (passing ``None`` for the value leaves the existing
+        column unchanged, since None is the sentinel for "don't touch").
+
+        Raises:
+            ValueError: if ``status`` is not in the allowed set.
+        """
+        if status not in self._VALID_STATUSES:
+            raise ValueError(
+                f"Invalid status {status!r}; must be one of "
+                f"{sorted(self._VALID_STATUSES)}"
+            )
+        cid = uuid_to_str(curator_id)
+        sets: list[str] = ["status = ?"]
+        params: list = [status]
+        if clear_supersedes:
+            sets.append("supersedes_id = NULL")
+        elif supersedes_id is not None:
+            sets.append("supersedes_id = ?")
+            params.append(uuid_to_str(supersedes_id))
+        if clear_expires:
+            sets.append("expires_at = NULL")
+        elif expires_at is not None:
+            sets.append("expires_at = ?")
+            params.append(expires_at)
+        params.append(cid)
+        sql = f"UPDATE files SET {', '.join(sets)} WHERE curator_id = ?"
+        with self.db.conn() as conn:
+            conn.execute(sql, tuple(params))
+
+    def count_by_status(
+        self,
+        *,
+        source_id: str | None = None,
+        include_deleted: bool = False,
+    ) -> dict[str, int]:
+        """Return a dict mapping each of the 4 status buckets to its count.
+
+        Every bucket is present in the output even if zero (so callers can
+        rely on key existence). Unknown statuses observed in the DB are
+        also included.
+        """
+        sql = "SELECT status, COUNT(*) FROM files WHERE 1"
+        params: list = []
+        if source_id is not None:
+            sql += " AND source_id = ?"
+            params.append(source_id)
+        if not include_deleted:
+            sql += " AND deleted_at IS NULL"
+        sql += " GROUP BY status"
+        cursor = self.db.conn().execute(sql, tuple(params))
+        rows = cursor.fetchall()
+        out: dict[str, int] = {s: 0 for s in self._VALID_STATUSES}
+        for row in rows:
+            out[row[0]] = row[1]
+        return out
+
+    def query_by_status(
+        self,
+        status: str,
+        *,
+        source_id: str | None = None,
+        limit: int | None = None,
+        include_deleted: bool = False,
+    ) -> list[FileEntity]:
+        """Return all files with the given status."""
+        sql = "SELECT * FROM files WHERE status = ?"
+        params: list = [status]
+        if source_id is not None:
+            sql += " AND source_id = ?"
+            params.append(source_id)
+        if not include_deleted:
+            sql += " AND deleted_at IS NULL"
+        sql += " ORDER BY seen_at DESC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        cursor = self.db.conn().execute(sql, tuple(params))
+        return [self._row_to_entity(row) for row in cursor.fetchall()]
+
+    def find_expiring_before(
+        self,
+        when: datetime,
+        *,
+        source_id: str | None = None,
+        include_deleted: bool = False,
+    ) -> list[FileEntity]:
+        """Return all files with ``expires_at <= when`` and ``expires_at IS NOT NULL``.
+
+        Useful for cleanup-tab and tiered-storage policies that want to
+        flag soon-to-expire files.
+        """
+        sql = (
+            "SELECT * FROM files WHERE expires_at IS NOT NULL AND expires_at <= ?"
+        )
+        params: list = [when]
+        if source_id is not None:
+            sql += " AND source_id = ?"
+            params.append(source_id)
+        if not include_deleted:
+            sql += " AND deleted_at IS NULL"
+        sql += " ORDER BY expires_at ASC"
+        cursor = self.db.conn().execute(sql, tuple(params))
+        return [self._row_to_entity(row) for row in cursor.fetchall()]
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _row_to_entity(self, row) -> FileEntity:
         """Convert a sqlite3.Row to a FileEntity, including flex attrs."""
+        # v1.7.3 (T-C02): defensively pull the new classification columns
+        # using ``row.keys()`` check so this still works against rows from
+        # pre-migration-003 databases (although migrations run at startup
+        # so that should never happen in practice).
+        row_keys = row.keys() if hasattr(row, "keys") else []
+        status = row["status"] if "status" in row_keys else "active"
+        supersedes_raw = row["supersedes_id"] if "supersedes_id" in row_keys else None
+        expires_at = row["expires_at"] if "expires_at" in row_keys else None
+        supersedes_id = str_to_uuid(supersedes_raw) if supersedes_raw else None
+
         entity = FileEntity(
             curator_id=str_to_uuid(row["curator_id"]),
             source_id=row["source_id"],
@@ -305,6 +450,9 @@ class FileRepository:
             seen_at=row["seen_at"],
             last_scanned_at=row["last_scanned_at"],
             deleted_at=row["deleted_at"],
+            status=status,
+            supersedes_id=supersedes_id,
+            expires_at=expires_at,
         )
         # Load flex attrs
         flex = load_flex_attrs(self.db.conn(), _FLEX_TABLE, _FLEX_PK, row["curator_id"])

@@ -4,6 +4,69 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.3] — 2026-05-11 — T-C02 Asset Classification Taxonomy (foundation)
+
+**Headline:** Schema-level foundation for asset classification. Adds 3 columns (`status`, `supersedes_id`, `expires_at`) to the `files` table, extends FileEntity + FileRepository, and ships a `curator status set/get/report` CLI subcommand group. Foundation only — GUI/MCP integration deferred to subsequent turns; unblocks T-B02 (retention enforcement), T-B05 (tiered storage), T-A05 (audit-feedback), T-C03 (virtual project overlays).
+
+### Why this matters
+
+Pre-v1.7.3, every file in the index was implicitly equal weight — no way to mark anything as "never touch" vs "safe to delete". T-C02 introduces a 4-bucket coarse taxonomy:
+
+| Bucket | Semantic |
+|---|---|
+| `vital` | Cannot be lost. Trash/migration veto target. |
+| `active` | Default. Working files; no special treatment. |
+| `provisional` | Tentative. Candidates for cleanup if not promoted. |
+| `junk` | Slated for removal. Cleanup-tab targets. |
+
+Applied to the canonical 86,943-file DB on first run — all existing rows defaulted to `active` (zero-disruption migration).
+
+### Files changed
+
+- **`src/curator/storage/migrations.py`** — added `migration_003_classification_taxonomy`. Pure ALTER TABLE ADD COLUMN (metadata-only, no row rewrite). 3 columns + 2 indexes (`idx_files_status`, `idx_files_expires_at` with partial-index NOT NULL filter).
+- **`src/curator/models/file.py`** — extended `FileEntity` with `status: str = 'active'`, `supersedes_id: UUID | None`, `expires_at: datetime | None`.
+- **`src/curator/storage/repositories/file_repo.py`** — (1) extended `insert`/`update` SQL to round-trip new columns; (2) `_row_to_entity` with defensive column lookup; (3) 4 new methods: `update_status()` (validates against allowed bucket set), `count_by_status()`, `query_by_status()`, `find_expiring_before()`.
+- **`src/curator/cli/main.py`** — new `status_app` Typer subgroup with 3 commands: `set` (path-or-UUID resolution + audit log entry), `get` (color-coded per-bucket), `report` (ASCII histogram bars, JSON mode).
+
+### CLI behavior on canonical DB (live)
+
+```
+$ curator status report
+
+Status report (all sources)
+  Total files: 86,943
+        vital:       0 (  0.0%)
+       active:  86,943 (100.0%)  ##################################################
+  provisional:       0 (  0.0%)
+         junk:       0 (  0.0%)
+```
+
+Migration applied transparently on first run; existing rows kept their behavior unchanged.
+
+### v1.7.3 limitations / next steps
+
+- **No GUI integration yet.** Browser tab doesn't show status badges or filter by bucket. Deferred.
+- **No MCP tool yet.** Claude-side workflows can't classify files via MCP. Deferred.
+- **No automation/heuristics.** Files don't auto-classify based on age/usage/lineage. T-A05 is the planned consumer.
+- **`atrium-safety` doesn't yet veto on `status='vital'`.** T-B02 will piggyback on this schema (likely shipping shortly).
+- **No CLI bulk-set.** Single-file only via `curator status set`. Bulk operations deferred.
+
+### Verification
+
+- 8-test headless suite (temp DB, full migration round-trip, status validation, count/query/expiring): all PASS
+- Live CLI smoke test against canonical 86,943-file DB: migration applied, `status report` rendered correctly
+- Full pytest: ✅ 1438 passed, 9 skipped, 0 failed (baseline intact across schema change)
+
+### Authoritative-source-first principle applied
+
+Caught **1 wrong assumption** during the build:
+1. `AuditService.append(actor, action, ...)` → actually `AuditService.log(actor, action, ...)`. Caught via `inspect.getmembers(AuditService)` before first live CLI run.
+
+Lessons reused (caught nothing new because already known):
+- `CuratorDB.execute()` exposed directly
+- Rich `console = _console(rt)` per-command function
+- FileEntity uses `size` (not `size_bytes`), `seen_at` (not `last_seen_at`)
+
 ## [1.7.2] — 2026-05-11 — T-B01 Heuristic Space Forecasting
 
 **Headline:** Second feature shipped from the v1.7.0 backlog. New `ForecastService` linear-fits monthly indexing rate from the files table; `curator forecast` CLI + Tools menu "Drive capacity forecast..." dialog surface days-to-95%/99%-full projections per drive.

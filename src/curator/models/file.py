@@ -63,6 +63,22 @@ class FileEntity(CuratorEntity):
         None, description="Soft-delete marker; non-null means the file is in Curator's trash registry"
     )
 
+    # === Classification taxonomy (v1.7.3, T-C02) ===
+    # Coarse 4-bucket status for asset classification. The default is 'active'
+    # which matches the pre-v1.7.3 implicit state.
+    status: str = Field(
+        default="active",
+        description="Asset classification bucket: vital / active / provisional / junk",
+    )
+    supersedes_id: UUID | None = Field(
+        None,
+        description="Soft UUID reference to a file this one supersedes (e.g. v2 supersedes v1)",
+    )
+    expires_at: datetime | None = Field(
+        None,
+        description="Optional retention horizon; cleanup/tier-storage policies use this",
+    )
+
     @property
     def is_deleted(self) -> bool:
         """True if this file is in the trash registry."""

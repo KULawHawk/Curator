@@ -89,6 +89,10 @@ sources_app = typer.Typer(help="Source registration & toggling.")
 app.add_typer(sources_app, name="sources")
 safety_app = typer.Typer(help="Safety primitives for organize actions (Phase Gamma F1).")
 app.add_typer(safety_app, name="safety")
+status_app = typer.Typer(
+    help="Asset classification (vital/active/provisional/junk) - v1.7.3 T-C02.",
+)
+app.add_typer(status_app, name="status")
 gdrive_app = typer.Typer(
     help="Google Drive auth + per-alias credential management.",
     no_args_is_help=True,
@@ -3400,6 +3404,182 @@ def forecast_cmd(
                     f"    [dim]{b.month}: +{b.file_count:>6,} files, "
                     f"+{b.gb_added:>6.2f} GB[/]"
                 )
+
+
+# ------------------------------------------------------------------
+# v1.7.3 (T-C02): curator status set/get/report
+# ------------------------------------------------------------------
+
+def _resolve_file(rt: "CuratorRuntime", target: str):
+    """Resolve a path-or-UUID target to a FileEntity.
+
+    Tries UUID first (cheap); falls back to find_by_path against every
+    registered source. Returns None if not found.
+    """
+    from uuid import UUID as _UUID
+    # Try UUID first
+    try:
+        cid = _UUID(target)
+        return rt.file_repo.get(cid)
+    except (ValueError, AttributeError):
+        pass
+    # Try path lookup across sources
+    for source in rt.source_repo.list_all():
+        f = rt.file_repo.find_by_path(source.source_id, target)
+        if f is not None:
+            return f
+    return None
+
+
+@status_app.command("set")
+def status_set(
+    ctx: typer.Context,
+    target: str = typer.Argument(..., help="File path or curator_id (UUID)"),
+    status: str = typer.Argument(..., help="vital | active | provisional | junk"),
+    expires_in_days: int = typer.Option(
+        None, "--expires-in-days",
+        help="Set expires_at to now + N days. Useful for provisional/junk classifications.",
+    ),
+    clear_expires: bool = typer.Option(
+        False, "--clear-expires",
+        help="Explicitly clear any existing expires_at value.",
+    ),
+) -> None:
+    """Set a file's classification status.
+
+    Examples:
+        curator status set /path/to/file.txt vital
+        curator status set abc123-... junk --expires-in-days 30
+    """
+    rt: CuratorRuntime = ctx.obj
+    console = _console(rt)
+
+    f = _resolve_file(rt, target)
+    if f is None:
+        console.print(f"[red]File not found: {target!r}[/]")
+        raise typer.Exit(code=1)
+
+    from datetime import datetime as _dt, timedelta as _td
+    expires_at = None
+    if expires_in_days is not None:
+        expires_at = _dt.utcnow() + _td(days=expires_in_days)
+
+    try:
+        rt.file_repo.update_status(
+            f.curator_id, status,
+            expires_at=expires_at,
+            clear_expires=clear_expires,
+        )
+    except ValueError as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(code=1)
+
+    rt.audit.log(
+        actor="cli.status",
+        action="file.status_change",
+        entity_type="file",
+        entity_id=str(f.curator_id),
+        details={
+            "from": f.status, "to": status,
+            "expires_at": expires_at.isoformat() if expires_at else None,
+        },
+    )
+
+    if rt.json_output:
+        import json
+        typer.echo(json.dumps({
+            "curator_id": str(f.curator_id),
+            "source_path": f.source_path,
+            "from": f.status, "to": status,
+            "expires_at": expires_at.isoformat() if expires_at else None,
+        }))
+    else:
+        console.print(
+            f"[green]Updated[/] {f.source_path}: {f.status} -> [bold]{status}[/]"
+        )
+        if expires_at:
+            console.print(f"  expires_at: {expires_at.isoformat()}")
+
+
+@status_app.command("get")
+def status_get(
+    ctx: typer.Context,
+    target: str = typer.Argument(..., help="File path or curator_id (UUID)"),
+) -> None:
+    """Get a file's classification status."""
+    rt: CuratorRuntime = ctx.obj
+    console = _console(rt)
+
+    f = _resolve_file(rt, target)
+    if f is None:
+        console.print(f"[red]File not found: {target!r}[/]")
+        raise typer.Exit(code=1)
+
+    if rt.json_output:
+        import json
+        typer.echo(json.dumps({
+            "curator_id": str(f.curator_id),
+            "source_id": f.source_id,
+            "source_path": f.source_path,
+            "status": f.status,
+            "supersedes_id": str(f.supersedes_id) if f.supersedes_id else None,
+            "expires_at": f.expires_at.isoformat() if f.expires_at else None,
+        }))
+    else:
+        # Color by bucket
+        colors = {"vital": "bright_green", "active": "cyan",
+                  "provisional": "yellow", "junk": "red"}
+        c = colors.get(f.status, "white")
+        console.print(f"[bold]{f.source_path}[/]")
+        console.print(f"  curator_id: {f.curator_id}")
+        console.print(f"  status:     [{c}]{f.status}[/]")
+        if f.supersedes_id:
+            console.print(f"  supersedes: {f.supersedes_id}")
+        if f.expires_at:
+            console.print(f"  expires_at: {f.expires_at.isoformat()}")
+
+
+@status_app.command("report")
+def status_report(
+    ctx: typer.Context,
+    source_id: str = typer.Option(
+        None, "--source",
+        help="Limit report to a specific source_id (default: all sources combined).",
+    ),
+) -> None:
+    """Show count of files by classification status bucket."""
+    rt: CuratorRuntime = ctx.obj
+    console = _console(rt)
+
+    counts = rt.file_repo.count_by_status(source_id=source_id)
+    total = sum(counts.values())
+
+    if rt.json_output:
+        import json
+        typer.echo(json.dumps({
+            "source_id": source_id,
+            "total": total,
+            "counts": counts,
+        }, indent=2))
+        return
+
+    title = f"Status report ({source_id or 'all sources'})"
+    console.print(f"\n[bold]{title}[/]")
+    console.print(f"  Total files: {total:,}")
+    if total == 0:
+        return
+
+    # Display in priority order with color
+    ordered = [("vital", "bright_green"), ("active", "cyan"),
+               ("provisional", "yellow"), ("junk", "red")]
+    for bucket, color in ordered:
+        n = counts.get(bucket, 0)
+        pct = 100.0 * n / total if total else 0.0
+        bar_len = int(pct / 2)  # 50-char max
+        bar = "#" * bar_len
+        console.print(
+            f"  [{color}]{bucket:>11}[/]: {n:>7,} ({pct:>5.1f}%)  [{color}]{bar}[/]"
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover
