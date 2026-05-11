@@ -2971,3 +2971,224 @@ class SourceAddDialog(QDialog):
     def registered_types(self) -> dict[str, dict]:
         """Dict of source_type -> metadata for all registered plugins."""
         return self._registered_types
+
+
+# ---------------------------------------------------------------------------
+# VersionStackDialog (v1.7.1) — T-A01 Fuzzy-Match Version Stacking
+# ---------------------------------------------------------------------------
+#
+# Read-only viewer for fuzzy-lineage version stacks. Each stack is a
+# connected component of files joined by NEAR_DUPLICATE / VERSION_OF
+# edges with confidence >= threshold. Stacks are computed by
+# LineageService.find_version_stacks().
+#
+# v1.7.1 scope: VIEW ONLY. No Apply action — semantics for what to do
+# with a "version stack" (keep newest? mark as bundle? consolidate?) is
+# under design. The dialog gives users visibility into fuzzy duplicates
+# that the CLI doesn't currently surface in this grouped form.
+#
+# Future (v1.8+): "Apply" button with options:
+#   - "Keep newest, trash rest"
+#   - "Mark as bundle"
+#   - "Mark canonical"
+# All requiring atrium-reversibility v0.1 to land first per
+# LIFECYCLE_GOVERNANCE.md.
+
+
+class VersionStackDialog(QDialog):
+    """Read-only viewer for fuzzy-match version stacks.
+
+    Pure UI over :meth:`LineageService.find_version_stacks`. No Apply
+    action in v1.7.1 — strictly visibility.
+    """
+
+    def __init__(self, runtime: "CuratorRuntime", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.runtime = runtime
+        self._last_stacks: list[Any] = []
+
+        self.setWindowTitle("Curator - Version stacks (fuzzy matches)")
+        self.setMinimumWidth(720)
+        self.resize(820, 620)
+        self._build_ui()
+        self._refresh_stacks()
+
+    def _build_ui(self) -> None:
+        from PySide6.QtWidgets import (
+            QCheckBox,
+            QDoubleSpinBox,
+        )
+
+        layout = QVBoxLayout(self)
+
+        # --- Filter controls -------------------------------------------
+        grp_filter = QGroupBox("Filter")
+        gf = QVBoxLayout(grp_filter)
+
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("Min confidence:"))
+        self._sp_confidence = QDoubleSpinBox()
+        self._sp_confidence.setRange(0.0, 1.0)
+        self._sp_confidence.setSingleStep(0.05)
+        self._sp_confidence.setDecimals(2)
+        self._sp_confidence.setValue(0.70)
+        self._sp_confidence.setToolTip(
+            "Edges below this confidence are ignored.\n"
+            "Default 0.70 matches the fuzzy plugin's SIMILARITY_THRESHOLD."
+        )
+        row1.addWidget(self._sp_confidence)
+
+        row1.addSpacing(20)
+        self._cb_near_dup = QCheckBox("NEAR_DUPLICATE")
+        self._cb_near_dup.setChecked(True)
+        self._cb_near_dup.setToolTip(
+            "Fuzzy-hash similarity matches (e.g. 'Draft_1' / 'Draft_v2')."
+        )
+        row1.addWidget(self._cb_near_dup)
+
+        self._cb_version_of = QCheckBox("VERSION_OF")
+        self._cb_version_of.setChecked(True)
+        self._cb_version_of.setToolTip(
+            "Filename-family chains (e.g. 'Draft' / 'Draft_FINAL')."
+        )
+        row1.addWidget(self._cb_version_of)
+        row1.addStretch(1)
+
+        self._btn_refresh = QPushButton("Refresh")
+        self._btn_refresh.clicked.connect(self._refresh_stacks)
+        row1.addWidget(self._btn_refresh)
+        gf.addLayout(row1)
+
+        layout.addWidget(grp_filter)
+
+        # --- Status ----------------------------------------------------
+        self._lbl_status = QLabel("Computing stacks...")
+        self._lbl_status.setWordWrap(True)
+        self._lbl_status.setStyleSheet("padding: 4px;")
+        layout.addWidget(self._lbl_status)
+
+        # --- Stacks display --------------------------------------------
+        # Each stack is a collapsible QGroupBox containing a small table.
+        from PySide6.QtWidgets import QScrollArea
+
+        self._stacks_container = QWidget()
+        self._stacks_layout = QVBoxLayout(self._stacks_container)
+        self._stacks_layout.setContentsMargins(0, 0, 0, 0)
+        self._stacks_layout.addStretch(1)  # pushes stacks to top
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self._stacks_container)
+        layout.addWidget(scroll, 1)
+
+        # --- Footer ----------------------------------------------------
+        footer = QHBoxLayout()
+        hint = QLabel(
+            "<i>v1.7.1: read-only view. Apply semantics (keep newest /"
+            " mark as bundle / consolidate) coming in v1.8 after"
+            " atrium-reversibility lands.</i>"
+        )
+        hint.setStyleSheet("color: #5C6BC0;")
+        hint.setWordWrap(True)
+        footer.addWidget(hint, 1)
+        self._btn_close = QPushButton("Close")
+        self._btn_close.clicked.connect(self.reject)
+        footer.addWidget(self._btn_close)
+        layout.addLayout(footer)
+
+    # ------------------------------------------------------------------
+    # Refresh + rendering
+    # ------------------------------------------------------------------
+
+    def _clear_stacks_display(self) -> None:
+        # Remove every widget before the trailing stretch
+        while self._stacks_layout.count() > 1:
+            item = self._stacks_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+    def _refresh_stacks(self) -> None:
+        """Run find_version_stacks with current filter settings, render."""
+        from curator.models.lineage import LineageKind
+
+        min_conf = self._sp_confidence.value()
+        kinds: list = []
+        if self._cb_near_dup.isChecked():
+            kinds.append(LineageKind.NEAR_DUPLICATE)
+        if self._cb_version_of.isChecked():
+            kinds.append(LineageKind.VERSION_OF)
+
+        if not kinds:
+            self._lbl_status.setText(
+                "<span style='color: #C62828;'>Pick at least one edge kind.</span>"
+            )
+            self._clear_stacks_display()
+            return
+
+        try:
+            stacks = self.runtime.lineage.find_version_stacks(
+                min_confidence=min_conf, kinds=kinds,
+            )
+        except Exception as e:  # noqa: BLE001
+            self._lbl_status.setText(
+                f"<span style='color: #C62828;'><b>Error:</b>"
+                f" {type(e).__name__}: {e}</span>"
+            )
+            self._clear_stacks_display()
+            return
+
+        self._last_stacks = stacks
+        self._render_stacks(stacks, min_conf, kinds)
+
+    def _render_stacks(self, stacks, min_conf: float, kinds: list) -> None:
+        self._clear_stacks_display()
+
+        n_stacks = len(stacks)
+        n_files = sum(len(s) for s in stacks)
+        kind_labels = ", ".join(k.value for k in kinds)
+
+        if n_stacks == 0:
+            self._lbl_status.setText(
+                f"<span style='color: #757575;'><b>No stacks found</b></span>"
+                f" at min_confidence={min_conf:.2f} on [{kind_labels}].<br>"
+                f"<i>(This may mean no lineage edges have been computed yet."
+                f" Run a scan with the fuzzy-dup plugin enabled, or check via"
+                f" <code>curator lineage list</code>.)</i>"
+            )
+            return
+
+        self._lbl_status.setText(
+            f"<span style='color: #2E7D32;'><b>{n_stacks} stack(s)</b></span>"
+            f" containing <b>{n_files}</b> file(s)"
+            f" (min_confidence={min_conf:.2f}, kinds=[{kind_labels}])"
+        )
+
+        # Render each stack as a group box with a table inside.
+        for i, stack in enumerate(stacks):
+            grp = QGroupBox(
+                f"Stack {i + 1} \u2014 {len(stack)} files \u2014 newest:"
+                f" {stack[0].source_path.split('/')[-1].split(chr(92))[-1]}"
+            )
+            gl = QVBoxLayout(grp)
+
+            headers = ["File path", "Size", "Modified", "Type"]
+            rows = []
+            for f in stack:
+                rows.append([
+                    f.source_path,
+                    _format_size(f.size),
+                    _format_dt(f.mtime),
+                    f.file_type or "?",
+                ])
+            tbl = _make_table(headers, rows)
+            tbl.setMinimumHeight(min(28 * (len(stack) + 1) + 10, 200))
+            gl.addWidget(tbl)
+
+            # Insert above the stretch
+            self._stacks_layout.insertWidget(self._stacks_layout.count() - 1, grp)
+
+    # Properties for testing
+    @property
+    def last_stacks(self):
+        return self._last_stacks

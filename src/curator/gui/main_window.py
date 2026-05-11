@@ -181,6 +181,11 @@ class CuratorMainWindow(QMainWindow):
         act_sources.triggered.connect(self._slot_open_sources_tab)
         menu_tools.addAction(act_sources)
 
+        # v1.7.1 (T-A01): Version Stacks dialog (fuzzy-match grouping).
+        act_stacks = QAction("&Version stacks (fuzzy)...", self)
+        act_stacks.triggered.connect(self._slot_open_version_stacks)
+        menu_tools.addAction(act_stacks)
+
         # v1.7 alpha: real HealthCheckDialog (native PySide6, in-process).
         act_health = QAction("&Health check", self)
         act_health.triggered.connect(self._slot_open_health_check)
@@ -1852,6 +1857,25 @@ class CuratorMainWindow(QMainWindow):
             )
             return
         dlg = GroupDialog(self.runtime, self)
+        dlg.exec()
+
+    def _slot_open_version_stacks(self) -> None:
+        """Open the VersionStackDialog (v1.7.1, T-A01).
+
+        Reads :meth:`LineageService.find_version_stacks` to find connected
+        components of NEAR_DUPLICATE / VERSION_OF edges; renders them as
+        collapsible group boxes. Read-only in v1.7.1.
+        """
+        try:
+            from curator.gui.dialogs import VersionStackDialog
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self,
+                "Version stacks unavailable",
+                f"Could not import VersionStackDialog: {e}",
+            )
+            return
+        dlg = VersionStackDialog(self.runtime, self)
         dlg.exec()
 
     def _slot_open_cleanup_dialog(self) -> None:

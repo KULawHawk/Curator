@@ -17,12 +17,13 @@ Every item has:
 The heavy machinery exists. Work is wiring + a small UI/glue layer.
 
 ### `T-A01` — Fuzzy-Match Version Stacking
-- **Status:** proposed
+- **Status:** **shipped (read-only viewer) v1.7.1** (Apply semantics deferred to v1.8)
 - **Effort:** M
 - **Depends on:** none (uses existing `lineage_fuzzy_dup.py`)
-- **What:** Collapse NEAR_DUPLICATE chains into a single stack widget in the Browser tab. ("Draft_1", "Draft_Final", "Draft_FINAL_v2" → one stack with expander.)
+- **What:** Collapse NEAR_DUPLICATE chains into a single stack widget. ("Draft_1", "Draft_Final", "Draft_FINAL_v2" → one stack with expander.)
 - **Why high priority:** Directly relevant to Jake's RCS workflow where 31+ F-codes and 3+ card revisions per session produce exactly this pattern.
-- **Notes:** Needs a configurable confidence threshold + easy "ungroup" gesture. False positives are the main risk.
+- **v1.7.1 delivery:** `LineageService.find_version_stacks()` + `VersionStackDialog` (Tools menu). Read-only — no Apply action yet. Apply (keep newest / mark canonical / bundle) deferred to v1.8 pending atrium-reversibility v0.1.
+- **Notes:** False positives below 0.85 confidence happen — the dialog defaults to 0.70 (matches plugin threshold) but the user can dial up.
 
 ### `T-A02` — Visual Lineage Graphing (time-machine UI)
 - **Status:** proposed

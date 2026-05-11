@@ -284,3 +284,110 @@ class LineageService:
             file_a=file_a, file_b=file_b
         )
         return [r for r in results if r is not None]
+
+
+    # ------------------------------------------------------------------
+    # v1.7.1 (T-A01): Fuzzy-Match Version Stacking
+    # ------------------------------------------------------------------
+
+    def find_version_stacks(
+        self,
+        *,
+        min_confidence: float = 0.7,
+        kinds: list[LineageKind] | None = None,
+    ) -> list[list[FileEntity]]:
+        """Group files into 'version stacks' via connected components.
+
+        A version stack is a maximal set of files connected (transitively)
+        by lineage edges of the chosen kinds with confidence >=
+        ``min_confidence``. Captures the "Draft_1 / Draft_Final /
+        Draft_FINAL_v2" pattern that the existing
+        :class:`~curator.plugins.core.lineage_fuzzy_dup.FuzzyDupPlugin`
+        already detects pairwise — this method takes those pairwise edges
+        and walks the graph to find whole families.
+
+        Args:
+            min_confidence: Drop edges below this confidence. Default
+                0.7 matches the
+                :data:`~curator.plugins.core.lineage_fuzzy_dup.SIMILARITY_THRESHOLD`
+                of 70% (stored as 0.7 in the DB).
+            kinds: Which lineage edge kinds to walk. Defaults to
+                ``[NEAR_DUPLICATE, VERSION_OF]``. Pass ``[DUPLICATE]``
+                to get exact-hash stacks instead (GroupDialog territory).
+
+        Returns:
+            List of stacks. Each stack is a list of :class:`FileEntity`
+            with len >= 2, sorted by ``mtime`` descending (newest first).
+            The list of stacks itself is sorted by stack size descending
+            (biggest stacks first).
+
+        Performance: O(E + V * alpha(V)) where E is edge count and V is
+        file count touched by edges. Union-find with path compression.
+        Deleted files are filtered out before grouping; a stack that
+        ends up with <2 live files is dropped.
+        """
+        if kinds is None:
+            kinds = [LineageKind.NEAR_DUPLICATE, LineageKind.VERSION_OF]
+
+        # 1. Pull all qualifying edges across the requested kinds.
+        edges: list[LineageEdge] = []
+        for kind in kinds:
+            edges.extend(
+                self.lineage.list_by_kind(kind, min_confidence=min_confidence)
+            )
+        if not edges:
+            return []
+
+        # 2. Union-find with path compression.
+        parent: dict[UUID, UUID] = {}
+
+        def find(x: UUID) -> UUID:
+            # iterative for safety against deep chains
+            root = x
+            while parent.get(root, root) != root:
+                root = parent[root]
+            # path compression
+            cur = x
+            while parent.get(cur, cur) != root:
+                nxt = parent[cur]
+                parent[cur] = root
+                cur = nxt
+            parent.setdefault(root, root)
+            return root
+
+        def union(a: UUID, b: UUID) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        for edge in edges:
+            union(edge.from_curator_id, edge.to_curator_id)
+
+        # 3. Group curator_ids by their root.
+        groups: dict[UUID, list[UUID]] = {}
+        for cid in list(parent.keys()):
+            root = find(cid)
+            groups.setdefault(root, []).append(cid)
+
+        # 4. Resolve to FileEntity; drop deleted; drop singletons.
+        stacks: list[list[FileEntity]] = []
+        for cids in groups.values():
+            if len(cids) < 2:
+                continue
+            files: list[FileEntity] = []
+            for cid in cids:
+                f = self.files.get(cid)
+                if f is not None and f.deleted_at is None:
+                    files.append(f)
+            if len(files) < 2:
+                continue
+            # newest first within each stack
+            files.sort(
+                key=lambda x: x.mtime if x.mtime is not None else 0.0,
+                reverse=True,
+            )
+            stacks.append(files)
+
+        # 5. Biggest stacks first.
+        stacks.sort(key=len, reverse=True)
+        return stacks

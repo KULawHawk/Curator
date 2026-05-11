@@ -4,6 +4,57 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.1] — 2026-05-11 — T-A01 Fuzzy-Match Version Stacking (read-only viewer)
+
+**Headline:** First feature shipped from the v1.7.0 backlog — a UI for the "Draft_1 / Draft_Final / Draft_FINAL_v2" pattern. New `LineageService.find_version_stacks()` method walks NEAR_DUPLICATE + VERSION_OF edges as connected components; new `VersionStackDialog` (accessible via Tools menu) renders each stack as a collapsible group.
+
+### Why this matters (RCS workflow)
+
+The `lineage_fuzzy_dup` plugin already detects pairwise NEAR_DUPLICATE edges (e.g. fuzzy-hash similarity 95%). What's been missing: a way to see whole *families* of versions, not just pairs. v1.7.1 closes that loop with union-find over the lineage graph.
+
+### Files changed
+
+- **`src/curator/services/lineage.py`** — added `find_version_stacks(*, min_confidence=0.7, kinds=None)`. Implements union-find with path compression over the edges of the requested kinds (default: `[NEAR_DUPLICATE, VERSION_OF]`). Returns list of stacks sorted by size desc; each stack sorted by mtime desc. Filters out deleted files; drops stacks of <2 live files.
+- **`src/curator/gui/dialogs.py`** — added `VersionStackDialog(QDialog)` class (~180 lines). Filter row (min-confidence spinner + 2 kind-checkboxes + Refresh button) + status label + scrollable container of per-stack QGroupBoxes. Each stack renders as a 4-column table (Path / Size / Modified / Type). Read-only — no Apply action in v1.7.1.
+- **`src/curator/gui/main_window.py`** — added Tools menu item `"Version stacks (fuzzy)..."` + new `_slot_open_version_stacks` method.
+- **`docs/FEATURE_TODO.md`** — marked T-A01 read-only view shipped; Apply semantics remain deferred (waiting on atrium-reversibility per LIFECYCLE_GOVERNANCE.md).
+
+### What v1.7.1 does NOT do
+
+- **No Apply action.** The dialog is strictly visibility — no "keep newest / trash rest" button. That decision was deliberate: a version stack's correct disposition is workflow-dependent (sometimes you want all kept and bundled; sometimes you want one canonical kept and rest archived; sometimes you want the newest kept and older trashed). v1.8 will add Apply options after atrium-reversibility v0.1 lands.
+- **No live edge generation.** The dialog reads existing `lineage_edges`. If a user's DB has 0 edges (current canonical state), the dialog shows "No stacks found" with a hint to run a scan with the fuzzy-dup plugin enabled.
+- **No cross-source stacks.** Stacks span sources in principle (same `lineage_edges` table), but the plugin's similarity index is per-source today.
+
+### Verification
+
+- 5-test service-level suite against seeded temp DB (8 files, 6 edges, 3 "groups" — a 4-file draft chain, a 2-file photo pair, 2 unrelated singles + 1 below-threshold edge):
+  - TEST 1: Default settings find 2 stacks (4-file + 2-file); newest-first ordering verified ✅
+  - TEST 2: Stricter `min_confidence=0.92` finds 1 stack of 2 ✅
+  - TEST 3: `NEAR_DUPLICATE` only (no VERSION_OF) shortens draft stack to 3 files (drops FINAL) ✅
+  - TEST 4: `min_confidence=0.99` finds 0 stacks ✅
+  - TEST 5: Deleted file removed from stack; sizes update correctly ✅
+- 4-test dialog-level E2E suite: auto-refresh on open, kind-checkbox filter, threshold filter, error on empty kind selection. All pass.
+- Full pytest suite: ✅ 1438 passed, 9 skipped, 0 failed.
+
+### Authoritative-source-first principle applied
+
+Caught **5 API/field-name assumptions** during the build:
+1. `rt.db._conn` → actual `rt.db.execute(sql, params)` is exposed directly
+2. `rt.db.conn` → callable, not an attribute (would need `rt.db.conn().execute(...)`)
+3. `lineage_edges.kind` → actual `edge_kind` (verified via `PRAGMA table_info`)
+4. `lineage_edges.similarity` → actual `confidence`
+5. `FileEntity.size_bytes` / `.name` / `.last_seen_at` / `.created_at` / `.updated_at` → actual fields are `size` / (no `name` field; use `source_path`) / `seen_at` / `last_scanned_at` / (no separate `created_at`)
+
+All 5 caught by probes BEFORE writing dependent code; zero crashes on first run.
+
+## [1.7.1.cleanup] — 2026-05-11 — T-A06 GUI test refactor (name-based tab assertions)
+
+Shipped as a separate commit (`4166664`) before T-A01:
+
+- Refactored 5 GUI tests across 5 files to assert tab presence by name (`assert "Inbox" in tab_names`) instead of hard-coded count/index. Survives future tab additions or reorderings without test churn.
+- Test names preserved for git history continuity even where the original names (e.g. `test_lineage_tab_at_index_6`) no longer reflect the assertion.
+- pytest: 1438 passed, 9 skipped, 0 failed.
+
 ## [1.7.0] — 2026-05-11 — v1.7.0 final — GUI parity for v1.6 CLI surface
 
 **Headline:** Rolls up all six v1.7-alpha pieces into a single release. The GUI now covers the full v1.6 CLI surface for scan / cleanup / find duplicates / health check / sources management / audit log review. Tools menu has zero placeholders.
