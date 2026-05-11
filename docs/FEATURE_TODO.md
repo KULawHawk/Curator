@@ -284,17 +284,15 @@ If shipping linearly across v1.7 → v1.9:
 - `T-C01` — atrium-reversibility v0.1 (unblocks `T-A04`, `T-C04`, `T-C05`)
 - `T-C02` — Asset classification taxonomy (unblocks `T-B05`, `T-A05`, `T-C03`)
 
-**v1.7 alpha already shipped:**
+**v1.7 alpha pieces all shipped:**
 - HealthCheckDialog (v1.7-alpha.1, committed `34c1483`)
 - ScanDialog (v1.7-alpha.2, committed `e7c46ce`)
 - GroupDialog (v1.7-alpha.3, committed `0ce5d8a`)
 - CleanupDialog (v1.7-alpha.4, committed `6b9212a`)
-- SourceAddDialog + Sources tab (v1.7-alpha.5, this session)
+- SourceAddDialog + Sources tab (v1.7-alpha.5, committed `1ac40e8`)
+- Audit Log filter UI (v1.7-alpha.6, this session)
 
-**v1.7 remaining (per `docs/design/GUI_V2_DESIGN.md`):**
-- Audit Log filter UI
-
-Once that 1 ships → tag **v1.7.0** with all 6 v1.7-alpha pieces included.
+**Status:** All 6 v1.7-alpha pieces complete. Tagging **v1.7.0** in this commit.
 
 ---
 

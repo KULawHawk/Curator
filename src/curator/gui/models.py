@@ -441,16 +441,59 @@ class AuditLogTableModel(QAbstractTableModel):
         super().__init__(parent)
         self._audit_repo = audit_repo
         self._limit = limit if limit is not None else self.DEFAULT_LIMIT
+        self._filter_kwargs: dict = {}  # v1.7-alpha.6: filter state, see set_filter()
         self._rows: list[AuditEntry] = []
         self.refresh()
+
+    def set_filter(
+        self,
+        *,
+        since=None,
+        until=None,
+        actor: str | None = None,
+        action: str | None = None,
+        entity_type: str | None = None,
+        entity_id: str | None = None,
+    ) -> None:
+        """v1.7-alpha.6: set the filter applied on the next refresh().
+
+        Filters that are ``None`` are omitted from the underlying
+        :meth:`AuditRepository.query` call. Pass empty values to clear
+        a previously-set filter; e.g. ``set_filter(actor=None)`` removes
+        the actor filter.
+
+        Call :meth:`refresh` after :meth:`set_filter` to re-load data
+        with the new filter applied.
+        """
+        kwargs: dict = {}
+        if since is not None:
+            kwargs["since"] = since
+        if until is not None:
+            kwargs["until"] = until
+        if actor:
+            kwargs["actor"] = actor
+        if action:
+            kwargs["action"] = action
+        if entity_type:
+            kwargs["entity_type"] = entity_type
+        if entity_id:
+            kwargs["entity_id"] = entity_id
+        self._filter_kwargs = kwargs
 
     # -- public API -----------------------------------------------------
 
     def refresh(self) -> None:
-        """Re-query newest-first up to ``limit`` rows."""
+        """Re-query newest-first up to ``limit`` rows, applying the active filter.
+
+        v1.7-alpha.6: filter kwargs set via :meth:`set_filter` are
+        merged into the :meth:`AuditRepository.query` call. With no
+        filter set (the default), behavior is unchanged from v0.37.
+        """
         self.beginResetModel()
         try:
-            self._rows = self._audit_repo.query(limit=self._limit)
+            self._rows = self._audit_repo.query(
+                limit=self._limit, **self._filter_kwargs,
+            )
         except Exception:
             self._rows = []
         self.endResetModel()

@@ -724,15 +724,105 @@ class CuratorMainWindow(QMainWindow):
                 pass
 
     def _build_audit_tab(self) -> QWidget:
-        """v0.37: audit log view. Read-only, no context menu.
+        """v0.37: audit log view (extended v1.7-alpha.6 with filter toolbar).
 
         The audit log is intentionally append-only at the storage layer
         (see :class:`AuditRepository`); there's no GUI mutation path
         because there's no model-level mutation path.
+
+        v1.7-alpha.6 adds a filter toolbar above the table backed by
+        :meth:`AuditRepository.query`'s 6 filter kwargs (since, until,
+        actor, action, entity_type, entity_id). The dropdowns are
+        populated from the DB's distinct values on tab construction;
+        a Refresh button repopulates them after schema growth.
         """
+        from PySide6.QtWidgets import (
+            QComboBox,
+            QLineEdit,
+            QSpinBox,
+        )
+
+        w = QWidget()
+        layout = QVBoxLayout(w)
+
+        # --- Filter toolbar -------------------------------------------
+        toolbar_row1 = QHBoxLayout()
+        toolbar_row1.addWidget(QLabel("Since:"))
+        self._audit_sb_hours = QSpinBox()
+        self._audit_sb_hours.setRange(0, 24 * 365 * 10)  # up to 10 years
+        self._audit_sb_hours.setSpecialValueText("(no limit)")
+        self._audit_sb_hours.setValue(0)
+        self._audit_sb_hours.setSuffix(" hr ago")
+        self._audit_sb_hours.setToolTip(
+            "Only show events from the last N hours. 0 = no time filter."
+        )
+        toolbar_row1.addWidget(self._audit_sb_hours)
+
+        toolbar_row1.addSpacing(12)
+        toolbar_row1.addWidget(QLabel("Actor:"))
+        self._audit_cb_actor = QComboBox()
+        self._audit_cb_actor.addItem("(any)", None)
+        self._audit_cb_actor.setMinimumWidth(140)
+        toolbar_row1.addWidget(self._audit_cb_actor)
+
+        toolbar_row1.addSpacing(12)
+        toolbar_row1.addWidget(QLabel("Action:"))
+        self._audit_cb_action = QComboBox()
+        self._audit_cb_action.addItem("(any)", None)
+        self._audit_cb_action.setMinimumWidth(160)
+        toolbar_row1.addWidget(self._audit_cb_action)
+        toolbar_row1.addStretch(1)
+
+        toolbar_row2 = QHBoxLayout()
+        toolbar_row2.addWidget(QLabel("Entity type:"))
+        self._audit_cb_entity_type = QComboBox()
+        self._audit_cb_entity_type.addItem("(any)", None)
+        self._audit_cb_entity_type.setMinimumWidth(140)
+        toolbar_row2.addWidget(self._audit_cb_entity_type)
+
+        toolbar_row2.addSpacing(12)
+        toolbar_row2.addWidget(QLabel("Entity ID:"))
+        self._audit_le_entity_id = QLineEdit()
+        self._audit_le_entity_id.setPlaceholderText("(exact match, blank = any)")
+        self._audit_le_entity_id.setMinimumWidth(180)
+        toolbar_row2.addWidget(self._audit_le_entity_id, 1)
+
+        toolbar_row2.addSpacing(12)
+        self._audit_btn_apply = QPushButton("Apply filters")
+        self._audit_btn_apply.clicked.connect(self._slot_audit_apply_filter)
+        toolbar_row2.addWidget(self._audit_btn_apply)
+
+        self._audit_btn_clear = QPushButton("Clear")
+        self._audit_btn_clear.clicked.connect(self._slot_audit_clear_filter)
+        toolbar_row2.addWidget(self._audit_btn_clear)
+
+        self._audit_btn_refresh_dropdowns = QPushButton("↻")
+        self._audit_btn_refresh_dropdowns.setToolTip(
+            "Rescan the DB for distinct actor / action / entity_type values."
+        )
+        self._audit_btn_refresh_dropdowns.setMaximumWidth(36)
+        self._audit_btn_refresh_dropdowns.clicked.connect(
+            self._slot_audit_refresh_dropdowns,
+        )
+        toolbar_row2.addWidget(self._audit_btn_refresh_dropdowns)
+
+        layout.addLayout(toolbar_row1)
+        layout.addLayout(toolbar_row2)
+
+        # Status label (row count for current filter)
+        self._audit_lbl_count = QLabel("")
+        self._audit_lbl_count.setStyleSheet("color: gray; padding: 2px 4px;")
+        layout.addWidget(self._audit_lbl_count)
+
+        # --- The table itself (existing v0.37 wiring) -----------------
         self._audit_model = AuditLogTableModel(self.runtime.audit_repo)
         self._audit_view = self._make_table_view(self._audit_model)
-        return self._wrap_table(self._audit_view)
+        layout.addWidget(self._audit_view, 1)
+
+        # Populate dropdowns + initial count
+        self._slot_audit_refresh_dropdowns()
+        self._update_audit_count_label()
+        return w
 
     def _build_settings_tab(self) -> QWidget:
         """v0.38: settings view (curator.toml display + reload).
@@ -833,6 +923,94 @@ class CuratorMainWindow(QMainWindow):
         return True, f"Reloaded from {fresh.source_path}", fresh
 
 
+
+    # ------------------------------------------------------------------
+    # v1.7-alpha.6: Audit Log filter UI slots
+    # ------------------------------------------------------------------
+
+    def _slot_audit_refresh_dropdowns(self) -> None:
+        """Repopulate the actor / action / entity_type dropdowns from DB.
+
+        Pulls up to 10,000 recent audit entries and extracts distinct
+        values for each filter dropdown. Cheap operation since the
+        audit table is small in typical use.
+        """
+        try:
+            entries = self.runtime.audit_repo.query(limit=10000)
+        except Exception:  # noqa: BLE001
+            entries = []
+
+        actors = sorted({e.actor for e in entries if e.actor})
+        actions = sorted({e.action for e in entries if e.action})
+        entity_types = sorted({e.entity_type for e in entries if e.entity_type})
+
+        # Helper: rebuild a combobox preserving the user's current selection
+        def _rebuild(cb, values):
+            current_data = cb.currentData()
+            cb.blockSignals(True)
+            cb.clear()
+            cb.addItem("(any)", None)
+            for v in values:
+                cb.addItem(v, v)
+            # Try to restore selection
+            if current_data is not None:
+                idx = cb.findData(current_data)
+                if idx >= 0:
+                    cb.setCurrentIndex(idx)
+            cb.blockSignals(False)
+
+        _rebuild(self._audit_cb_actor, actors)
+        _rebuild(self._audit_cb_action, actions)
+        _rebuild(self._audit_cb_entity_type, entity_types)
+
+    def _slot_audit_apply_filter(self) -> None:
+        """Build filter kwargs from toolbar widgets, push to model, refresh."""
+        from datetime import datetime, timedelta
+
+        hours = self._audit_sb_hours.value()
+        since = datetime.now() - timedelta(hours=hours) if hours > 0 else None
+        actor = self._audit_cb_actor.currentData()
+        action = self._audit_cb_action.currentData()
+        entity_type = self._audit_cb_entity_type.currentData()
+        entity_id = self._audit_le_entity_id.text().strip() or None
+
+        self._audit_model.set_filter(
+            since=since,
+            actor=actor,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+        )
+        self._audit_model.refresh()
+        self._update_audit_count_label()
+
+    def _slot_audit_clear_filter(self) -> None:
+        """Reset all filter widgets and re-load the unfiltered view."""
+        self._audit_sb_hours.setValue(0)
+        self._audit_cb_actor.setCurrentIndex(0)
+        self._audit_cb_action.setCurrentIndex(0)
+        self._audit_cb_entity_type.setCurrentIndex(0)
+        self._audit_le_entity_id.clear()
+        self._audit_model.set_filter()  # all None -> empty kwargs
+        self._audit_model.refresh()
+        self._update_audit_count_label()
+
+    def _update_audit_count_label(self) -> None:
+        """Show current row count + which filters (if any) are active."""
+        n = self._audit_model.rowCount()
+        filters_active: list[str] = []
+        kwargs = self._audit_model._filter_kwargs  # internal, but OK to read
+        if kwargs.get("since"):
+            filters_active.append(f"since {kwargs['since'].strftime('%Y-%m-%d %H:%M')}")
+        for key in ("actor", "action", "entity_type", "entity_id"):
+            if kwargs.get(key):
+                filters_active.append(f"{key}={kwargs[key]}")
+        if filters_active:
+            self._audit_lbl_count.setText(
+                f"<b>{n}</b> row(s) match filters: {' | '.join(filters_active)}"
+            )
+        else:
+            self._audit_lbl_count.setText(f"<b>{n}</b> row(s) (no filters)")
 
     # ------------------------------------------------------------------
     # v1.7-alpha.5: Sources tab + source management

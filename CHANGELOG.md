@@ -4,6 +4,84 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.0] — 2026-05-11 — v1.7.0 final — GUI parity for v1.6 CLI surface
+
+**Headline:** Rolls up all six v1.7-alpha pieces into a single release. The GUI now covers the full v1.6 CLI surface for scan / cleanup / find duplicates / health check / sources management / audit log review. Tools menu has zero placeholders.
+
+### Alpha sequence rolled in
+
+| Alpha | Component | Commit |
+|---|---|---|
+| alpha.1 | HealthCheckDialog (8-section diagnostic, 22 checks) | `34c1483` |
+| alpha.2 | ScanDialog (QThread, ScanReport render) | `e7c46ce` |
+| alpha.3 | GroupDialog (2-phase duplicate finder) | `0ce5d8a` |
+| alpha.4 | CleanupDialog (3-mode: junk / empty_dirs / broken_symlinks) | `6b9212a` |
+| alpha.5 | SourceAddDialog + Sources tab (9th tab) | `1ac40e8` |
+| alpha.6 | Audit Log filter UI | this commit |
+
+See individual alpha entries below for details.
+
+## [1.7.0-alpha.6] — 2026-05-11 — Audit Log filter UI (sixth and final v1.7 piece)
+
+**Headline:** The Audit Log tab now has a 6-control filter toolbar backed by `AuditRepository.query()`'s native filter kwargs. All v1.7-alpha pieces are now done.
+
+### Files changed
+
+- **`src/curator/gui/models.py`** — extended `AuditLogTableModel`:
+  - Added `_filter_kwargs: dict` state in `__init__` (backward compatible; defaults to empty dict).
+  - Added `set_filter(*, since, until, actor, action, entity_type, entity_id)` method. None/empty values are skipped; explicit empty filter clears state.
+  - Modified `refresh()` to merge `**self._filter_kwargs` into the `audit_repo.query()` call. With no filter set, behavior is unchanged from v0.37.
+- **`src/curator/gui/main_window.py`** — rebuilt `_build_audit_tab` with a 2-row filter toolbar:
+  - Row 1: "Since" hour-spinner (0–87600 hr, 0 = no time filter) + Actor dropdown + Action dropdown
+  - Row 2: Entity type dropdown + Entity ID text input + Apply filters / Clear / ↻ refresh-dropdowns buttons
+  - Status label showing `<b>N</b> row(s) match filters: [active filters list]`
+  - Added 4 slot methods: `_slot_audit_refresh_dropdowns`, `_slot_audit_apply_filter`, `_slot_audit_clear_filter`, `_update_audit_count_label`
+  - Dropdowns auto-populated from `audit_repo.query(limit=10000)` distinct values; user selection preserved when dropdown rebuilds.
+- **`docs/FEATURE_TODO.md`** — marked AuditFilterUI shipped; all 6 v1.7-alpha pieces now done; ready to tag v1.7.0.
+
+### Filter coverage
+
+All 6 of `AuditRepository.query()`'s filter kwargs are wired:
+
+| Kwarg | UI widget | Notes |
+|---|---|---|
+| `since` | QSpinBox "N hr ago" | 0 = no time filter |
+| `until` | (not exposed v1.7-alpha.6) | Workaround: use CLI |
+| `actor` | QComboBox | Auto-populated from DB |
+| `action` | QComboBox | Auto-populated from DB |
+| `entity_type` | QComboBox | Auto-populated from DB |
+| `entity_id` | QLineEdit (exact match) | Free text |
+
+### v1.7-alpha.6 limitations
+
+- **No `until` filter** — the model's `set_filter()` accepts `until=` but no UI widget exposes it. Workaround: use the `curator audit query` CLI for arbitrary date-range queries.
+- **No free-text search across details JSON** — only structured filters. The `details` dict isn't indexed for fulltext.
+- **Dropdowns are sampled from last 10,000 entries** — if your audit table has >10k entries with rare actor/action values older than that, they won't appear in dropdowns until you free-type into a filter via CLI.
+- **No persistence of filter state across sessions** — filters reset to "(any)" / 0 every time the window is opened.
+
+### Verification
+
+- 7-test headless E2E suite against canonical DB (16 real audit entries from this session's work):
+  - TEST 1: Audit tab builds with toolbar widgets ✅
+  - TEST 2: Dropdowns populated correctly (`['cli.sources', 'curator.scan']` actors; 5 actions including `scan.start`, `scan.complete`, `scan.failed`, `source.add`, `source.remove`) ✅
+  - TEST 3: Filter by `actor='curator.scan'` (13 of 16 rows, every visible row verified) ✅
+  - TEST 4: Combined `actor + action` filter (4 rows: successful scans) ✅
+  - TEST 5: `Since` 12-hours filter (6 rows; verified `occurred_at >= cutoff` on each) ✅
+  - TEST 6: Clear filter restores full 16-row view + widget resets ✅
+  - TEST 7: Filter with nonexistent entity_id → 0 rows, status label correct ✅
+- Full pytest suite: ✅ 1438 passed, 9 skipped, 0 failed (no regressions from baseline).
+
+### Authoritative-source-first principle applied
+
+Probed before any code:
+- `AuditRepository.query()` signature → confirmed all 6 filter kwargs: `since, until, actor, action, entity_type, entity_id, limit`
+- `AuditEntry` model fields → 7 fields verified (`audit_id, occurred_at, actor, action, entity_type, entity_id, details`)
+- `AuditLogTableModel` existing API → only `refresh()` exposed; needed extension for filter state
+- Sample 8 recent audit entries via `audit_repo.query(limit=8)` to verify shape of real data
+- Distinct values via `{e.actor for e in audit_repo.query(limit=10000)}` to confirm dropdown contents
+
+Zero API assumptions made; the model extension is minimal and additive (no breaking changes to existing callers).
+
 ## [1.7.0-alpha.5] — 2026-05-11 — SourceAddDialog + Sources tab (fifth native v1.7 piece)
 
 **Headline:** Last placeholder retired. The Tools menu's `"Sources manager..."` item now pivots to a new **9th tab ("Sources")** showing all registered sources with per-row context-menu actions, plus a new `SourceAddDialog` accessible from the tab's `"+ Add source..."` button. All five v1.6.2 Tools-menu placeholders are now real.
