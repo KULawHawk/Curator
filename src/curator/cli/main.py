@@ -3972,6 +3972,34 @@ def tier_cmd(
         help="Limit displayed candidates (after sort, oldest-first). "
              "Doesn't affect counts or aggregate sizes in the summary.",
     ),
+    # v1.7.25: --apply / --target / --dry-run / --keep-source / --yes
+    apply: bool = typer.Option(
+        False, "--apply",
+        help="Actually migrate the detected candidates. Requires --target "
+             "and --root. Without --apply, behavior is detect-only "
+             "(unchanged from v1.7.8).",
+    ),
+    target: str = typer.Option(
+        None, "--target",
+        help="Destination directory for migrated files. Required when "
+             "--apply is set. Created if it doesn't exist.",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Preview the migration plan without actually moving files. "
+             "Only meaningful with --apply.",
+    ),
+    keep_source: bool = typer.Option(
+        False, "--keep-source",
+        help="Copy (don't move) candidates to the target; leave originals "
+             "in place. Default is to move (delete source after verified "
+             "hash match at destination).",
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y",
+        help="Skip the confirmation prompt before --apply executes. "
+             "Useful for automation; dangerous for interactive use.",
+    ),
 ) -> None:
     """Tiered storage manager — identify files for cold-tier migration (T-B05).
 
@@ -3987,18 +4015,18 @@ def tier_cmd(
                   --min-age-days (default 365). Long-stable vital files
                   belong in an immutable archive store.
 
-    This command is detect-only. To migrate candidates, run:
+    This command is detect-only by default. Pass --apply --target <dst>
+    --root <src-prefix> to actually migrate the candidates (v1.7.25):
 
-        curator tier cold --root C:/Work --show-files | grep -oP ...
-        curator migrate <src_source_id> <src_root> <dst_root> --apply
-
-    A future v1.8 will add --apply --target <dst> for one-step move.
+        curator tier cold --root C:/Work --apply --target D:/Archive
+        curator tier expired --root C:/Work --apply --target /tmp/expired --dry-run
 
     Examples:
         curator tier cold
         curator tier cold --min-age-days 180 --root C:/Users/jmlee
         curator tier expired --show-files
         curator tier archive --min-age-days 730 --source-id local
+        curator tier cold --root C:/Work --apply --target D:/Archive --yes
     """
     from curator.services.tier import TierCriteria, TierRecipe
 
@@ -4119,11 +4147,183 @@ def tier_cmd(
         if limit and len(report.candidates) > limit:
             remaining = len(report.candidates) - limit
             console.print(f"  [dim]... and {remaining:,} more (use --limit to expand)[/]")
-    else:
+    elif not apply:
         console.print(
             f"\n[dim]Run with --show-files to see paths. "
-            f"To migrate, pipe candidate paths into [bold]curator migrate[/bold].[/]"
+            f"To migrate, pass --apply --target <dst> --root <src-prefix>.[/]"
         )
+
+    # ------------------------------------------------------------------
+    # v1.7.25: --apply branch — actually migrate the detected candidates.
+    # Requires --target and --root. Builds a MigrationPlan from the
+    # scan output, filters to candidate curator_ids, dispatches to
+    # MigrationService.apply(), and reports per-file outcomes.
+    # ------------------------------------------------------------------
+    if not apply:
+        return
+
+    # Validate required flags
+    if not target:
+        console.print(
+            "[red]--apply requires --target <destination-directory>[/]"
+        )
+        raise typer.Exit(code=2)
+    if not root_prefix:
+        console.print(
+            "[red]--apply requires --root <source-path-prefix> so source "
+            "paths can be mapped to relative destination paths.[/]\n"
+            "[dim]Example: --root C:/Work --target D:/Archive[/]"
+        )
+        raise typer.Exit(code=2)
+
+    if report.candidate_count == 0:
+        console.print(
+            "\n[yellow]No candidates to migrate.[/]"
+        )
+        return
+
+    # Resolve source_id default (matches existing migrate command's behavior)
+    src_sid = source_id or "local"
+
+    # Ensure target exists (create if missing)
+    import os as _os
+    try:
+        _os.makedirs(target, exist_ok=True)
+    except OSError as e:
+        console.print(f"[red]Could not create --target directory: {e}[/]")
+        raise typer.Exit(code=2)
+
+    # Build the migration plan by walking the source root + filter to
+    # candidate curator_ids. Using the existing plan() function gives us
+    # correct safety_level assignments, hash precomputation, and respects
+    # all the registered include/exclude rules — we don't reinvent that.
+    console.print(
+        f"\n[bold]Building migration plan from {root_prefix} -> {target}...[/]"
+    )
+    full_plan = rt.migration.plan(
+        src_source_id=src_sid,
+        src_root=root_prefix,
+        dst_root=target,
+    )
+    candidate_ids = {c.file.curator_id for c in report.candidates}
+    filtered_moves = [m for m in full_plan.moves if m.curator_id in candidate_ids]
+    full_plan.moves = filtered_moves
+
+    if not filtered_moves:
+        console.print(
+            "[yellow]No candidates matched the migration plan. "
+            "This usually means the candidate files live outside --root, "
+            "or have been removed/moved since the scan ran.[/]"
+        )
+        return
+
+    total_apply_size = sum(m.size for m in filtered_moves)
+    console.print(
+        f"  Plan: [{color}]{len(filtered_moves):,}[/] files, "
+        f"[{color}]{_fmt_size(total_apply_size)}[/]"
+    )
+    console.print(f"  Mode: {'COPY (keep source)' if keep_source else 'MOVE'}")
+
+    if dry_run:
+        console.print("\n[yellow]--dry-run set: not actually migrating.[/]")
+        console.print("[bold]Would move:[/]")
+        for m in filtered_moves[:10]:
+            console.print(f"  [dim]{m.src_path} -> {m.dst_path}[/]")
+        if len(filtered_moves) > 10:
+            console.print(
+                f"  [dim]... and {len(filtered_moves) - 10:,} more.[/]"
+            )
+        return
+
+    # Confirm unless --yes
+    if not yes and not rt.json_output:
+        try:
+            confirmed = typer.confirm(
+                f"\nMigrate {len(filtered_moves):,} files "
+                f"({_fmt_size(total_apply_size)}) to {target}?",
+                default=False,
+            )
+        except (KeyboardInterrupt, EOFError):
+            confirmed = False
+        if not confirmed:
+            console.print("[yellow]Aborted.[/]")
+            raise typer.Exit(code=1)
+
+    # Audit: apply started
+    rt.audit.log(
+        actor="cli.tier",
+        action="tier.apply.start",
+        entity_type="tier_apply",
+        entity_id=recipe_enum.value,
+        details={
+            "recipe": recipe_enum.value,
+            "src_root": root_prefix,
+            "target": target,
+            "candidate_count": len(filtered_moves),
+            "total_size_bytes": total_apply_size,
+            "keep_source": keep_source,
+        },
+    )
+
+    # Execute. MigrationService.apply() handles per-file move/hash-verify/
+    # update DB + emits its own per-move audit events.
+    # include_caution=True: the tier recipe (cold/expired/archive) IS
+    # the user's explicit safety signal. If a file is classified as a
+    # tier candidate, the user has accepted the move. Without this flag
+    # CAUTION-level files (the common case for non-canonical locations)
+    # get silently skipped.
+    console.print(f"\n[bold]Migrating...[/]")
+    migration_report = rt.migration.apply(
+        full_plan,
+        keep_source=keep_source,
+        include_caution=True,
+    )
+
+    # Tally outcomes
+    moved = 0
+    failed = 0
+    skipped = 0
+    for m in migration_report.moves:
+        if m.outcome is None:
+            continue
+        name = m.outcome.name.upper()
+        if "MOVED" in name or "COPIED" in name:
+            moved += 1
+        elif "SKIPPED" in name:
+            skipped += 1
+        else:
+            failed += 1
+
+    # Audit: apply complete
+    rt.audit.log(
+        actor="cli.tier",
+        action="tier.apply.complete",
+        entity_type="tier_apply",
+        entity_id=recipe_enum.value,
+        details={
+            "moved": moved,
+            "failed": failed,
+            "skipped": skipped,
+            "total_size_bytes": total_apply_size,
+        },
+    )
+
+    # Display report
+    console.print(f"\n[bold]Migration complete:[/]")
+    console.print(f"  Moved/copied:  [green]{moved:,}[/]")
+    if skipped:
+        console.print(f"  Skipped:       [yellow]{skipped:,}[/]")
+    if failed:
+        console.print(f"  Failed:        [red]{failed:,}[/]")
+        console.print("\n[bold]Failures:[/]")
+        for m in migration_report.moves:
+            if m.outcome is None:
+                continue
+            name = m.outcome.name.upper()
+            if "MOVED" not in name and "COPIED" not in name and "SKIPPED" not in name:
+                err = m.error or m.outcome.value
+                console.print(f"  [red]{m.src_path}[/]")
+                console.print(f"      [dim]{err}[/]")
 
 
 
