@@ -248,3 +248,106 @@ def test_reload_invalidates_cache() -> None:
         _reload_util()
         assert util_module._stdout_supports_unicode() is True
         assert util_module.CHECK == "\u2713"
+
+
+# ---------------------------------------------------------------------------
+# v1.7.32: pytest-level lint for lesson #50 (no literal glyphs in cli/)
+# ---------------------------------------------------------------------------
+
+def test_no_literal_glyphs_in_cli_outside_util() -> None:
+    """Lint: no literal Unicode glyphs in src/curator/cli/ outside util.py.
+
+    v1.7.32: codifies the v1.7.30 helper-module defense at the pytest level.
+    Any contributor adding a literal Unicode glyph to cli/main.py (or any
+    other cli/ module other than util.py itself) will have this test fail
+    with a pointer to use the curator.cli.util constants instead.
+
+    Rationale: v1.7.30 extracted a helper module after lesson #50 hit FIVE
+    times across the arc (v1.7.21/24/25/28/29). The most painful strike was
+    v1.7.29 — a PRE-EXISTING glyph that had been in the codebase for an
+    unknown duration, undetected. This test is the systemic guard against
+    a sixth strike: import-time discovery instead of subprocess-test-time
+    discovery.
+
+    Scope:
+      - ONLY scans src/curator/cli/ — that's where the cp1252 crash risk
+        materializes (CLI commands print to stdout, which subprocess test
+        captures encode as cp1252).
+      - Other directories (gui/, services/, models/, _vendored/, storage/)
+        may legitimately contain glyphs in docstrings, Qt widget strings,
+        and module comments — those don't flow to the cp1252 encoder.
+      - cli/util.py itself is exempt because it legitimately defines all
+        the constants and the _GLYPH_FALLBACKS table.
+      - Comment-only lines are exempt (they aren't executed).
+    """
+    from pathlib import Path
+
+    # Codepoints that have caused or could cause cp1252 crashes
+    # (this set MUST stay in sync with _GLYPH_FALLBACKS in util.py)
+    DANGEROUS_GLYPHS = {
+        "\u2588": "BLOCK",
+        "\u2713": "CHECK",
+        "\u2717": "CROSS",
+        "\u2192": "ARROW",
+        "\u2190": "LARROW",
+        "\u2026": "ELLIPSIS",
+        "\u00d7": "TIMES",
+        "\u26a0": "WARN",
+    }
+
+    # Locate src/curator/cli/ relative to this test file
+    cli_dir = (
+        Path(__file__).resolve().parent.parent.parent
+        / "src" / "curator" / "cli"
+    )
+    assert cli_dir.is_dir(), f"cli/ directory not found at {cli_dir}"
+    util_file = (cli_dir / "util.py").resolve()
+
+    violations: list[tuple[str, int, str, str, str]] = []
+    for py_path in cli_dir.rglob("*.py"):
+        if py_path.resolve() == util_file:
+            continue  # the module itself legitimately contains all glyphs
+
+        content = py_path.read_text(encoding="utf-8")
+        for line_num, line in enumerate(content.split("\n"), 1):
+            # Skip pure comment lines (no print/string context)
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            for glyph, name in DANGEROUS_GLYPHS.items():
+                if glyph in line:
+                    rel = py_path.relative_to(cli_dir)
+                    violations.append((
+                        str(rel),
+                        line_num,
+                        name,
+                        f"U+{ord(glyph):04X}",
+                        stripped[:80],
+                    ))
+
+    if violations:
+        msg_lines = [
+            f"Found {len(violations)} literal Unicode glyph(s) in "
+            "src/curator/cli/ outside util.py:",
+            "",
+        ]
+        for rel, line_num, name, cp, snippet in violations:
+            msg_lines.append(
+                f"  cli/{rel}:L{line_num}  {name} ({cp})  in: {snippet!r}"
+            )
+        msg_lines.extend([
+            "",
+            "Fix: import constants from curator.cli.util instead of using "
+            "literal glyphs:",
+            "  from curator.cli.util import (",
+            "      CHECK, CROSS, ARROW, LARROW, ELLIPSIS,",
+            "      BLOCK, TIMES, WARN, safe_glyphs,",
+            "  )",
+            "",
+            "Why: literal glyphs crash the cp1252 encoder when stdout is "
+            "captured by a subprocess test or piped to a file. The "
+            "constants fall back to ASCII automatically. See v1.7.30 "
+            "release notes for the 5-strike history.",
+        ])
+        import pytest
+        pytest.fail("\n".join(msg_lines))

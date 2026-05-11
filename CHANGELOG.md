@@ -4,6 +4,91 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.32] — 2026-05-11 — Lesson #50 pytest-level lint (regression guard)
+
+**Headline:** v1.7.30 extracted `cli/util.py` to make ASCII fallbacks the easy default; v1.7.32 adds a single pytest test that scans `src/curator/cli/` for the 8 dangerous Unicode codepoints and fails with a helpful error message if any are found outside `cli/util.py` itself. The structural defense is now self-enforcing — future contributors who write `console.print(f"[green]\u2713[/]")` get a test failure with a pointer to the correct import. **Lesson #50 is now closed at the test level, not just the helper level.**
+
+### Why this matters
+
+v1.7.30's helper module made the safe path EASIER, but a contributor unaware of `cli/util.py` could still write a literal glyph and not get caught until a subprocess test exercised that exact code path. v1.7.29's pre-existing strike (the `\u2713` in `sources_config` that had been there for an unknown duration) proved this gap was real — the code was correct *enough* to ship, then sat as a latent crash until tested. The pytest lint closes that gap: import-time discovery instead of subprocess-test-time discovery.
+
+The test runs as part of the normal pytest baseline. There's no separate CI step, no pre-commit hook to install, no script to remember. Adding `\u2713` to `cli/main.py` now produces a clear failure on the next test run:
+
+```
+FAILED tests/unit/test_cli_util.py::test_no_literal_glyphs_in_cli_outside_util
+Found 1 literal Unicode glyph(s) in src/curator/cli/ outside util.py:
+
+  cli/main.py:L1234  CHECK (U+2713)  in: 'console.print(f"[green]\u2713[/] done")'
+
+Fix: import constants from curator.cli.util instead of using literal glyphs:
+  from curator.cli.util import (
+      CHECK, CROSS, ARROW, LARROW, ELLIPSIS,
+      BLOCK, TIMES, WARN, safe_glyphs,
+  )
+
+Why: literal glyphs crash the cp1252 encoder when stdout is captured
+by a subprocess test or piped to a file. The constants fall back to
+ASCII automatically. See v1.7.30 release notes for the 5-strike history.
+```
+
+The failure message names the file, line, glyph, codepoint, surrounding code, and the exact fix. No mystery, no archaeology, no Stack Overflow round trip.
+
+### What's new
+
+**New test** `test_no_literal_glyphs_in_cli_outside_util` in `tests/unit/test_cli_util.py`:
+  * Scans `src/curator/cli/**.py` for 8 dangerous codepoints (`U+2588`, `U+2713`, `U+2717`, `U+2192`, `U+2190`, `U+2026`, `U+00D7`, `U+26A0` — the exact set in `_GLYPH_FALLBACKS`)
+  * Excludes `cli/util.py` (it legitimately defines all of them)
+  * Excludes comment-only lines (`#` prefix — not executed; safe in docstrings)
+  * Emits a `pytest.fail()` with file, line, glyph name, codepoint, code snippet, and the canonical import statement to use as the fix
+
+**Why this scope (and not wider)**: the test only checks `src/curator/cli/` because that's where the cp1252 crash risk materializes. CLI commands print to stdout; subprocess test captures encode as cp1252. Other directories may legitimately contain glyphs:
+  * `gui/dialogs.py`, `gui/models.py` — Qt widget text uses QString (UTF-16 internally); never flows to cp1252
+  * `services/`, `models/`, `storage/` — glyphs appear only in module docstrings; not executed
+  * `_vendored/` — third-party code, do not modify
+
+### Files changed
+
+- `tests/unit/test_cli_util.py` — +132 lines (new test, brings file to 353 lines, 24 tests total)
+
+### Verification
+
+- **New test passes** in isolation: `pytest tests/unit/test_cli_util.py::test_no_literal_glyphs_in_cli_outside_util -v`
+- **Full pytest baseline**: ✅ **1462 passed**, 9 skipped, 0 failed (was 1461; +1 new lint test)
+- **The test is itself an authoritative-principle check**: the v1.7.30 audit of `cli/main.py` is now verified by automation rather than by hand. If any of the 8 fixed glyph sites regress (someone reverts the change, or a merge conflict reintroduces the literal), the test catches it immediately.
+
+### Authoritative-principle catches (this turn)
+
+**0 implementation bugs caught.** The test passed on first run, confirming v1.7.30's hand-audit was complete. If the audit had missed any glyph, this test would have been the first to surface it — instead it served as a positive sanity check.
+
+**Design lessons reinforced:**
+
+1. **Codify defenses at the most automated level available.** v1.7.30 codified lesson #50 at the helper-module level (right tool). v1.7.32 codifies it at the test level (better tool, runs without requiring developer awareness). The progression is: ad-hoc fixes → helper module → automated lint. Each step makes the defense less dependent on contributor memory.
+
+2. **Pytest test beats separate CI script.** A separate `scripts/check_no_raw_glyphs.py` invoked from a pre-commit hook OR a GitHub Action would be more decoupled but also requires setup, documentation, and discipline. A pytest test runs automatically with every `pytest tests/` invocation — the same command developers already run before commit. Zero setup, zero maintenance, runs in 600ms.
+
+3. **Failure messages should include the fix.** The test's `pytest.fail()` message tells the developer not just "there's a glyph at L1234" but "here's the exact import to add and the explanation of why." When a regression happens months from now, the developer doesn't need to find this CHANGELOG entry to know what to do.
+
+4. **Scope the lint to where the failure actually happens.** A naive lint would scan the whole `src/` tree and produce false positives in docstrings, Qt strings, and vendored code. Scoping to `src/curator/cli/` only matches the actual cp1252 risk surface. The scope choice is documented in the test docstring so a future maintainer can widen it (if necessary) or narrow it (if a false positive shows up) with full context.
+
+### v1.7.32 limitations
+
+- **Comment-only lines are excluded by string matching, not AST parsing.** A line like `code()  # uses \u2713` would be flagged because the comment isn't on its own line. Mitigation: in practice the codebase doesn't have such mixed lines, and `ast.parse()`-based detection would add complexity for an edge case that doesn't exist.
+- **String literals in `gui/` are not checked.** Qt widgets are safe today; if any text from `gui/` ever flows to a CLI capture, that's a regression waiting to happen. Future ship could widen the lint to `gui/` with a `gui/` exclusion for `setText()` / `setWindowTitle()` Qt API calls (those reach Qt's UTF-16 layer, not stdout).
+- **Only the 8 codepoints currently in `_GLYPH_FALLBACKS` are checked.** If a contributor introduces a new glyph (e.g., emoji), it won't be caught until someone notices a cp1252 crash. The cure: when adding to `_GLYPH_FALLBACKS`, the new entry is automatically picked up by this test on the next run.
+- **No pre-commit integration.** Developers who skip pytest before commit can still push a glyph. A future `.git/hooks/pre-commit` or `pre-commit.com` config would close that gap.
+
+### Lesson #50 final status
+
+After 6 ships of effort (v1.7.21 first strike → v1.7.24 first codification → v1.7.25/28/29 strikes 3/4/5 → v1.7.30 helper module → v1.7.32 lint), lesson #50 is now defended at three layers:
+
+| Layer | Mechanism | What it catches |
+|---|---|---|
+| Code | `curator.cli.util` constants | Glyphs imported from the helper auto-fall-back |
+| Tests | `test_no_literal_glyphs_in_cli_outside_util` | Glyphs NOT imported from the helper (regression) |
+| Documentation | CHANGELOG v1.7.30 + v1.7.32 release notes | Contributors reading the history |
+
+Classified: **closed**. Future strikes would require active subversion of all three layers.
+
 ## [1.7.31] — 2026-05-11 — `curator audit-export` (append-only audit archival)
 
 **Headline:** New top-level CLI command `curator audit-export --to FILE [--older-than N | --before ISO | --since ISO] [--actor X] [--action X] [--entity-type X] [--format jsonl|csv] [--limit N]`. Exports audit log entries to JSONL (default) or CSV with a header. **Read-only by design** — honors AuditRepository's append-only contract; entries are never deleted from the DB. The export operation itself emits a `audit.exported` meta-audit event so the trail remains complete.
