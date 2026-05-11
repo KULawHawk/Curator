@@ -4,6 +4,41 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.0-alpha.3] — 2026-05-11 — GroupDialog (third native v1.7 dialog)
+
+**Headline:** Third Tools-menu item graduated from placeholder to a real in-process PySide6 dialog. `GroupDialog` is a two-phase duplicate finder: configure parameters → Find (background QThread) → review groups with keepers highlighted in green → Apply (background QThread) → see deleted/skipped/failed tally. Both phases use the same `GroupProgressBridge`. Closes the v1.7 GUI parity gap for `curator group` and the Workflows-menu "Find duplicates" path.
+
+### Files changed
+
+- **`src/curator/gui/cleanup_signals.py`** (new) — `GroupProgressBridge` (6 signals covering find + apply lifecycles) + `GroupFindWorker(QThread)` wrapping `CleanupService.find_duplicates` + `GroupApplyWorker(QThread)` wrapping `CleanupService.apply`. Two-worker split reflects the two-phase UX (either phase can be skipped or fail independently). Mirrors the existing `ScanProgressBridge` pattern.
+- **`src/curator/gui/dialogs.py`** — added `GroupDialog(QDialog)` class (~440 lines). Inputs: source dropdown (incl. "(all sources)"), path prefix, 4-option keep strategy dropdown (`shortest_path` / `longest_path` / `oldest` / `newest`), keep-under prefix, match-kind radio buttons (`exact` / `fuzzy`), similarity threshold spinner (auto-enabled when fuzzy). Renders findings as a 4-column flat table grouped by `dupset_id` with keepers shown bold-green and duplicates shown orange. Apply phase requires explicit confirmation modal showing trash-vs-hard-delete intent.
+- **`src/curator/gui/main_window.py`** — Tools menu rewired: `"Find &duplicates..."` now opens `GroupDialog` directly via `_slot_open_group_dialog` instead of the v1.6.2 placeholder. The 2 remaining placeholders (Cleanup / Sources manager) are unchanged.
+- **`docs/FEATURE_TODO.md`** — marked GroupDialog shipped; updated v1.7 remaining list.
+
+### v1.7-alpha.3 limitations (tracked in FEATURE_TODO)
+
+- **No tree-style expansion** in the duplicate group view; the v1.7-alpha.3 version uses a flat table with the keeper as the first row of each group, colored green. Full nested tree comes in v1.7.x.
+- **No per-group actions** ("ungroup", "change keeper"); re-run Find with a different `keep_strategy` to change keeper selection.
+- **No mid-find cancellation** — the underlying DB query is a single pass and not interruptible.
+
+### Verification
+
+- Headless smoke test against canonical DB (0 duplicates expected; only ~40 files fully hashed): ✅ dialog instantiates, all controls populated, find worker runs, completion handler renders the "no duplicates found" message correctly.
+- Synthesized non-empty render test (2 groups, 3 findings, 8.8 MB reclaimable): ✅ table renders 5 rows × 4 columns, keepers bold-green, duplicates orange, Apply button correctly enabled after find.
+- Full pytest suite: ✅ 1438 passed, 9 skipped, 0 failed (identical to v1.6.5 baseline).
+
+### Authoritative-source-first principle applied
+
+Before writing any code, probed:
+- `CleanupService.find_duplicates` signature → confirmed 6 kwargs + return type `CleanupReport`
+- `CleanupService.apply` signature → confirmed `(report, *, use_trash=True) -> ApplyReport`
+- `KEEP_STRATEGIES` constant → `('shortest_path', 'longest_path', 'oldest', 'newest')`
+- `MATCH_KINDS` constant → `('exact', 'fuzzy')`
+- `ApplyOutcome` enum members → `DELETED / SKIPPED_REFUSE / SKIPPED_MISSING / FAILED`
+- `CleanupFinding.details` dict keys via source inspection → `kept_path`, `kept_reason`, `dupset_id`, `hash`, `mtime`, `source_id`, `match_kind`
+
+Zero API assumptions made; zero crashes on first run.
+
 ## [1.7.0-alpha.2] — 2026-05-11 — ScanDialog (second native v1.7 dialog)
 
 **Headline:** Second Tools-menu item graduated from placeholder to a real in-process PySide6 dialog. `ScanDialog` lets the user pick a source + folder, runs the scan in a background `QThread` with indeterminate progress, and renders the full `ScanReport` (all 13+ fields) on completion. Closes the three biggest gaps from the v1.6.4 smoke-test feedback:

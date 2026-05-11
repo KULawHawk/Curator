@@ -285,16 +285,16 @@ If shipping linearly across v1.7 → v1.9:
 - `T-C02` — Asset classification taxonomy (unblocks `T-B05`, `T-A05`, `T-C03`)
 
 **v1.7 alpha already shipped:**
-- HealthCheckDialog (committed `34c1483`)
-- ScanDialog (committed this session)
+- HealthCheckDialog (v1.7-alpha.1, committed `34c1483`)
+- ScanDialog (v1.7-alpha.2, committed `e7c46ce`)
+- GroupDialog (v1.7-alpha.3, this session)
 
 **v1.7 remaining (per `docs/design/GUI_V2_DESIGN.md`):**
-- GroupDialog (duplicate finder)
-- CleanupDialog (4 sub-modes)
+- CleanupDialog (4 sub-modes: junk / empty-dirs / broken-symlinks / duplicates)
 - SourceAddDialog + Sources tab
 - Audit Log filter UI
 
-Once those 4 ship → tag **v1.7.0** with both ScanDialog and HealthCheckDialog included.
+Once those 3 ship → tag **v1.7.0** with all 5 v1.7-alpha dialogs included.
 
 ---
 

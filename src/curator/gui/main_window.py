@@ -150,12 +150,13 @@ class CuratorMainWindow(QMainWindow):
         menu_edit.addAction(self._act_bundle_edit)
 
         # v1.6.2: Tools menu — placeholders for v1.7 native dialogs.
-        # v1.7 alpha: Two items now graduated from placeholders to real
+        # v1.7 alpha: Three items now graduated from placeholders to real
         # in-process PySide6 dialogs:
-        #   * Health check  → HealthCheckDialog  (shipped earlier)
-        #   * Scan folder   → ScanDialog         (this commit)
-        # The other 3 items (Find duplicates / Cleanup / Sources manager)
-        # still surface the 'coming in v1.7' placeholder for now.
+        #   * Health check    → HealthCheckDialog  (v1.7-alpha.1)
+        #   * Scan folder     → ScanDialog         (v1.7-alpha.2)
+        #   * Find duplicates → GroupDialog        (v1.7-alpha.3, this commit)
+        # The other 2 items (Cleanup / Sources manager) still surface the
+        # 'coming in v1.7' placeholder for now.
         menu_tools = self.menuBar().addMenu("&Tools")
 
         # v1.7 alpha: real ScanDialog wired directly.
@@ -163,8 +164,12 @@ class CuratorMainWindow(QMainWindow):
         act_scan.triggered.connect(self._slot_open_scan_dialog)
         menu_tools.addAction(act_scan)
 
+        # v1.7 alpha.3: real GroupDialog wired directly.
+        act_group = QAction("Find &duplicates...", self)
+        act_group.triggered.connect(self._slot_open_group_dialog)
+        menu_tools.addAction(act_group)
+
         for label, key in [
-            ("Find &duplicates...", "group"),
             ("&Cleanup junk...", "cleanup"),
             ("&Sources manager...", "sources"),
         ]:
@@ -1402,6 +1407,29 @@ class CuratorMainWindow(QMainWindow):
         dlg = ScanDialog(self.runtime, self)
         dlg.exec()
 
+    def _slot_open_group_dialog(self) -> None:
+        """Open the native GroupDialog (v1.7 alpha.3).
+
+        Third Tools-menu item to graduate from placeholder. Two-phase
+        duplicate finder: configure parameters (source, keep strategy,
+        match kind) -> Find -> review groups -> Apply (trash duplicates).
+        Both phases run in QThread workers; the dialog blocks neither.
+
+        Imported lazily so a broken cleanup_signals or GroupDialog
+        module can't prevent the main window from opening.
+        """
+        try:
+            from curator.gui.dialogs import GroupDialog
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self,
+                "Group dialog unavailable",
+                f"Could not import GroupDialog: {e}",
+            )
+            return
+        dlg = GroupDialog(self.runtime, self)
+        dlg.exec()
+
     def _slot_tools_placeholder(self, key: str) -> None:
         """Show 'coming in v1.7' notice for a Tools menu item.
 
@@ -1415,14 +1443,9 @@ class CuratorMainWindow(QMainWindow):
         first real dialog.
         """
         guidance = {
-            # v1.7 alpha: 'scan' key removed — ScanDialog now opens directly
-            # via _slot_open_scan_dialog. Kept as a comment so future
-            # maintainers don't re-add it.
-            "group": (
-                "<b>Find duplicates</b> dialog will show a duplicate-set browser with"
-                " --keep strategy picker + apply. Coming in v1.7.<br><br>"
-                "<b>Today:</b> use Workflows → Find duplicates."
-            ),
+            # v1.7 alpha: 'scan' and 'group' keys removed — ScanDialog and
+            # GroupDialog now open directly via their dedicated slots. Kept
+            # as comments so future maintainers don't re-add them.
             "cleanup": (
                 "<b>Cleanup</b> dialog will let you pick categories"
                 " (junk / empty-dirs / broken-symlinks) and preview before applying."

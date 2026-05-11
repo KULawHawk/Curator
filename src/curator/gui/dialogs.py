@@ -1566,3 +1566,512 @@ class ScanDialog(QDialog):
     def last_report(self) -> Any:
         """Return the ScanReport from the most recent scan, or None."""
         return self._last_report
+
+
+# ---------------------------------------------------------------------------
+# GroupDialog (v1.7 alpha) -- third native dialog after Health + Scan
+# ---------------------------------------------------------------------------
+#
+# Two-phase duplicate finder:
+#
+#   1. **Find**: pick a source + path prefix + keep strategy + match kind,
+#      click Find. Worker runs CleanupService.find_duplicates() and emits
+#      a CleanupReport. Dialog renders one row per duplicate group with
+#      its keeper marked.
+#
+#   2. **Apply**: click Apply (disabled until findings exist). Confirm
+#      modal then run CleanupService.apply() -- moves non-keepers to trash
+#      (reversible) by default, or hard-deletes if --use-trash unchecked.
+#      Renders the ApplyReport stats (deleted / skipped / failed).
+#
+# v1.7 alpha limitations (tracked in FEATURE_TODO):
+#   * No tree-style expansion in the duplicate group view -- shows a flat
+#     table grouped by dupset_id with the keeper highlighted in green.
+#     Full nested tree comes in v1.7.x.
+#   * No per-group "ungroup" or "change keeper" actions yet -- you re-run
+#     Find with a different keep_strategy to change what's marked as keeper.
+
+
+class GroupDialog(QDialog):
+    """Find + apply duplicate cleanup from the GUI without console output.
+
+    Replaces the v1.6.2 "Find duplicates..." Tools-menu placeholder.
+    Reads sources from ``runtime.source_repo.list_all()`` and runs all
+    cleanup operations through ``runtime.cleanup``.
+    """
+
+    def __init__(self, runtime: "CuratorRuntime", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.runtime = runtime
+        self._find_worker: Any = None
+        self._apply_worker: Any = None
+        self._bridge: Any = None
+        self._last_find_report: Any = None      # CleanupReport from find phase
+        self._last_apply_report: Any = None     # ApplyReport from apply phase
+
+        self.setWindowTitle("Curator - Find duplicates")
+        self.setMinimumWidth(780)
+        self.resize(880, 640)
+        self._build_ui()
+        self._populate_sources()
+        self._update_button_states()
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        from PySide6.QtWidgets import (
+            QCheckBox,
+            QComboBox,
+            QDoubleSpinBox,
+            QLineEdit,
+            QProgressBar,
+            QRadioButton,
+            QButtonGroup,
+        )
+
+        layout = QVBoxLayout(self)
+
+        # --- Inputs group ----------------------------------------------
+        grp_inputs = QGroupBox("Find parameters")
+        gi = QVBoxLayout(grp_inputs)
+
+        # Source picker + path prefix (same row)
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("Source:"))
+        self._cb_source = QComboBox()
+        self._cb_source.setMinimumWidth(180)
+        row1.addWidget(self._cb_source)
+        row1.addSpacing(20)
+        row1.addWidget(QLabel("Path prefix:"))
+        self._le_prefix = QLineEdit()
+        self._le_prefix.setPlaceholderText("(optional, e.g. C:\\Users\\jmlee\\Pictures)")
+        row1.addWidget(self._le_prefix, 1)
+        gi.addLayout(row1)
+
+        # Keep strategy + keep_under (same row)
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Keep strategy:"))
+        self._cb_strategy = QComboBox()
+        for s in ("shortest_path", "longest_path", "oldest", "newest"):
+            self._cb_strategy.addItem(s, s)
+        row2.addWidget(self._cb_strategy)
+        row2.addSpacing(20)
+        row2.addWidget(QLabel("Keep under:"))
+        self._le_keep_under = QLineEdit()
+        self._le_keep_under.setPlaceholderText("(optional path prefix; overrides strategy)")
+        row2.addWidget(self._le_keep_under, 1)
+        gi.addLayout(row2)
+
+        # Match kind + similarity threshold (same row)
+        row3 = QHBoxLayout()
+        row3.addWidget(QLabel("Match kind:"))
+        self._rb_exact = QRadioButton("exact (xxhash3_128)")
+        self._rb_exact.setChecked(True)
+        self._rb_fuzzy = QRadioButton("fuzzy (MinHash-LSH)")
+        self._rb_exact.toggled.connect(self._on_match_kind_changed)
+        self._rb_group = QButtonGroup(self)
+        self._rb_group.addButton(self._rb_exact)
+        self._rb_group.addButton(self._rb_fuzzy)
+        row3.addWidget(self._rb_exact)
+        row3.addWidget(self._rb_fuzzy)
+        row3.addSpacing(20)
+        row3.addWidget(QLabel("Similarity:"))
+        self._sb_threshold = QDoubleSpinBox()
+        self._sb_threshold.setRange(0.5, 1.0)
+        self._sb_threshold.setSingleStep(0.05)
+        self._sb_threshold.setValue(0.85)
+        self._sb_threshold.setDecimals(2)
+        self._sb_threshold.setEnabled(False)  # fuzzy off by default
+        row3.addWidget(self._sb_threshold)
+        row3.addStretch(1)
+        gi.addLayout(row3)
+
+        # Hint
+        hint = QLabel(
+            "<i>Tip: leave Source empty to search ALL sources. Fuzzy match"
+            " catches re-encoded JPEGs / re-compressed MP3s but has false"
+            " positives -- always review before Apply. Default keep strategy"
+            " (shortest_path) usually keeps the file closest to the source root.</i>"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #5C6BC0; padding: 4px;")
+        gi.addWidget(hint)
+
+        layout.addWidget(grp_inputs)
+
+        # --- Progress + status ----------------------------------------
+        grp_status = QGroupBox("Status")
+        gs = QVBoxLayout(grp_status)
+
+        self._lbl_status = QLabel("Idle. Set parameters, then click Find.")
+        self._lbl_status.setWordWrap(True)
+        gs.addWidget(self._lbl_status)
+
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 1)
+        self._progress.setValue(0)
+        self._progress.setFormat("")
+        gs.addWidget(self._progress)
+
+        layout.addWidget(grp_status)
+
+        # --- Results group --------------------------------------------
+        self._grp_results = QGroupBox("Duplicate groups")
+        self._gr_layout = QVBoxLayout(self._grp_results)
+        self._lbl_no_results = QLabel("<i>No find run yet.</i>")
+        self._lbl_no_results.setStyleSheet("color: gray; padding: 8px;")
+        self._gr_layout.addWidget(self._lbl_no_results)
+        layout.addWidget(self._grp_results, 1)
+
+        # --- Buttons + use-trash toggle -------------------------------
+        row_btn = QHBoxLayout()
+        self._btn_find = QPushButton("Find duplicates")
+        self._btn_find.setDefault(True)
+        self._btn_find.clicked.connect(self._on_find_clicked)
+        row_btn.addWidget(self._btn_find)
+
+        self._cb_use_trash = QCheckBox("Move to trash (reversible)")
+        self._cb_use_trash.setChecked(True)
+        self._cb_use_trash.setToolTip(
+            "When checked: applying sends duplicates to OS Recycle Bin + "
+            "Curator's trash registry (restorable). When unchecked: hard delete."
+        )
+        row_btn.addWidget(self._cb_use_trash)
+
+        self._btn_apply = QPushButton("Apply (trash duplicates)")
+        self._btn_apply.clicked.connect(self._on_apply_clicked)
+        self._btn_apply.setEnabled(False)
+        row_btn.addWidget(self._btn_apply)
+
+        row_btn.addStretch(1)
+        self._btn_close = QPushButton("Close")
+        self._btn_close.clicked.connect(self.reject)
+        row_btn.addWidget(self._btn_close)
+        layout.addLayout(row_btn)
+
+    # ------------------------------------------------------------------
+    # Source population
+    # ------------------------------------------------------------------
+
+    def _populate_sources(self) -> None:
+        """Load sources into the dropdown. Includes '(all sources)' option."""
+        self._cb_source.addItem("(all sources)", None)
+        try:
+            sources = self.runtime.source_repo.list_all()
+        except Exception as e:  # noqa: BLE001
+            self._cb_source.addItem(f"(error: {e})")
+            return
+        for s in sources:
+            label = f"{s.source_id} ({s.source_type})"
+            self._cb_source.addItem(label, s.source_id)
+
+    def _selected_source_id(self) -> str | None:
+        return self._cb_source.currentData()
+
+    # ------------------------------------------------------------------
+    # UI helpers
+    # ------------------------------------------------------------------
+
+    def _on_match_kind_changed(self, _checked: bool) -> None:
+        self._sb_threshold.setEnabled(self._rb_fuzzy.isChecked())
+
+    def _update_button_states(self) -> None:
+        find_in_flight = self._find_worker is not None and self._find_worker.isRunning()
+        apply_in_flight = self._apply_worker is not None and self._apply_worker.isRunning()
+        any_in_flight = find_in_flight or apply_in_flight
+        self._btn_find.setEnabled(not any_in_flight)
+        # Apply only enabled if we have findings AND not currently scanning/applying
+        has_findings = (self._last_find_report is not None
+                        and len(self._last_find_report.findings) > 0)
+        self._btn_apply.setEnabled(has_findings and not any_in_flight)
+
+    def _set_indeterminate(self, on: bool, label: str = "Working...") -> None:
+        if on:
+            self._progress.setRange(0, 0)
+            self._progress.setFormat(label)
+        else:
+            self._progress.setRange(0, 1)
+            self._progress.setFormat("")
+
+    def _clear_results(self) -> None:
+        while self._gr_layout.count() > 0:
+            item = self._gr_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+    # ------------------------------------------------------------------
+    # Find phase
+    # ------------------------------------------------------------------
+
+    def _on_find_clicked(self) -> None:
+        # Lazy import
+        try:
+            from curator.gui.cleanup_signals import GroupProgressBridge, GroupFindWorker
+        except Exception as e:  # noqa: BLE001
+            self._lbl_status.setText(
+                f"<span style='color: #C62828;'>Could not load GroupFindWorker: {e}</span>"
+            )
+            return
+
+        # Collect inputs
+        source_id = self._selected_source_id()
+        prefix = self._le_prefix.text().strip() or None
+        keep_strategy = self._cb_strategy.currentData()
+        keep_under = self._le_keep_under.text().strip() or None
+        match_kind = "fuzzy" if self._rb_fuzzy.isChecked() else "exact"
+        threshold = self._sb_threshold.value()
+
+        # Reset state
+        self._last_find_report = None
+        self._last_apply_report = None
+        self._clear_results()
+        lbl = QLabel("<i>Finding duplicates...</i>")
+        lbl.setStyleSheet("color: gray; padding: 8px;")
+        self._gr_layout.addWidget(lbl)
+        self._set_indeterminate(True, "Searching for duplicates...")
+        scope = source_id if source_id else "ALL sources"
+        self._lbl_status.setText(
+            f"Searching {scope} (match: <b>{match_kind}</b>, keep: <b>{keep_strategy}</b>)..."
+        )
+
+        # Set up bridge + worker
+        self._bridge = GroupProgressBridge(self)
+        self._bridge.find_started.connect(self._on_find_started)
+        self._bridge.find_completed.connect(self._on_find_completed)
+        self._bridge.find_failed.connect(self._on_find_failed)
+        self._bridge.apply_started.connect(self._on_apply_started)
+        self._bridge.apply_completed.connect(self._on_apply_completed)
+        self._bridge.apply_failed.connect(self._on_apply_failed)
+
+        self._find_worker = GroupFindWorker(
+            runtime=self.runtime,
+            source_id=source_id,
+            root_prefix=prefix,
+            keep_strategy=keep_strategy,
+            keep_under=keep_under,
+            match_kind=match_kind,
+            similarity_threshold=threshold,
+            bridge=self._bridge,
+            parent=self,
+        )
+        self._find_worker.start()
+        self._update_button_states()
+
+    def _on_find_started(self, _payload: object) -> None:
+        pass  # status already set in click handler
+
+    def _on_find_completed(self, report: object) -> None:
+        self._last_find_report = report
+        self._set_indeterminate(False)
+        n_findings = len(report.findings)
+
+        # Compute group count + reclaimable bytes
+        dupset_ids = set()
+        total_bytes = 0
+        for f in report.findings:
+            ds = f.details.get("dupset_id") if isinstance(f.details, dict) else None
+            if ds:
+                dupset_ids.add(ds)
+            total_bytes += f.size
+
+        if n_findings == 0:
+            self._lbl_status.setText(
+                "<span style='color: #2E7D32;'><b>No duplicates found.</b></span>"
+                " The index is clean for the parameters you chose."
+            )
+        else:
+            self._lbl_status.setText(
+                f"<span style='color: #2E7D32;'><b>Found</b></span>"
+                f" {len(dupset_ids)} duplicate group(s), {n_findings} non-keeper file(s),"
+                f" <b>{_format_size(total_bytes)}</b> reclaimable."
+            )
+        self._render_find_report(report, dupset_ids, total_bytes)
+        self._update_button_states()
+
+    def _on_find_failed(self, exc: object) -> None:
+        self._set_indeterminate(False)
+        self._lbl_status.setText(
+            f"<span style='color: #C62828;'><b>Find failed:</b></span>"
+            f" {type(exc).__name__}: {exc}"
+        )
+        self._update_button_states()
+
+    def _render_find_report(self, report: object, dupset_ids: set, total_bytes: int) -> None:
+        """Render duplicate findings grouped by dupset_id."""
+        self._clear_results()
+
+        if not report.findings:
+            lbl = QLabel("<i>No duplicates found for these parameters.</i>")
+            lbl.setStyleSheet("color: gray; padding: 8px;")
+            self._gr_layout.addWidget(lbl)
+            return
+
+        # Group findings by dupset_id
+        groups: dict = {}
+        for f in report.findings:
+            ds = f.details.get("dupset_id") if isinstance(f.details, dict) else "unknown"
+            groups.setdefault(ds, []).append(f)
+
+        # Build flat table: one row per file (keeper first per group)
+        # Columns: Group hash (short) | File path | Size | Status (KEEPER / dup)
+        headers = ["Group (xxhash3 prefix)", "Path", "Size", "Status"]
+        rows: list[list[str]] = []
+        for ds_id, findings in sorted(groups.items(),
+                                       key=lambda kv: -sum(f.size for f in kv[1])):
+            short_hash = ds_id[:12] + "..." if ds_id and len(ds_id) > 12 else (ds_id or "?")
+            # Keeper row (synthesize from details — keeper itself isn't in findings list)
+            first = findings[0]
+            kept_path = first.details.get("kept_path", "(unknown)") if isinstance(first.details, dict) else "(?)"
+            kept_reason = first.details.get("kept_reason", "?") if isinstance(first.details, dict) else "?"
+            rows.append([short_hash, kept_path, _format_size(first.size), f"KEEPER ({kept_reason})"])
+            for f in findings:
+                rows.append(["", f.path, _format_size(f.size), "duplicate"])
+
+        tbl = _make_table(headers, rows)
+        # Highlight keeper rows green, duplicate rows yellow-ish
+        for r in range(tbl.rowCount()):
+            status_item = tbl.item(r, 3)
+            if status_item is None:
+                continue
+            if "KEEPER" in status_item.text():
+                for c in range(tbl.columnCount()):
+                    cell = tbl.item(r, c)
+                    if cell:
+                        cell.setForeground(QColor("#2E7D32"))
+                        f = QFont()
+                        f.setBold(True)
+                        cell.setFont(f)
+            elif status_item.text() == "duplicate":
+                for c in range(tbl.columnCount()):
+                    cell = tbl.item(r, c)
+                    if cell:
+                        cell.setForeground(QColor("#EF6C00"))
+        # Cap the visible row count via min height so the dialog stays usable
+        tbl.setMinimumHeight(220)
+        self._gr_layout.addWidget(tbl)
+
+    # ------------------------------------------------------------------
+    # Apply phase
+    # ------------------------------------------------------------------
+
+    def _on_apply_clicked(self) -> None:
+        if self._last_find_report is None or not self._last_find_report.findings:
+            return  # button shouldn't have been enabled
+
+        # Lazy import
+        try:
+            from curator.gui.cleanup_signals import GroupApplyWorker
+        except Exception as e:  # noqa: BLE001
+            self._lbl_status.setText(
+                f"<span style='color: #C62828;'>Could not load GroupApplyWorker: {e}</span>"
+            )
+            return
+
+        # Lazy import QMessageBox for the confirm dialog
+        from PySide6.QtWidgets import QMessageBox
+
+        n = len(self._last_find_report.findings)
+        use_trash = self._cb_use_trash.isChecked()
+        action_word = "move to trash" if use_trash else "HARD DELETE"
+        reply = QMessageBox.question(
+            self,
+            "Confirm apply",
+            f"This will {action_word} <b>{n}</b> non-keeper file(s).<br><br>"
+            f"<b>Use trash:</b> {'yes (reversible)' if use_trash else 'NO (irreversible)'}<br><br>"
+            f"Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._set_indeterminate(True, "Applying...")
+        self._lbl_status.setText(
+            f"Applying: {action_word} {n} file(s)..."
+        )
+
+        # Reuse the same bridge from find phase (signals already wired)
+        self._apply_worker = GroupApplyWorker(
+            runtime=self.runtime,
+            report=self._last_find_report,
+            use_trash=use_trash,
+            bridge=self._bridge,
+            parent=self,
+        )
+        self._apply_worker.start()
+        self._update_button_states()
+
+    def _on_apply_started(self, _n: object) -> None:
+        pass  # status already set
+
+    def _on_apply_completed(self, apply_report: object) -> None:
+        self._last_apply_report = apply_report
+        self._set_indeterminate(False)
+
+        # Tally outcomes
+        from collections import Counter
+        outcomes = Counter()
+        errors: list[str] = []
+        for result in apply_report.results:
+            # outcome is ApplyOutcome enum: DELETED / SKIPPED_REFUSE / SKIPPED_MISSING / FAILED
+            outcome_name = getattr(result.outcome, "name", str(result.outcome))
+            outcomes[outcome_name] += 1
+            if result.error:
+                errors.append(f"{result.finding.path}: {result.error}")
+
+        deleted = outcomes.get("DELETED", 0)
+        skipped = outcomes.get("SKIPPED_REFUSE", 0) + outcomes.get("SKIPPED_MISSING", 0)
+        failed = outcomes.get("FAILED", 0)
+
+        color = "#2E7D32" if failed == 0 else "#EF6C00"
+        self._lbl_status.setText(
+            f"<span style='color: {color};'><b>Apply complete:</b></span>"
+            f" {deleted} deleted, {skipped} skipped, {failed} failed."
+        )
+
+        # Append apply summary below the existing find table
+        from PySide6.QtWidgets import QGroupBox as _QGB
+        sub = _QGB("Apply results")
+        sub_layout = QVBoxLayout(sub)
+        sub_rows = [
+            ("Deleted",        str(deleted)),
+            ("Skipped (refused safety)",  str(outcomes.get("SKIPPED_REFUSE", 0))),
+            ("Skipped (missing on disk)", str(outcomes.get("SKIPPED_MISSING", 0))),
+            ("Failed",         str(failed)),
+            ("Started",        _format_dt(getattr(apply_report, "started_at", None))),
+            ("Completed",      _format_dt(getattr(apply_report, "completed_at", None))),
+        ]
+        sub_layout.addWidget(_make_kv_table(sub_rows))
+        if errors:
+            sub_layout.addWidget(QLabel(f"<b>Errors ({len(errors)}):</b>"))
+            err_tbl = _make_table(["Path", "Error"],
+                                  [[e.split(": ", 1)[0], e.split(": ", 1)[1] if ": " in e else ""]
+                                   for e in errors[:30]])
+            sub_layout.addWidget(err_tbl)
+        self._gr_layout.addWidget(sub)
+        self._update_button_states()
+
+    def _on_apply_failed(self, exc: object) -> None:
+        self._set_indeterminate(False)
+        self._lbl_status.setText(
+            f"<span style='color: #C62828;'><b>Apply failed:</b></span>"
+            f" {type(exc).__name__}: {exc}"
+        )
+        self._update_button_states()
+
+    # ------------------------------------------------------------------
+    # Test / introspection helpers
+    # ------------------------------------------------------------------
+
+    @property
+    def last_find_report(self) -> Any:
+        """Return the CleanupReport from the most recent find, or None."""
+        return self._last_find_report
+
+    @property
+    def last_apply_report(self) -> Any:
+        """Return the ApplyReport from the most recent apply, or None."""
+        return self._last_apply_report
