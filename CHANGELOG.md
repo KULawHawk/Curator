@@ -4,6 +4,50 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.23] — 2026-05-11 — Lineage slider tick-mark sync (T-A02 polish v2)
+
+**Headline:** The lineage time-slider's tick marks now align exactly with the 5 axis date labels shipped in v1.7.13. Tick interval changed from `10` to `25` so ticks appear at 0/25/50/75/100% — the same positions as the date labels. Users can now visually anchor slider position to specific dates without mental interpolation.
+
+### Why this matters
+
+v1.7.13 added 5 date labels (YYYY-MM-DD) below the lineage time-slider at 0/25/50/75/100% of the time range. The slider itself had 10 tick marks (every 10% of range), which meant **half the ticks had no corresponding date label** and the others were misaligned. Users couldn't tell which tick "belonged to" which date.
+
+With 5 ticks instead of 10, each tick mark sits directly above a date label. The visual relationship between slider position and date is now obvious at a glance — a pure usability win with no behavioral change.
+
+### What's new
+
+- **`setTickInterval(25)`** on `self._lineage_slider` (was `setTickInterval(10)`)
+- That's it. One numeric change in `gui/main_window.py`.
+
+### Files changed
+
+- `src/curator/gui/main_window.py` — +5 lines / -1 line (interval change + explanatory comment)
+- `docs/releases/v1.7.23.md` — new release notes
+
+### Verification
+
+- **5-test headless suite** (`test_slider_ticks.py`):
+  1. Slider exists with range 0-100 (regression check)
+  2. **Tick interval is 25** (was 10)
+  3. Tick position is `TicksBelow` (regression check)
+  4. **Exactly 5 tick positions** computed: [0, 25, 50, 75, 100]
+  5. `_lineage_axis_labels` exists with 5 items (matches tick count)
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 24-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**1 bug caught and fixed during testing:** my test imported `MainWindow` but the actual class name is `CuratorMainWindow`. Lesson #46 (probe before writing dependent code) was momentarily forgotten — caught immediately by `ImportError`. Fixed by probing `dir(curator.gui.main_window)` to find the real name, then updated the import.
+
+**Lesson reinforced**: even for "obvious" class names, **probe before importing in test files**. The convention `MainWindow` is common across Qt apps but Curator chose `CuratorMainWindow` for namespace clarity. 5-second probe avoids 30-second test re-run cycles.
+
+**0 implementation bugs caught.** The tick interval change worked first try — the math (100 / 25 + 1 = 5 ticks) is straightforward and the test verified the slot positions matched the axis label count.
+
+### v1.7.23 limitations
+
+- **No tick-mark labels** — Qt's `QSlider` doesn't natively render labels under each tick mark; the v1.7.13 labels are a separate `QLabel` row below the slider. A future enhancement could combine them into a single custom widget that renders ticks + labels together with guaranteed alignment.
+- **Hardcoded 5 ticks** — if a future version of the axis labels changes to 3, 7, or 10 positions, the tick interval needs to be updated to match. Not a configurable setting yet.
+- **No tick-label tooltip** — hovering over a tick mark doesn't show the corresponding date. Could be a v1.8 polish.
+
 ## [1.7.22] — 2026-05-11 — scan-pii --csv + --no-header (T-B04 CSV parity)
 
 **Headline:** `curator scan-pii` gains `--csv` and `--no-header` flags, mirroring the v1.7.19/v1.7.20 pattern from `audit-summary`. PII scan results can now be dumped to CSV for spreadsheet review or pipeline processing — with **two distinct row shapes** depending on whether `--show-matches` is set.

@@ -1321,7 +1321,11 @@ class CuratorMainWindow(QMainWindow):
         self._lineage_slider.setMaximum(100)
         self._lineage_slider.setValue(100)  # all edges visible at start
         self._lineage_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self._lineage_slider.setTickInterval(10)
+        # v1.7.23: tick interval 25 (was 10) so tick marks align exactly
+        # with the 5 axis date labels shipped in v1.7.13 at 0/25/50/75/100%.
+        # The visual relationship between slider position and date label is
+        # now obvious without mental interpolation.
+        self._lineage_slider.setTickInterval(25)
         if self._lineage_time_min is None or self._lineage_time_max is None:
             # No edges yet — disable slider but keep it visible
             self._lineage_slider.setEnabled(False)
