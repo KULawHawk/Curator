@@ -191,6 +191,11 @@ class CuratorMainWindow(QMainWindow):
         act_forecast.triggered.connect(self._slot_open_forecast)
         menu_tools.addAction(act_forecast)
 
+        # v1.7.9 (T-B05 GUI): Tier scan dialog.
+        act_tier = QAction("&Tier scan (cold / expired / archive)...", self)
+        act_tier.triggered.connect(self._slot_open_tier_scan)
+        menu_tools.addAction(act_tier)
+
         # v1.7 alpha: real HealthCheckDialog (native PySide6, in-process).
         act_health = QAction("&Health check", self)
         act_health.triggered.connect(self._slot_open_health_check)
@@ -2045,6 +2050,25 @@ class CuratorMainWindow(QMainWindow):
             )
             return
         dlg = ForecastDialog(self.runtime, self)
+        dlg.exec()
+
+    def _slot_open_tier_scan(self) -> None:
+        """Open the TierDialog (v1.7.9, T-B05 GUI extension).
+
+        Interactive picker for cold / expired / archive tier scans.
+        Mirrors the ``curator tier`` CLI; emits the same
+        ``tier.suggest`` audit event so lifecycle paper trail is unified.
+        """
+        try:
+            from curator.gui.dialogs import TierDialog
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self,
+                "Tier dialog unavailable",
+                f"Could not import TierDialog: {e}",
+            )
+            return
+        dlg = TierDialog(self.runtime, self)
         dlg.exec()
 
     def _slot_open_version_stacks(self) -> None:

@@ -36,6 +36,7 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFrame,
@@ -43,7 +44,10 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
+    QMessageBox,
     QPushButton,
+    QSpinBox,
     QScrollArea,
     QSizePolicy,
     QTableWidget,
@@ -286,6 +290,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QSplitter,
 )
 
@@ -3370,3 +3375,237 @@ class ForecastDialog(QDialog):
     @property
     def last_forecasts(self):
         return self._last_forecasts
+
+
+# ---------------------------------------------------------------------------
+# TierDialog (v1.7.9, T-B05 GUI extension)
+# ---------------------------------------------------------------------------
+
+
+class TierDialog(QDialog):
+    """Tools-menu picker for the tier-storage scan command.
+
+    GUI complement to ``curator tier``. Lets the user pick a recipe
+    (cold / expired / archive), adjust min-age-days, optionally filter
+    by source/root prefix, click Scan, and see the candidate list in
+    an interactive table.
+
+    Read-only viewer; emits the same ``tier.suggest`` audit event as
+    the CLI so the lifecycle paper trail is unified.
+    """
+
+    RECIPE_LABELS = {
+        "cold": "Cold (stale provisional)",
+        "expired": "Expired (past expires_at)",
+        "archive": "Archive (stale vital)",
+    }
+    RECIPE_DEFAULTS = {"cold": 90, "expired": 0, "archive": 365}
+
+    def __init__(self, runtime: "CuratorRuntime", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.runtime = runtime
+        self._last_report = None
+        self.setWindowTitle("Curator - Tier scan")
+        self.setMinimumWidth(820)
+        self.resize(900, 600)
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        from PySide6.QtWidgets import (
+            QAbstractItemView, QHeaderView, QSpinBox,
+        )
+
+        layout = QVBoxLayout(self)
+
+        # Header / explainer
+        header = QLabel(
+            "<b>Tier scan</b><br>"
+            "<i>Identify files that have aged into a different storage tier. "
+            "Three recipes match the most common transitions:</i><br>"
+            "&nbsp;&nbsp;&bull; <b>cold</b>: status='provisional' AND last scanned older than threshold<br>"
+            "&nbsp;&nbsp;&bull; <b>expired</b>: expires_at is set AND in the past<br>"
+            "&nbsp;&nbsp;&bull; <b>archive</b>: status='vital' AND last scanned older than threshold"
+        )
+        header.setWordWrap(True)
+        header.setStyleSheet("padding: 4px;")
+        layout.addWidget(header)
+
+        # Filter row 1: recipe + min-age-days
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("Recipe:"))
+        self._cb_recipe = QComboBox()
+        for key, label in self.RECIPE_LABELS.items():
+            self._cb_recipe.addItem(label, key)
+        self._cb_recipe.currentIndexChanged.connect(self._on_recipe_changed)
+        row1.addWidget(self._cb_recipe)
+
+        row1.addSpacing(20)
+        row1.addWidget(QLabel("Min age (days):"))
+        self._sb_age = QSpinBox()
+        self._sb_age.setRange(0, 99999)
+        self._sb_age.setValue(90)
+        self._sb_age.setSuffix(" d")
+        self._sb_age.setMinimumWidth(90)
+        self._sb_age.setToolTip(
+            "Files older than this (by last_scanned_at) are candidates. "
+            "Ignored for 'expired' recipe."
+        )
+        row1.addWidget(self._sb_age)
+        row1.addStretch(1)
+        layout.addLayout(row1)
+
+        # Filter row 2: source + root prefix
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Source:"))
+        self._cb_source = QComboBox()
+        self._cb_source.addItem("(any)", None)
+        for s in self.runtime.source_repo.list_all():
+            self._cb_source.addItem(s.source_id, s.source_id)
+        self._cb_source.setMinimumWidth(160)
+        row2.addWidget(self._cb_source)
+
+        row2.addSpacing(20)
+        row2.addWidget(QLabel("Root prefix:"))
+        self._le_root = QLineEdit()
+        self._le_root.setPlaceholderText("(any) e.g. C:/Users/jmlee/Work")
+        self._le_root.setMinimumWidth(260)
+        row2.addWidget(self._le_root, 1)
+        layout.addLayout(row2)
+
+        # Scan button row
+        btn_row = QHBoxLayout()
+        self._btn_scan = QPushButton("Scan")
+        self._btn_scan.setDefault(True)
+        self._btn_scan.clicked.connect(self._on_scan_clicked)
+        btn_row.addWidget(self._btn_scan)
+
+        self._lbl_summary = QLabel("")
+        self._lbl_summary.setStyleSheet("color: #455A64; padding-left: 16px;")
+        btn_row.addWidget(self._lbl_summary, 1)
+        layout.addLayout(btn_row)
+
+        # Results table
+        self._table = QTableWidget(0, 4)
+        self._table.setHorizontalHeaderLabels(
+            ["Path", "Size", "Status", "Reason"],
+        )
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setAlternatingRowColors(True)
+        self._table.verticalHeader().setVisible(False)
+        h = self._table.horizontalHeader()
+        h.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self._table, 1)
+
+        # Footer
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.accept)
+        footer.addWidget(btn_close)
+        layout.addLayout(footer)
+
+    def _on_recipe_changed(self, *_) -> None:
+        """Update the min-age default when the recipe changes."""
+        recipe_key = self._cb_recipe.currentData()
+        if recipe_key in self.RECIPE_DEFAULTS:
+            self._sb_age.setValue(self.RECIPE_DEFAULTS[recipe_key])
+        # For 'expired', min-age is irrelevant
+        self._sb_age.setEnabled(recipe_key != "expired")
+
+    def _on_scan_clicked(self) -> None:
+        """Execute the scan with current filter values; populate the table."""
+        from curator.services.tier import TierCriteria, TierRecipe
+        from PySide6.QtWidgets import QTableWidgetItem
+
+        recipe_key = self._cb_recipe.currentData()
+        try:
+            recipe = TierRecipe.from_string(recipe_key)
+        except ValueError as e:
+            QMessageBox.warning(self, "Bad recipe", str(e))
+            return
+
+        source_id = self._cb_source.currentData()
+        root_prefix = self._le_root.text().strip() or None
+
+        criteria = TierCriteria(
+            recipe=recipe,
+            min_age_days=self._sb_age.value(),
+            source_id=source_id,
+            root_prefix=root_prefix,
+        )
+
+        try:
+            report = self.runtime.tier.scan(criteria)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "Scan failed",
+                f"{type(e).__name__}: {e}",
+            )
+            return
+
+        self._last_report = report
+
+        # Audit event mirroring the CLI behavior
+        try:
+            self.runtime.audit.log(
+                actor="gui.tier",
+                action="tier.suggest",
+                entity_type="tier_scan",
+                entity_id=recipe.value,
+                details={
+                    "recipe": recipe.value,
+                    "min_age_days": criteria.min_age_days,
+                    "source_id": source_id,
+                    "root_prefix": root_prefix,
+                    "candidate_count": report.candidate_count,
+                    "total_size_bytes": report.total_size,
+                },
+            )
+        except Exception:  # noqa: BLE001 -- audit failure is non-fatal
+            pass
+
+        # Populate summary label
+        def _fmt_size(n: int) -> str:
+            for unit in ("B", "KB", "MB", "GB", "TB"):
+                if n < 1024 or unit == "TB":
+                    return f"{n:.1f} {unit}" if unit != "B" else f"{n} {unit}"
+                n /= 1024
+            return f"{n:.1f} TB"
+
+        self._lbl_summary.setText(
+            f"Found <b>{report.candidate_count:,}</b> candidates "
+            f"(<b>{_fmt_size(report.total_size)}</b>) "
+            f"in {report.duration_seconds:.2f}s"
+        )
+
+        # Populate results table
+        self._table.setRowCount(report.candidate_count)
+        status_colors = {
+            "vital": "#2e7d32", "active": "#1565C0",
+            "provisional": "#f9a825", "junk": "#c62828",
+        }
+        for r, c in enumerate(report.candidates):
+            path_item = QTableWidgetItem(c.file.source_path)
+            path_item.setToolTip(c.file.source_path)
+
+            size_item = QTableWidgetItem(_fmt_size(c.file.size or 0))
+            size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+            status_item = QTableWidgetItem(c.file.status)
+            status_item.setForeground(QColor(status_colors.get(c.file.status, "#000")))
+
+            reason_item = QTableWidgetItem(c.reason)
+
+            self._table.setItem(r, 0, path_item)
+            self._table.setItem(r, 1, size_item)
+            self._table.setItem(r, 2, status_item)
+            self._table.setItem(r, 3, reason_item)
+
+    @property
+    def last_report(self):
+        """Most recent TierReport (or None if no scan run yet). For tests."""
+        return self._last_report
