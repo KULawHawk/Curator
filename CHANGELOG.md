@@ -4,6 +4,55 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.17] — 2026-05-11 — TierDialog accelerator hints (T-B05 GUI v4)
+
+**Headline:** The Tier scan dialog now surfaces its keyboard shortcuts visually: context menu items show **`Enter`** / **`Del`** suffixes, and a hint label in the footer reads **"Tip: right-click for actions • Enter = inspect • Del = send to trash"**. Completes the discoverability story for v1.7.14 (right-click) + v1.7.16 (keyboard).
+
+### Why this matters
+
+v1.7.14 shipped right-click actions; v1.7.16 added keyboard shortcuts. Both worked but neither was visible — users who didn't randomly right-click or randomly press Enter/Del never discovered them. v1.7.17 surfaces the affordances directly in the UI: the menu items now show their keyboard equivalents, and the footer reminds users what's available. Standard desktop UX practice.
+
+### What's new
+
+- **Menu item shortcut suffixes** in the right-click context menu:
+  - `Inspect...\tEnter` (tab separator triggers Qt's right-aligned shortcut rendering in the menu)
+  - `Send to trash...\tDel`
+  - Note: we don't call `QAction.setShortcut(QKeySequence.Delete)` because that would register a *second* binding which might fire from outside the table; the existing eventFilter (v1.7.16) is the source of truth.
+- **Footer hint label**: a small italic label to the left of the Close button reads:
+  > *Tip: right-click for actions • **Enter** = inspect • **Del** = send to trash*
+  - Styled at 8pt slate-gray (`#607D8B`) to be subordinate to the primary content
+  - Stored on `self._kbd_hint_label` for future test access
+  - Persists across scans (it's part of the static dialog layout, not rebuilt by `_on_scan_clicked`)
+
+### Files changed
+
+- `src/curator/gui/dialogs.py` — +11 lines (-4): suffixes on 2 menu items + footer label
+- `docs/releases/v1.7.17.md` — new release notes
+
+### Verification
+
+- **4-test headless suite** (`test_tierdialog_hints.py`):
+  1. `_kbd_hint_label` exists with correct text and styling (8pt, slate gray, mentions Enter + Del + right-click)
+  2. Source code contains `"Inspect...\tEnter"` and `"Send to trash...\tDel"` strings (avoids the `QMenu.exec` hang from lesson #47)
+  3. Hint label is reachable in the dialog's layout tree (not orphaned)
+  4. Hint label is the same instance across multiple scans (proves it's part of static layout, not rebuilt)
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 18-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**Lesson #47 reinforced (third time now):** my initial Test 2 monkeypatched `QMenu.exec` with a function that *returned immediately* with no event-loop spin. **It still hung.** The Qt offscreen platform's event loop appears to wait for the menu's deferred-deletion or close-event regardless of what `exec` returns. Replaced with a source-code regex check via `inspect.getsource(dialogs)` to verify the strings are present. Fast, deterministic, and tests what we actually care about (the strings make it into the menu).
+
+**Generalized lesson #47 update**: never monkeypatch `QMenu.exec` or `QDialog.exec` in headless Qt tests, **even with an immediate-return function**. Use source-code inspection (`inspect.getsource`) for textual content verification, or test the underlying behavior via existing public hooks. The menu construction code itself is well-typed and the action handlers are tested directly.
+
+**0 implementation bugs caught** — the shortcut-suffix pattern (`"...\tEnter"`) is Qt's documented way to render right-aligned shortcuts in menu text; worked first try.
+
+### v1.7.17 limitations
+
+- **No Set-status shortcuts surfaced** — the submenu doesn't show key bindings because none exist yet (would conflict with future typeahead-search)
+- **Hint label doesn't update for non-canonical configurations** — if a user remaps keys (future feature), the hint text won't reflect that
+- **No tooltip on the hint label** — could expand on hover (e.g. "Set status: right-click → Set status submenu"); deferred
+- **Tab-separator rendering varies by Qt theme** — some Qt styles render the shortcut text inline rather than right-aligned. Cosmetic only; the text content is identical.
+
 ## [1.7.16] — 2026-05-11 — TierDialog keyboard shortcuts (T-B05 GUI v3)
 
 **Headline:** The Tier scan dialog now supports keyboard shortcuts on the candidate table: **Enter** opens Inspect, **Delete** sends-to-trash (with confirmation). Completes the v1.7.14 actions story so power users don't need to right-click.

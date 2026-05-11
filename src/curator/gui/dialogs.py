@@ -3510,7 +3510,18 @@ class TierDialog(QDialog):
         layout.addWidget(self._table, 1)
 
         # Footer
+        # v1.7.17: discoverability hint for the keyboard shortcuts shipped
+        # in v1.7.16. Shown to the left of the Close button at low visual
+        # weight (8pt, slate gray).
         footer = QHBoxLayout()
+        self._kbd_hint_label = QLabel(
+            "<i>Tip: right-click for actions • "
+            "<b>Enter</b> = inspect • <b>Del</b> = send to trash</i>"
+        )
+        self._kbd_hint_label.setStyleSheet(
+            "color: #607D8B; font-size: 8pt; padding-left: 4px;"
+        )
+        footer.addWidget(self._kbd_hint_label)
         footer.addStretch(1)
         btn_close = QPushButton("Close")
         btn_close.clicked.connect(self.accept)
@@ -3722,7 +3733,11 @@ class TierDialog(QDialog):
         menu = QMenu(self)
 
         # --- Inspect action ---
-        act_inspect = menu.addAction("Inspect...")
+        # v1.7.17: show keyboard shortcut in the menu item text. We don't
+        # call setShortcut because the shortcuts are handled by the table's
+        # eventFilter (v1.7.16); setting a QShortcut here would create a
+        # second binding that might fire on other widgets. Pure text suffix.
+        act_inspect = menu.addAction("Inspect...\tEnter")
         act_inspect.triggered.connect(
             lambda _checked=False, f=file_ent: self._action_inspect(f)
         )
@@ -3744,7 +3759,7 @@ class TierDialog(QDialog):
         menu.addSeparator()
 
         # --- Send to trash action ---
-        act_trash = menu.addAction("Send to trash...")
+        act_trash = menu.addAction("Send to trash...\tDel")
         act_trash.triggered.connect(
             lambda _checked=False, f=file_ent: self._action_send_to_trash(f)
         )
