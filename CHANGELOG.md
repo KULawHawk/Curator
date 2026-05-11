@@ -4,6 +4,79 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.6] — 2026-05-11 — T-B04 PII Regex Scanner
+
+**Headline:** New `curator scan-pii` command detects **SSN, credit card, US phone, and email** patterns via regex with severity-graded reporting and last-4-char redaction. Detect-only baseline; downstream routing/quarantine hooks deferred until false-positive rates are measured on real data.
+
+### Why this matters
+
+Jake's forensic psychology workflow puts client data through this index. The regex baseline catches the high-value, unambiguous patterns: SSN and credit card numbers are HIGH severity (almost never legitimate in scanned content); phone and email are MEDIUM (PII but common enough in legitimate signatures, headers, etc. that flagging them as HIGH would drown the signal).
+
+FEATURE_TODO has long called for this as the foundation for a future `T-D02` Conclave semantic-detection hookspec. The regex baseline ships first; semantic detection plugs in later.
+
+### What's new
+
+- **`services/pii_scanner.py`** — new module (~290 lines) with:
+  - `PIIScanner` service (stateless after init; thread-safe; reuses compiled regex)
+  - `PIIPattern` dataclass with severity + `redact()` helper (default: keep last 4 chars)
+  - `PIIMatch` (per-detection record with line/offset/redacted)
+  - `PIIScanReport` (per-file result with `has_high_severity`, `match_count`, `by_pattern()`)
+  - `PIISeverity` enum: HIGH / MEDIUM
+  - **4 default patterns:**
+    - `ssn` (HIGH) — `XXX-XX-XXXX` US SSN with word boundaries
+    - `credit_card` (HIGH) — 13-16 digits (no Luhn validation yet; deferred to v1.8)
+    - `phone_us` (MEDIUM) — `(XXX) XXX-XXXX`, `XXX-XXX-XXXX`, `XXX.XXX.XXXX`, `XXXXXXXXXX`, with optional leading `+1`
+    - `email` (MEDIUM) — standard email regex with required dot in domain
+- **3 entry points:**
+  - `scan_text(text, source=label)` — scan a string
+  - `scan_file(path)` — scan a file (2 MB head cap; configurable via `head_bytes` kwarg); UTF-8 errors='replace' so one bad byte doesn't drop the whole file
+  - `scan_directory(dir, recursive=True, extensions=None)` — walk + scan everything
+- **`curator scan-pii <path>` CLI command** with flags:
+  - `--recursive / --no-recursive` (default: recursive for directory targets)
+  - `--ext .EXT` (repeatable; filter by extension)
+  - `--head-bytes N` (override 2 MB cap)
+  - `--show-matches` (print individual matches in redacted form)
+  - `--high-only` (filter to files with SSN / credit_card hits)
+  - `--json` (machine-readable output)
+- **`CuratorRuntime.pii_scanner`** — wired into the runtime container for downstream consumers (future organize integration, MCP tools, etc.)
+
+### Files changed
+
+- `src/curator/services/pii_scanner.py` — new module, +290 lines
+- `src/curator/cli/runtime.py` — +4 lines (import + field + construct + pass-through)
+- `src/curator/cli/main.py` — +130 lines (`scan-pii` command + helpers); -1 lines (fixed an unrelated indentation snag in T-C02 status_report that surfaced during the append)
+- `docs/FEATURE_TODO.md` — T-B04 status proposed → shipped
+- `docs/releases/v1.7.6.md` — new release notes
+
+### Verification
+
+- **11-test headless suite** against synthetic content + temp files:
+  1. SSN detection (XXX-XX-XXXX, redaction, HIGH severity)
+  2. Credit card detection (13-16 digits with separators)
+  3. Phone detection (4 formats: parens, dashes, dots, plain)
+  4. Email detection (with `+filter` and hyphenated domains)
+  5. Line number accuracy across multi-line text
+  6. No false positives in clean text (years, version strings, alphanumeric IDs)
+  7. `scan_file()` on real file (47-byte text with SSN + phone)
+  8. `scan_file()` truncation: 3 MB file with PII at end, 1 MB cap, correctly reports `truncated=True` and finds 0 matches
+  9. `scan_file()` on missing path returns error report
+  10. `scan_directory()` recursive walk + extension filter
+  11. Redaction edge cases (short strings get all-masked)
+- **Live CLI smoke test**: `curator scan-pii <temp file with PII> --show-matches` produces correct Rich output with severity-colored per-file findings and L# / pattern / redacted columns
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the entire 7-feature arc)
+
+### Bug caught during ship
+
+A non-trivial mistake during the `cli/main.py` append: the `Filesystem:edit_file` diff de-indented the existing T-C02 `status_report` bar-rendering block (lines ~3570-3582). Caught by `ast.parse` immediately after the edit, fixed via a targeted follow-up edit. Lesson logged: **after large append edits, ALWAYS run `ast.parse` before testing** — the diff format can silently mangle adjacent untouched code if the trailing context block shifts.
+
+### v1.7.6 limitations
+
+- **No Luhn validation** on credit card matches — cuts ~10x of false positives but is its own mini-feature
+- **No organize integration** — detect-only. A future v1.8 hookspec will gate migration destinations on PII status.
+- **No semantic detection** — the regex baseline catches unambiguous patterns. Names-in-context, institution-specific MRN formats, etc. are T-D02 territory.
+- **No GUI integration** — CLI-only for now. A Tools-menu "Scan for PII" dialog is a v1.8 polish.
+- **UTF-16 / non-UTF-8 encodings** are decoded via `errors='replace'`. Replacement chars don't match any pattern, but a UTF-16 file with PII could yield zero matches if every other byte is null. Edge case; not yet observed in practice.
+
 ## [1.7.5] — 2026-05-11 — T-A02 Visual Lineage Time-Machine
 
 **Headline:** The Lineage Graph tab gains a **time-slider that replays how lineage evolved**. Drag the slider, watch edges appear in chronological order. Click Play and the slider auto-sweeps at 5 steps/sec. Captures "Card VIII v1 → v2 → v3.1 → final" as an animated graph.

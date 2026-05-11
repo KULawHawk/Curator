@@ -3582,5 +3582,152 @@ def status_report(
         )
 
 
+# ------------------------------------------------------------------
+# v1.7.6 (T-B04): curator scan-pii - PII regex scanner
+# ------------------------------------------------------------------
+
+@app.command(name="scan-pii")
+def scan_pii_cmd(
+    ctx: typer.Context,
+    target: str = typer.Argument(
+        ..., help="File or directory to scan for PII patterns.",
+    ),
+    recursive: bool = typer.Option(
+        True, "--recursive/--no-recursive",
+        help="For directory targets, walk subdirectories (default: yes).",
+    ),
+    extension: list[str] = typer.Option(
+        None, "--ext",
+        help="File extension filter (with dot, lowercase). Repeatable. "
+             "Example: --ext .txt --ext .csv",
+    ),
+    head_bytes: int = typer.Option(
+        None, "--head-bytes",
+        help="Override the per-file byte cap (default: 2 MB).",
+    ),
+    show_matches: bool = typer.Option(
+        False, "--show-matches",
+        help="Print every individual match (redacted form). Default "
+             "shows per-file summary only.",
+    ),
+    high_only: bool = typer.Option(
+        False, "--high-only",
+        help="Only report files containing HIGH-severity matches (SSN / credit card).",
+    ),
+) -> None:
+    """Scan a file or directory for PII patterns (T-B04, v1.7.6).
+
+    Detects SSN, credit card, US phone, and email patterns via regex.
+    Reports per-file match counts and (optionally) individual matches
+    in REDACTED form (last 4 chars visible; the rest masked).
+
+    Examples:
+        curator scan-pii ./my_docs --ext .txt --ext .md
+        curator scan-pii ./client_files --high-only --show-matches
+        curator --json scan-pii ./report.csv
+    """
+    rt: CuratorRuntime = ctx.obj
+    console = _console(rt)
+
+    # Optionally rebuild the scanner with a custom head_bytes
+    if head_bytes is not None:
+        from curator.services.pii_scanner import PIIScanner as _PIIScanner
+        scanner = _PIIScanner(head_bytes=head_bytes)
+    else:
+        scanner = rt.pii_scanner
+
+    from pathlib import Path as _Path
+    target_path = _Path(target)
+
+    if target_path.is_file():
+        reports = [scanner.scan_file(target_path)]
+    elif target_path.is_dir():
+        reports = scanner.scan_directory(
+            target_path,
+            recursive=recursive,
+            extensions=list(extension) if extension else None,
+        )
+    else:
+        console.print(f"[red]Target not found: {target}[/]")
+        raise typer.Exit(code=1)
+
+    if high_only:
+        reports = [r for r in reports if r.has_high_severity]
+
+    if rt.json_output:
+        import json as _json
+        payload = []
+        for r in reports:
+            payload.append({
+                "source": r.source,
+                "bytes_scanned": r.bytes_scanned,
+                "truncated": r.truncated,
+                "error": r.error,
+                "match_count": r.match_count,
+                "has_high_severity": r.has_high_severity,
+                "by_pattern": r.by_pattern(),
+                "matches": (
+                    [
+                        {
+                            "pattern": m.pattern_name,
+                            "severity": m.severity.value,
+                            "redacted": m.redacted,
+                            "line": m.line,
+                            "offset": m.offset,
+                        }
+                        for m in r.matches
+                    ] if show_matches else None
+                ),
+            })
+        typer.echo(_json.dumps(payload, indent=2))
+        return
+
+    # Rich pretty-print
+    total_files = len(reports)
+    files_with_matches = sum(1 for r in reports if r.match_count > 0)
+    high_files = sum(1 for r in reports if r.has_high_severity)
+    total_matches = sum(r.match_count for r in reports)
+    errors = sum(1 for r in reports if r.error is not None)
+
+    console.print(f"\n[bold]PII scan results[/]")
+    console.print(f"  Target:           {target}")
+    console.print(f"  Files scanned:    {total_files:,}")
+    if errors:
+        console.print(f"  [red]Errors:[/]           {errors:,}")
+    console.print(f"  Files with PII:   {files_with_matches:,}")
+    if high_files:
+        console.print(f"  [red]HIGH severity:[/]    {high_files:,}")
+    console.print(f"  Total matches:    {total_matches:,}")
+
+    if total_matches == 0:
+        console.print("\n[green]No PII patterns detected.[/]")
+        return
+
+    console.print("\n[bold]Per-file findings:[/]")
+    for r in reports:
+        if r.error:
+            console.print(f"  [yellow]⚠  {r.source}[/]: {r.error}")
+            continue
+        if r.match_count == 0:
+            continue
+        color = "red" if r.has_high_severity else "yellow"
+        truncation = " [dim](truncated)[/]" if r.truncated else ""
+        console.print(
+            f"  [{color}]{r.source}[/]{truncation}"
+        )
+        counts = r.by_pattern()
+        pattern_strs = []
+        for name, n in sorted(counts.items()):
+            pattern_strs.append(f"{name}={n}")
+        console.print(f"    [{color}]{', '.join(pattern_strs)}[/]")
+        if show_matches:
+            for m in r.matches:
+                sev_color = "red" if m.severity.value == "high" else "yellow"
+                console.print(
+                    f"      L{m.line:>4}  [{sev_color}]{m.pattern_name:>12}[/]  "
+                    f"{m.redacted}"
+                )
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()
