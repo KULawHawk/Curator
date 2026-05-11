@@ -29,6 +29,38 @@ Organized by architectural tier from the inside out: **Models → Storage → Pl
 
 ---
 
+## Tier 1.5: Vendored libraries (`src/curator/_vendored/`) — 10 files
+
+Third-party libraries bundled directly into Curator (no external pip dependency). Vendored to keep the install footprint small and avoid version drift.
+
+```
+_vendored/__init__.py                       Subpackage marker
+_vendored/ppdeep/__init__.py                (8 KB)  Pure-Python ssdeep fuzzy hash implementation
+_vendored/send2trash/__init__.py            (2 KB)  Cross-platform send2trash entry point
+_vendored/send2trash/exceptions.py          send2trash error types
+_vendored/send2trash/util.py                Shared helpers
+_vendored/send2trash/mac/__init__.py        (3 KB)  macOS Finder-based trash impl
+_vendored/send2trash/plat_freedesktop.py    (5 KB)  Linux XDG-trash spec impl
+_vendored/send2trash/win/__init__.py        Windows trash entry point
+_vendored/send2trash/win/legacy.py          (7 KB)  Pre-Vista shell API path
+_vendored/send2trash/win/recycle_bin.py     (9 KB)  Modern IFileOperation API path
+```
+
+**Why this matters:** `send2trash` powers `curator trash` (sends files to OS Recycle Bin reversibly). `ppdeep` powers the `lineage_fuzzy_dup` plugin's NEAR_DUPLICATE detection. Both are bundled so users don't need extra pip installs.
+
+---
+
+## Tier 1.5: Configuration (`src/curator/config/`) — 2 files
+
+```
+config/__init__.py    (8 KB)  Config dataclass + Config.load() — the TOML+env+CLI-flag config resolver
+config/defaults.py    (2 KB)  Default values + path resolution (db_path, log levels, etc.)
+```
+
+**Why this matters:** Every entry point (CLI, GUI, MCP) starts by calling `Config.load()`. Reads `curator.toml` per the search order, applies env overrides (`CURATOR_CONFIG`, `CURATOR_LOG_LEVEL`), then CLI flags. Returns a frozen Config that everything else consumes.
+
+---
+
 ## Tier 2: Models (`src/curator/models/`) — 12 files
 
 The data shapes everything else passes around.
@@ -239,36 +271,56 @@ src/curatorplug/atrium_citation/exceptions.py
 
 ---
 
-## Tests — 81 Python test files across 5 categories
+## Tests — 84 Python test files across 5 categories
 
 ```
-tests/unit/             41 files — service / repo / model / plugin unit tests
-tests/integration/      27 files — full-stack tests (CLI invocations against tmp DBs)
-tests/gui/              9 files  — pytest-qt GUI tests (offscreen Qt)
-tests/property/         2 files  — Hypothesis property-based tests
-tests/perf/             2 files  — performance regression tests
+tests/conftest.py                    (8 KB)  Shared pytest fixtures (tmp_db, runtime_factory, etc.)
+tests/unit/                          41 files — service / repo / model / plugin unit tests
+  tests/unit/__init__.py
+  tests/unit/mcp/__init__.py
+  tests/unit/mcp/test_tools.py       (27 KB) MCP tools unit tests
+  tests/unit/test_*.py               37 more unit-test files
+tests/integration/                   27 files — full-stack CLI invocations against tmp DBs
+  tests/integration/__init__.py
+  tests/integration/mcp/__init__.py
+  tests/integration/mcp/test_stdio.py (8 KB) MCP stdio transport integration test
+  tests/integration/test_*.py        24 more integration-test files
+tests/gui/                           9 files — pytest-qt GUI tests (offscreen Qt)
+tests/property/                      2 files — Hypothesis property-based tests
+tests/perf/                          2 files — performance regression tests
 ```
 
 Plus external plugin tests:
-- `curatorplug-atrium-safety/tests/` — 5 test files
-- `curatorplug-atrium-citation/tests/` — 4 test files
+- `curatorplug-atrium-safety/tests/` — 6 test files (incl. conftest.py)
+- `curatorplug-atrium-citation/tests/` — 6 test files (incl. conftest.py + __init__.py)
 
-**Total: 90 test files, 1438 passing tests, 0 failing, 9 documented skips.**
+**Total: 96 test files, 1438 passing tests, 0 failing, 9 documented skips.**
 
 ---
 
-## Workflow scripts (`Curator/scripts/workflows/`) — 6 PowerShell files
+## Workflow scripts (`Curator/scripts/workflows/`) — 13 files
 
 ```
 _common.ps1                   Shared helpers: CuratorRoot, CuratorVenv, Test-CuratorAvailable, Invoke-Curator, Invoke-CuratorJson, Read-Confirmation, Show-Banner, Show-Section
 01_initial_scan.ps1           Cautious scan workflow — pre-flight count, confirm, scan, summary
+01_initial_scan.bat           Double-click wrapper for the above
 02_find_duplicates.ps1        Find duplicates — discover, sample, confirm, trash (uses --json group)
+02_find_duplicates.bat        Double-click wrapper
 03_cleanup_junk.ps1           Junk/empty-dirs/broken-symlinks cleanup (uses --json cleanup)
+03_cleanup_junk.bat           Double-click wrapper
 04_audit_summary.ps1          24-hour audit report grouped by action/actor/hour
+04_audit_summary.bat          Double-click wrapper
 05_health_check.ps1           8-section diagnostic dashboard
+05_health_check.bat           Double-click wrapper
+README.md                     Workflow documentation
 ```
 
-Plus matching `.bat` wrappers and `README.md`.
+## Other scripts (`Curator/scripts/`)
+
+```
+scripts/setup_gdrive_source.py    (5 KB) Phase Beta helper — pre-v1.6.0 OAuth setup workflow.
+                                  Largely superseded by `curator sources config` (v1.6.0+) but kept for legacy use.
+```
 
 ---
 
@@ -305,11 +357,22 @@ C:\Users\jmlee\Desktop\AL\.curator\curator.db        Canonical SQLite database (
 ## Build / project metadata
 
 ```
-Curator/pyproject.toml           Project definition + dependencies + entry points + extras ([gui], [mcp], [organize], [beta], [cloud])
-Curator/README.md                Top-level repo readme
-Curator/CHANGELOG.md             Every version's changes (v0.1 → v1.6.5)
-Curator/.gitignore               git ignore rules
+Curator/pyproject.toml              (5 KB)    Project definition + dependencies + entry points + extras ([gui], [mcp], [organize], [beta], [cloud])
+Curator/README.md                   (18 KB)   Top-level repo readme
+Curator/CHANGELOG.md                (131 KB)  Every version's changes (v0.1 → v1.6.5)
+Curator/.gitignore                  git ignore rules
 ```
+
+## Top-level design/history docs (root of Curator repo, NOT in docs/)
+
+```
+Curator/BUILD_TRACKER.md            (218 KB!)  Master build log — every gate's tasks, status, lessons. THE biggest doc in Curator.
+Curator/DESIGN.md                   (113 KB)   Original master architecture doc — section numbers (§5.2, §6.3, etc.) referenced throughout the codebase
+Curator/DESIGN_PHASE_DELTA.md       (45 KB)    Phase Delta architectural changes (most recent gate sequence)
+Curator/ECOSYSTEM_DESIGN.md         (37 KB)    Where Curator fits in the Ad Astra ecosystem (Atrium, Synergy, APEX, etc.)
+```
+
+**Why these matter:** When code references `DESIGN.md §6.3` (e.g., `local_source.py`'s module docstring), it means section 6.3 of `Curator/DESIGN.md` (the top-level one) — NOT a doc inside `docs/`. The 218 KB `BUILD_TRACKER.md` is your historical record of every architectural decision.
 
 ---
 
