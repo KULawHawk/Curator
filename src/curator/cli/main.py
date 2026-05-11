@@ -54,6 +54,7 @@ from rich.table import Table
 
 from curator import __version__
 from curator.cli.runtime import CuratorRuntime, build_runtime
+from curator.cli.util import CHECK, CROSS, ARROW, LARROW, ELLIPSIS, BLOCK, WARN, safe_glyphs
 from curator.config import Config
 from curator.models import LineageKind, SourceConfig
 from curator.services import (
@@ -289,10 +290,10 @@ def inspect(
     if edges:
         console.print(f"  [bold]lineage edges[/] ({len(edges)})")
         for e in edges:
-            direction = "→" if e.from_curator_id == file.curator_id else "←"
+            direction = ARROW if e.from_curator_id == file.curator_id else LARROW
             other = e.to_curator_id if e.from_curator_id == file.curator_id else e.from_curator_id
             console.print(
-                f"    {direction} {e.edge_kind.value} ({e.confidence:.2f}, by {e.detected_by}) → {other}"
+                f"    {direction} {e.edge_kind.value} ({e.confidence:.2f}, by {e.detected_by}) {ARROW} {other}"
             )
     if bundles:
         console.print(f"  [bold]bundles[/] ({len(bundles)})")
@@ -325,7 +326,7 @@ def scan(
 
     console = _console(rt)
     if not rt.json_output:
-        console.print(f"Scanning [bold]{root}[/] (source={source_id})…")
+        console.print(f"Scanning [bold]{root}[/] (source={source_id}){ELLIPSIS}")
 
     report = rt.scan.scan(
         source_id=source_id,
@@ -441,7 +442,7 @@ def group(
         })
     else:
         for h, primary, dups in resolved_groups:
-            console.print(f"[bold]hash[/] {h[:16]}… [dim]({len(dups) + 1} files)[/]")
+            console.print(f"[bold]hash[/] {h[:16]}{ELLIPSIS} [dim]({len(dups) + 1} files)[/]")
             console.print(f"  [green]keep:[/]    {primary.source_path}")
             for f in dups:
                 marker = "[red]trash:[/]" if apply else "[yellow]would trash:[/]"
@@ -461,7 +462,7 @@ def group(
                         actor="cli.group",
                     )
                 except (TrashError, Send2TrashUnavailableError) as e:
-                    _err_console(rt).print(f"[red]✗[/] {f.source_path}: {e}")
+                    _err_console(rt).print(f"[red]{CROSS}[/] {f.source_path}: {e}")
 
 
 def _pick_primary(files, strategy: str):
@@ -534,7 +535,7 @@ def lineage(
         table.add_row(
             e.edge_kind.value,
             f"{e.confidence:.2f}",
-            "→" if is_from else "←",
+            ARROW if is_from else LARROW,
             other_path,
             e.detected_by,
         )
@@ -671,7 +672,7 @@ def bundles_create(
         })
     else:
         _console(rt).print(
-            f"[green]✓[/] Created bundle [bold]{name}[/] "
+            f"[green]{CHECK}[/] Created bundle [bold]{name}[/] "
             f"({bundle.bundle_id}) with {len(members)} member(s)."
         )
 
@@ -705,7 +706,7 @@ def bundles_dissolve(
         entity_id=str(bundle.bundle_id),
         details={"name": bundle.name, "members": n_members},
     )
-    console.print(f"[green]✓[/] Dissolved bundle {bundle.name}.")
+    console.print(f"[green]{CHECK}[/] Dissolved bundle {bundle.name}.")
 
 
 def _resolve_bundle(rt: CuratorRuntime, bundle_id: str):
@@ -1077,7 +1078,7 @@ def sources_add(
         _emit_json(rt, {"source_id": source_id, "added": True})
     else:
         _console(rt).print(
-            f"[green]✓[/] Added source [bold]{source_id}[/] (type={source_type}"
+            f"[green]{CHECK}[/] Added source [bold]{source_id}[/] (type={source_type}"
             f"{', disabled' if disabled else ''})."
         )
 
@@ -1102,7 +1103,7 @@ def sources_enable(
         entity_type="source",
         entity_id=source_id,
     )
-    _console(rt).print(f"[green]✓[/] Enabled {source_id}.")
+    _console(rt).print(f"[green]{CHECK}[/] Enabled {source_id}.")
 
 
 @sources_app.command("disable")
@@ -1125,7 +1126,7 @@ def sources_disable(
         entity_type="source",
         entity_id=source_id,
     )
-    _console(rt).print(f"[yellow]✓[/] Disabled {source_id}.")
+    _console(rt).print(f"[yellow]{CHECK}[/] Disabled {source_id}.")
 
 
 @sources_app.command("remove")
@@ -1170,7 +1171,7 @@ def sources_remove(
         entity_type="source",
         entity_id=source_id,
     )
-    console.print(f"[green]✓[/] Removed source {source_id}.")
+    console.print(f"[green]{CHECK}[/] Removed source {source_id}.")
 
 
 # ===========================================================================
@@ -1215,7 +1216,7 @@ def trash(
             "reason": record.reason,
         })
     else:
-        console.print(f"[green]✓[/] Trashed {record.original_path}")
+        console.print(f"[green]{CHECK}[/] Trashed {record.original_path}")
 
 
 @app.command()
@@ -1265,7 +1266,7 @@ def restore(
     if rt.json_output:
         _emit_json(rt, {"restored": str(f.curator_id), "path": f.source_path})
     else:
-        console.print(f"[green]✓[/] Restored to {f.source_path}")
+        console.print(f"[green]{CHECK}[/] Restored to {f.source_path}")
 
 
 # ===========================================================================
@@ -1321,7 +1322,7 @@ def audit(
     for e in entries:
         ent = ""
         if e.entity_type and e.entity_id:
-            ent = f"{e.entity_type}:{e.entity_id[:8]}…"
+            ent = f"{e.entity_type}:{e.entity_id[:8]}{ELLIPSIS}"
         table.add_row(
             str(e.audit_id),
             e.occurred_at.strftime("%Y-%m-%d %H:%M:%S") if e.occurred_at else "?",
@@ -1433,7 +1434,7 @@ def watch(
                             suffix.append(f"[red]errors={report.errors}[/]")
                         if suffix:
                             _console(rt).print(
-                                f"  [dim]→ scan_paths: {' '.join(suffix)}[/]"
+                                f"  [dim]{ARROW} scan_paths: {' '.join(suffix)}[/]"
                             )
                 except Exception as e:
                     err.print(f"[red]scan_paths failed: {e}[/]")
@@ -1522,7 +1523,7 @@ def doctor(ctx: typer.Context):
         for i in issues:
             console.print(f"  - {i}")
         raise typer.Exit(code=1)
-    console.print("\n[green]✓[/] No issues detected.")
+    console.print(f"\n[green]{CHECK}[/] No issues detected.")
 
 
 # ---------------------------------------------------------------------------
@@ -1583,7 +1584,7 @@ def safety_check(
         for h in report.holders:
             console.print(f"  - [magenta]{h}[/]")
     if report.is_safe:
-        console.print("[green]✓[/] safe to organize")
+        console.print(f"[green]{CHECK}[/] safe to organize")
 
 
 @safety_app.command("paths")
@@ -2012,7 +2013,7 @@ def _render_stage_report(
                 if shown >= 5:
                     remaining = stage_report.skipped_count - shown
                     if remaining > 0:
-                        console.print(f"  [dim]… and {remaining} more[/]")
+                        console.print(f"  [dim]{ELLIPSIS} and {remaining} more[/]")
                     break
 
     if stage_report.moved_count > 0:
@@ -2159,7 +2160,7 @@ def _render_cleanup_report(
         console.print(f"  [yellow]·[/] {f.path}{extra}")
 
     if report.count > 20:
-        console.print(f"  [dim]… and {report.count - 20} more[/]")
+        console.print(f"  [dim]{ELLIPSIS} and {report.count - 20} more[/]")
 
     if report.errors:
         console.print(f"\n[red]Errors during walk: {len(report.errors)}[/]")
@@ -2423,7 +2424,7 @@ def _render_duplicate_report(
         shown += 1
 
     if n_groups > shown:
-        console.print(f"  [dim]… and {n_groups - shown} more duplicate group(s)[/]")
+        console.print(f"  [dim]{ELLIPSIS} and {n_groups - shown} more duplicate group(s)[/]")
 
     if report.errors:
         console.print(f"\n[red]Errors during query: {len(report.errors)}[/]")
@@ -2732,7 +2733,7 @@ def gdrive_auth_cmd(
         }, indent=2))
         return
     console.print(
-        f"\n[green]✓ Auth complete for [cyan]{alias}[/].[/]"
+        f"\n[green]{CHECK} Auth complete for [cyan]{alias}[/].[/]"
     )
     console.print(f"  Credentials saved to: {paths.credentials}")
     console.print(
@@ -3187,7 +3188,7 @@ def _migrate_abort(rt, raw_id: str, *, console, err) -> None:
         }, indent=2))
         return
     console.print(
-        f"[yellow]✓[/] Abort signal sent to job [cyan]{job_id}[/]. "
+        f"[yellow]{CHECK}[/] Abort signal sent to job [cyan]{job_id}[/]. "
         "Workers will finish their current file then exit."
     )
 
@@ -3819,7 +3820,7 @@ def scan_pii_cmd(
     console.print("\n[bold]Per-file findings:[/]")
     for r in reports:
         if r.error:
-            console.print(f"  [yellow]⚠  {r.source}[/]: {r.error}")
+            console.print(f"  [yellow]{WARN}  {r.source}[/]: {r.error}")
             continue
         if r.match_count == 0:
             continue

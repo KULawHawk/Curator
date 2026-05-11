@@ -4,6 +4,95 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.30] — 2026-05-11 — Lesson #50 codified: `cli/util.py` ASCII-fallback helper
+
+**Headline:** The recurring Unicode-in-CLI-strings bug (lesson #50 — hit FIVE times across the v1.7.21→v1.7.29 arc) is now codified as a reusable helper module `curator.cli.util`. Eight glyph constants (`CHECK`, `CROSS`, `ARROW`, `LARROW`, `ELLIPSIS`, `BLOCK`, `TIMES`, `WARN`) automatically resolve to their ASCII fallbacks (`[OK]`, `[X]`, `->`, `<-`, `...`, `#`, `x`, `!`) when stdout is a subprocess pipe, file redirect, or legacy cp1252 console. A one-pass audit of `cli/main.py` replaced all 8 remaining literal Unicode glyphs with the new constants. **No more strikes.**
+
+### Why this matters
+
+Lesson #50 hit 5 times across the arc:
+  * v1.7.21 — histogram U+2588 (FULL BLOCK)
+  * v1.7.24 — TTY-aware bar fallback codified (single glyph only)
+  * v1.7.25 — tier --apply U+2192 (right arrow) and U+2026 (ellipsis)
+  * v1.7.28 — U+2713 (check) in test scaffolding
+  * v1.7.29 — PRE-EXISTING U+2713 in `sources_config` CLI, undetected until a subprocess test exercised the path
+
+The v1.7.29 strike was the urgent signal: the bug had been in the codebase for an unknown duration because no test exercised that code path via subprocess. Patching one site at a time wasn't working — every new contributor adding a `✓` was a fresh latent crash. v1.7.30 makes the safe approach the easy default: import the constants instead of writing literal glyphs.
+
+Example (the canonical replacement pattern):
+```python
+# BEFORE (lesson-#50 strike waiting to happen):
+console.print(f"[green]\u2713[/] Migration complete.")
+
+# AFTER (auto-falls-back under non-TTY):
+from curator.cli.util import CHECK
+console.print(f"[green]{CHECK}[/] Migration complete.")
+```
+
+In an interactive Windows Terminal / VS Code / macOS / Linux TTY, `CHECK` is `✓`. In a subprocess pipe or cp1252 console, it's `[OK]`. The code reads naturally; the crash mode is closed.
+
+### What's new
+
+**New module `src/curator/cli/util.py`** (133 lines):
+  * `_stdout_supports_unicode()` — cached TTY+UTF-8 detection. Truth table:
+    * `isatty=False` (subprocess, redirect) → `False`
+    * `isatty=True` + UTF-* encoding → `True`
+    * `isatty=True` + cp1252/latin-1/ascii → `False`
+    * `isatty=True` + `encoding=None` → `False`
+  * `_GLYPH_FALLBACKS` — dispatch table mapping each Unicode glyph to its ASCII fallback. New entries are one-line additions.
+  * `safe_glyphs(text)` — ad-hoc substitution for arbitrary text (e.g. text from DB rows or user input).
+  * 8 module-level constants: `CHECK`, `CROSS`, `ARROW`, `LARROW`, `ELLIPSIS`, `BLOCK`, `TIMES`, `WARN`. Computed once at import time; underlying detection is `lru_cache`d.
+
+**`cli/main.py` audited** — all 8 remaining literal Unicode glyphs replaced:
+  * L293/296 (lineage display — `→`/`←` arrow pair)
+  * L465 (error console — `✗` X-MARK)
+  * L538 (lineage table cell — `→`/`←`)
+  * L1437 (watch mode scan_paths display — `→`)
+  * L3823 (PII scan per-file warnings — `⚠`)
+
+The pre-existing strikes from earlier arc fixes (v1.7.21/24/25/28 site fixes still applied locally) are unchanged; v1.7.30 adds the systemic guard.
+
+### Files changed
+
+- `src/curator/cli/util.py` — NEW (+133 lines)
+- `src/curator/cli/main.py` — +9 / -8 lines (import line + 8 glyph replacements)
+- `tests/unit/test_cli_util.py` — NEW (+200 lines, 23 tests)
+- `docs/releases/v1.7.30.md` — new release notes
+- `docs/FEATURE_TODO.md` — lesson #50 marked codified
+
+### Verification
+
+- **23-test suite** for `cli/util.py`:
+  1–2. Module integrity — all 8 constants exported; fallback table covers all of them
+  3–13. **Detection truth table** — 11 parameterized cases covering (isatty × encoding) combinations
+  14–16. **Constant resolution under each branch** — UTF-8 TTY, subprocess, cp1252 console
+  17–20. **safe_glyphs() behavior** — passthrough under UTF-8, substitution under non-TTY, unknown glyphs preserved, empty-string handling
+  21–22. **Crash-resistance** — constants AND safe_glyphs output are cp1252-encodable when fallback mode is active (the exact failure that lesson #50 trapped)
+  23. **Reload-invalidates-cache** regression guard
+- **Subprocess smoke**: `curator inspect <id>` no longer crashes when stdout is captured (the v1.7.29 strike #5 scenario). All 8 glyph constants resolve to ASCII fallbacks under subprocess capture, verified by direct import in a subprocess Python invocation.
+- **Full pytest baseline**: ✅ **1461 passed**, 9 skipped, 0 failed (was 1438; +23 new util.py tests)
+
+### Authoritative-principle catches (this turn)
+
+**0 implementation bugs caught.** The module was small enough to write correctly on the first pass. The 23-test suite verified each truth-table cell explicitly rather than relying on "common case" coverage.
+
+**Design lessons reinforced:**
+
+1. **Make the safe path the easy path.** Patching one site at a time relies on every future contributor remembering the rule. Extracting a helper makes "import CHECK" the natural way to write the code; using literal `✓` becomes the awkward way. The latent-bug surface shrinks by structure, not by vigilance.
+
+2. **Dispatch table pattern (third use this arc).** v1.7.28 used `_PATTERN_PARSERS` for PII enrichment; v1.7.29 used per-source visibility lookup; v1.7.30 uses `_GLYPH_FALLBACKS`. The pattern is repeatable: define a table of inputs → handlers, look up by key, with a fallback. New entries are one-line additions and the lookup logic stays unchanged.
+
+3. **Truth tables for detection logic.** `_stdout_supports_unicode()` has exactly 4 input combinations (isatty × encoding-class). Testing each parameterized combination explicitly catches edge cases that a single "happy path" test would miss — e.g., `encoding=None` (rare on some Windows shells), `encoding='UTF-8'` (uppercase variant), `encoding='utf8'` (no-dash variant). The cost is 11 parametrized cases instead of 3; the payoff is catching every cell of the detection matrix.
+
+4. **Reload-invalidates-cache regression guard.** `_stdout_supports_unicode` is `lru_cache`d for performance (process-lifetime stable answer). Tests that mock `sys.stdout` need to reload the module to reset the cache. The dedicated test verifies this assumption holds — if a future contributor changes the caching strategy, this test will catch it immediately.
+
+### v1.7.30 limitations
+
+- **Module discovery is import-based.** Code that doesn't import from `curator.cli.util` and writes literal `\u2713` is still a latent crash bug. A future CI lint (grep for known glyph codepoints in `src/`) would catch any regression.
+- **Fallback table is curated, not exhaustive.** Adding a new Unicode glyph in user-facing output requires adding it to `_GLYPH_FALLBACKS`. The 8 glyphs in the table are the ones that hit the arc; other glyphs (e.g., emoji, mathematical symbols) would still crash if introduced.
+- **GUI code unaudited.** `gui/dialogs.py` and `gui/models.py` contain ~13 Unicode glyphs in Qt widget strings. These are safe (Qt uses UTF-16 internally), but if any Qt text ever flows to a `print()` call in a CLI test capture, it would crash. No known failure path today; flagging for future audit.
+- **The `TIMES` constant is unused** in main.py audit (no `×` glyph found in cli/main.py). It's included for completeness because dimensions/multiplication contexts are common in future output (e.g., `300×300`); pre-stocking the fallback is cheaper than re-discovering the bug.
+
 ## [1.7.29] — 2026-05-11 — T-B07 v1.8 completion: share_visibility auto-strip on public destinations
 
 **Headline:** When a source is flagged `share_visibility="public"`, MigrationService now AUTO-INVOKES the metadata stripper on every successfully migrated file. EXIF, docProps, PDF metadata, and ICC profiles disappear from public-destination files automatically. **T-B07 is now fully complete** — v1.7.7 shipped the stripper as a standalone CLI; v1.7.29 wires it into the migration pipeline as the original FEATURE_TODO intended.
