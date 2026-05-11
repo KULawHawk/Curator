@@ -3614,6 +3614,18 @@ def scan_pii_cmd(
         False, "--high-only",
         help="Only report files containing HIGH-severity matches (SSN / credit card).",
     ),
+    csv_output: bool = typer.Option(
+        False, "--csv",
+        help="Emit CSV instead of the pretty table or JSON. With "
+             "--show-matches the CSV is one row per match (source, "
+             "line, pattern, severity, redacted); without it, one "
+             "row per file (source, match_count, has_high, by_pattern). "
+             "Mutually exclusive with --json (JSON wins).",
+    ),
+    no_header: bool = typer.Option(
+        False, "--no-header",
+        help="Suppress the CSV header row. Only meaningful with --csv.",
+    ),
 ) -> None:
     """Scan a file or directory for PII patterns (T-B04, v1.7.6).
 
@@ -3680,6 +3692,45 @@ def scan_pii_cmd(
                 ),
             })
         typer.echo(_json.dumps(payload, indent=2))
+        return
+
+    # CSV output (v1.7.22) - one row per match if --show-matches, else
+    # one row per file. Mirrors v1.7.19's audit-summary --csv pattern.
+    if csv_output:
+        import csv as _csv
+        import sys as _sys
+        writer = _csv.writer(_sys.stdout, lineterminator="\n")
+        if show_matches:
+            # Per-match rows: lets users grep / sort / pivot by pattern
+            if not no_header:
+                writer.writerow(["source", "line", "offset", "pattern", "severity", "redacted"])
+            for r in reports:
+                for m in r.matches:
+                    writer.writerow([
+                        r.source,
+                        m.line,
+                        m.offset,
+                        m.pattern_name,
+                        m.severity.value,
+                        m.redacted,
+                    ])
+        else:
+            # Per-file rows: high-level summary. by_pattern as a
+            # semicolon-joined "name=count;name=count" string keeps it
+            # in a single CSV cell that Excel can still pivot on.
+            if not no_header:
+                writer.writerow(["source", "match_count", "has_high", "by_pattern", "truncated", "error"])
+            for r in reports:
+                by_pat = r.by_pattern()
+                by_pat_str = ";".join(f"{k}={v}" for k, v in sorted(by_pat.items()))
+                writer.writerow([
+                    r.source,
+                    r.match_count,
+                    "yes" if r.has_high_severity else "no",
+                    by_pat_str,
+                    "yes" if r.truncated else "no",
+                    r.error or "",
+                ])
         return
 
     # Rich pretty-print

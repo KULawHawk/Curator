@@ -4,6 +4,81 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.22] — 2026-05-11 — scan-pii --csv + --no-header (T-B04 CSV parity)
+
+**Headline:** `curator scan-pii` gains `--csv` and `--no-header` flags, mirroring the v1.7.19/v1.7.20 pattern from `audit-summary`. PII scan results can now be dumped to CSV for spreadsheet review or pipeline processing — with **two distinct row shapes** depending on whether `--show-matches` is set.
+
+### Why this matters
+
+Forensic PII review often happens in spreadsheets: "give me a CSV of every credit card / SSN / API key found across the index, with source file, line number, and pattern type." v1.7.22 enables exactly that with `curator scan-pii ./index --csv --show-matches`. The output drops into Excel / Google Sheets / Pandas and pivots cleanly by pattern, severity, or source.
+
+For higher-level summaries ("which files have HIGH-severity PII?") the same command without `--show-matches` produces one row per file with aggregate stats. Same flag, two useful shapes.
+
+### What's new
+
+- **`--csv` flag** on `scan-pii`:
+  - **With `--show-matches`** (per-match mode): one row per individual match. Columns: `source, line, offset, pattern, severity, redacted`. Lets users grep / sort / pivot by pattern type or severity.
+  - **Without `--show-matches`** (per-file mode, default): one row per file. Columns: `source, match_count, has_high, by_pattern, truncated, error`. The `by_pattern` field is a semicolon-joined `name=count;name=count` string that fits in a single CSV cell but is easy to re-parse.
+  - Mutually exclusive with `--json` (JSON wins if both set).
+- **`--no-header` flag** on `scan-pii`:
+  - Suppresses the CSV header row for piping into other tools or appending to existing CSV files (parity with v1.7.20's audit-summary flag).
+  - Only meaningful with `--csv` (silently ignored otherwise).
+- **Per-file format design**: `has_high` and `truncated` use `yes`/`no` strings instead of `true`/`false`. More Excel-friendly (it doesn't auto-parse to BOOLEAN); easy to filter visually.
+
+### Example outputs
+
+**Per-file summary mode:**
+```
+$ curator scan-pii ./my_docs --csv
+source,match_count,has_high,by_pattern,truncated,error
+./my_docs/notes.txt,3,yes,github_pat=1;gitlab_pat=1;ssn=1,no,
+./my_docs/config.env,5,yes,aws_access_key_id=1;jwt=2;openai_api_key=2,no,
+./my_docs/clean.md,0,no,,no,
+```
+
+**Per-match detail mode:**
+```
+$ curator scan-pii ./my_docs --csv --show-matches
+source,line,offset,pattern,severity,redacted
+./my_docs/notes.txt,1,8,github_pat,high,************************************aaaa
+./my_docs/notes.txt,2,57,gitlab_pat,high,**********************xxxx
+./my_docs/notes.txt,3,89,ssn,high,*******7777
+```
+
+### Files changed
+
+- `src/curator/cli/main.py` — +51 lines (2 flag declarations + dual-mode CSV emit branch)
+- `docs/releases/v1.7.22.md` — new release notes
+
+### Verification
+
+- **9-test subprocess suite** (`test_scanpii_csv.py`) using a real test file with 3 known PII patterns (github_pat, gitlab_pat, ssn):
+  1. `--csv` and `--no-header` in `--help`
+  2. **Per-file mode**: 6-column header, 1 row, match_count=3, has_high=yes
+  3. **Per-match mode**: 6-column header, 3 rows, all 3 patterns found, severity=high
+  4. `--csv --no-header` first line is data, not header
+  5. `--csv --show-matches --no-header` produces exactly 3 data rows
+  6. **`--json` precedence**: when both `--json` and `--csv` set, output is JSON
+  7. `--high-only` filter works with `--csv` (file kept, has_high=yes)
+  8. **CSV round-trip integrity** (per-file mode): parse → serialize → byte-equal to original
+  9. **`by_pattern` encoding**: parses correctly via `dict(p.split("=") for p in s.split(";"))`
+- **Live CLI smoke**: all 3 modes (per-file, per-match, no-header) produce correct CSV against a real temp file with known patterns
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 23-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**0 bugs caught.** Clean first-try ship across all 9 tests. Lesson #49 (unique anchors when editing large files) applied throughout — the CSV emit branch used `total_files = len(reports)` as a unique sentinel (this line appears only in `scan-pii`'s Rich branch). The previous lesson-#49 mistake (which landed v1.7.19's CSV in the wrong command) was not repeated.
+
+**Design lesson on `by_pattern` encoding**: my first instinct was to use JSON-in-CSV (`{"github_pat": 1, "ssn": 1}` as the cell value). Decided against it because (a) the curly braces / quotes would require quoted CSV escaping that breaks naive pipeline tools, and (b) Excel doesn't auto-parse JSON cells in any useful way. The semicolon-joined `name=count;name=count` format keeps everything in a single cell without CSV escaping AND can be split with one line of Python or Excel `TEXTSPLIT(A2, ";")`.
+
+### v1.7.22 limitations
+
+- **No `--local` for scan-pii** — scan-pii output has no timestamps (just file paths + match metadata), so timezone isn't relevant. If a future enhancement adds `scanned_at` per-file timestamps, `--local` could be added then.
+- **`by_pattern` encoding is non-standard** — the `name=count;name=count` format is custom. Users who want strict JSON should use `--json` instead.
+- **No `--csv` for `tier`, `export-clean`, `forecast` yet** — these commands have `--json` but no CSV. Could batch in v1.8.
+- **No streaming output for large scans** — the full report list is built in memory before emit. For 10k+ files this could matter; not relevant at current scale.
+- **Redacted-string CSV escaping** — `*` is safe in CSV without quoting, but if a future pattern includes commas or quotes in its redacted form, the stdlib `csv.writer` will handle quoting automatically.
+
 ## [1.7.21] — 2026-05-11 — audit-summary ASCII histogram column
 
 **Headline:** `audit-summary` Rich pretty-print now includes an **Activity** column with an ASCII histogram (`#` bars) showing each group's count proportional to the largest displayed group. Visual sparkline at a glance — you can SEE which actor/action combos dominate without reading the count numbers.
