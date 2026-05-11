@@ -4,6 +4,55 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.13] — 2026-05-11 — T-A02 polish: lineage time-slider axis labels
+
+**Headline:** The Lineage Graph time-slider now shows 5 date labels (YYYY-MM-DD) at 0% / 25% / 50% / 75% / 100% of the time range, directly under the slider. Users can now visually anchor slider position to actual dates instead of just "somewhere between earliest and latest."
+
+### Why this matters
+
+v1.7.5 shipped the T-A02 Visual Lineage Time-Machine with a slider that scrubs through edge-detection history. The slider had tick marks but no date labels — you could see WHERE in the range you were but had no way to know WHAT date that corresponded to without dragging the handle and reading the current-time label. The v1.7.5 release notes explicitly called out "history axis labels on time-slider" as a deferred follow-up. v1.7.13 ships exactly that.
+
+Now the user has constant reference points: leftmost label = earliest edge in DB, rightmost = newest, middles = quarter-points. Useful for forensic-grade lineage investigation where "changes during the week of March 15" is a natural query.
+
+### What's new
+
+- **5-label axis row** under the slider in `main_window.py`:
+  - Labels at 0%, 25%, 50%, 75%, 100% positions
+  - Each label shows `YYYY-MM-DD` for the date at that percentage of the time range
+  - Layout uses `QHBoxLayout` with stretch=1 per label and 48/110 px margins to align with the slider track
+  - Color `#607D8B` (Material slate gray) at 8pt to be visually subordinate to the slider
+- **Edge-aware alignment**: leftmost label is left-aligned, rightmost right-aligned, middles centered. Looks natural with the slider's tick endpoints.
+- **`_lineage_axis_label_text(pct)`** helper method — returns short date format, or empty string when no edges exist (slider is disabled in that case anyway).
+- **No new audit events.** This is pure UI polish; the underlying TimeSlider behavior is unchanged.
+
+### Files changed
+
+- `src/curator/gui/main_window.py` — +37 lines (axis row construction + helper method)
+- `docs/releases/v1.7.13.md` — new release notes
+
+### Verification
+
+- **5-test headless suite** (`test_axis_labels.py`):
+  1. 5 axis labels created as QLabel instances
+  2. Each label contains valid YYYY-MM-DD text (or empty if DB has no edges)
+  3. `_lineage_axis_label_text(pct)` helper returns correct format at all 5 percentages
+  4. Stylesheet applied: `color: #607D8B; font-size: 8pt`
+  5. Date strings are sorted monotonically (low→high left→right)
+- **Live offscreen render**: dates populate correctly (canonical DB has edges only from 2026-05-09 so all 5 labels show that date, which is the correct boundary-case behavior)
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 14-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**0 bugs caught.** The pattern of "5 evenly-spaced labels with edge-aware alignment" is a clean idiom; tests passed first run. The boundary case (all edges on the same day → all 5 labels show the same date) was anticipated and the test was written to verify sorted-order (which handles equality) instead of strict-increase.
+
+### v1.7.13 limitations
+
+- **No tick marks aligned to labels** — the slider's tick interval is still 10 (10 visible ticks), independent from the 4 inter-label gaps. A polish pass could synchronize them.
+- **Labels don't update when slider moves** — axis labels are static (boundary references). The current-time label above already shows the live moving date.
+- **No event-density histogram** — a future polish could draw a mini histogram above the slider showing edge-detection density per time bucket.
+- **No timezone awareness** — dates are formatted in local time without TZ suffix. Fine for single-user lineage; would need clarification for collaborative review.
+- **No locale-aware date format** — hardcoded YYYY-MM-DD. Reasonable default (sortable, unambiguous) but a v1.8 i18n pass could honor user locale.
+
 ## [1.7.12] — 2026-05-11 — T-B04 v4: Twilio + Mailgun + Discord patterns
 
 **Headline:** `curator scan-pii` gains 3 more HIGH-severity API key patterns: **Twilio Account SID**, **Mailgun API key** (all 3 prefix variants), **Discord bot token**. Total patterns: **14** (was 11). The exact set v1.7.11 release notes flagged as deferred.

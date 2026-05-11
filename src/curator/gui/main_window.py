@@ -1367,6 +1367,28 @@ class CuratorMainWindow(QMainWindow):
         time_row.addWidget(self._lineage_clear_btn)
         layout.addLayout(time_row)
 
+        # v1.7.13 (T-A02 follow-up): axis labels under the slider.
+        # Shows the actual date at 0%, 25%, 50%, 75%, 100% of the time range
+        # so users can visually anchor the slider position to real dates,
+        # not just "somewhere between earliest and latest."
+        axis_row = QHBoxLayout()
+        axis_row.setContentsMargins(48, 0, 110, 0)  # align with slider track
+        self._lineage_axis_labels: list[QLabel] = []
+        from PySide6.QtCore import Qt as _Qt
+        for i in range(5):
+            lbl = QLabel(self._lineage_axis_label_text(i * 25))
+            lbl.setStyleSheet("color: #607D8B; font-size: 8pt;")
+            # Edge labels align to edges; middles center
+            if i == 0:
+                align = _Qt.AlignmentFlag.AlignLeft
+            elif i == 4:
+                align = _Qt.AlignmentFlag.AlignRight
+            else:
+                align = _Qt.AlignmentFlag.AlignCenter
+            axis_row.addWidget(lbl, 1, alignment=align)
+            self._lineage_axis_labels.append(lbl)
+        layout.addLayout(axis_row)
+
         # The QTimer that drives the play animation. None when not playing.
         self._lineage_play_timer: QTimer | None = None
 
@@ -1400,6 +1422,21 @@ class CuratorMainWindow(QMainWindow):
         if dt is None:
             return "(no edges)"
         return f"as of: {dt:%Y-%m-%d %H:%M}"
+
+    def _lineage_axis_label_text(self, pct: int) -> str:
+        """Short date text for the axis labels under the slider.
+
+        v1.7.13 (T-A02 follow-up): returns just the date (YYYY-MM-DD)
+        at the given percentage of the time range. Used to render the
+        5 mini-labels under the slider so users can visually anchor
+        the slider position to actual dates.
+        """
+        if self._lineage_time_min is None or self._lineage_time_max is None:
+            return ""
+        dt = self._slider_to_datetime(pct)
+        if dt is None:
+            return ""
+        return f"{dt:%Y-%m-%d}"
 
     def _slot_lineage_slider_changed(self, value: int) -> None:
         """v1.7.5 (T-A02): re-render the graph when the time slider moves."""
