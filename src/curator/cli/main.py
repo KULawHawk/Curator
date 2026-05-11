@@ -4123,6 +4123,13 @@ def audit_summary_cmd(
              "and CSV first/last columns. Relative-time deltas in the "
              "Rich table (e.g. '2m ago') are unaffected.",
     ),
+    no_bars: bool = typer.Option(
+        False, "--no-bars",
+        help="Suppress the ASCII histogram column in the Rich table "
+             "output. The histogram shows each group's count as a "
+             "unicode bar normalized to the largest group. Affects "
+             "pretty-print only; JSON and CSV outputs never include it.",
+    ),
 ) -> None:
     """Aggregate recent audit events by actor and action (T-B04-adjacent, v1.7.18).
 
@@ -4292,17 +4299,40 @@ def audit_summary_cmd(
     table.add_column("Actor", style="cyan")
     table.add_column("Action", style="magenta")
     table.add_column("Count", justify="right", style="bold")
+    # v1.7.21: ASCII histogram column (opt-out via --no-bars). Width
+    # normalized to the largest count in the displayed slice so the
+    # most-active group always has the longest bar.
+    if not no_bars:
+        # Fixed width and no_wrap so a 20-char bar always fits on one
+        # line even when piped to a narrow non-TTY destination. Rich
+        # would otherwise auto-size the column based on content and
+        # wrap bars across multiple lines.
+        table.add_column("Activity", style="green", width=22, no_wrap=True)
     table.add_column("First seen")
     table.add_column("Last seen")
 
-    for (actor_v, action_v), g in sorted_groups[:limit]:
-        table.add_row(
+    # Compute max count for bar normalization (only over the displayed
+    # slice; otherwise small groups would always look tiny next to
+    # outliers that were cut off by --limit).
+    displayed = sorted_groups[:limit]
+    max_count = max((g["count"] for _, g in displayed), default=1)
+    BAR_WIDTH = 20  # max bar length in characters
+
+    for (actor_v, action_v), g in displayed:
+        row = [
             actor_v,
             action_v,
             f"{g['count']:,}",
-            _ago(g["first"]),
-            _ago(g["last"]),
-        )
+        ]
+        if not no_bars:
+            # ASCII '#' for portability — unicode block chars (U+2588)
+            # render beautifully in TTY mode but Rich crashes piping to
+            # non-TTY Windows pipes (cp1252 codec can't encode them).
+            # '#' has good visual weight, works everywhere.
+            bar_len = max(1, round(g["count"] / max_count * BAR_WIDTH))
+            row.append("#" * bar_len)
+        row.extend([_ago(g["first"]), _ago(g["last"])])
+        table.add_row(*row)
     console.print(table)
 
     if len(sorted_groups) > limit:

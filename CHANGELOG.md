@@ -4,6 +4,86 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.21] — 2026-05-11 — audit-summary ASCII histogram column
+
+**Headline:** `audit-summary` Rich pretty-print now includes an **Activity** column with an ASCII histogram (`#` bars) showing each group's count proportional to the largest displayed group. Visual sparkline at a glance — you can SEE which actor/action combos dominate without reading the count numbers.
+
+### Why this matters
+
+Numbers in a column are accurate but slow to compare at a glance. A 20-char bar normalized to the largest count immediately tells the eye "this group is 2x as active as that one" without reading digits. Tufte-style visual encoding for forensic audit review.
+
+### Example output
+
+```
+$ curator audit-summary --days 30
+
+Audit summary
+  Period:        2026-04-11 13:51 -> 2026-05-11 13:51  (UTC)
+  Total events:  90
+  Unique groups: 7
+
+  Actor      Action            Count   Activity                First seen   Last seen
+  curator.   migration.move    50      ####################    2d ago       2d ago
+  gui.tier   tier.suggest      25      ##########              2h ago       41m ago
+  gui.tier   tier.set_status   5       ##                      1h ago       1h ago
+  gui.tier   trash             3       #                       1h ago       1h ago
+  curator.   scan.complete     3       #                       2d ago       2d ago
+  curator.   scan.start        3       #                       2d ago       2d ago
+  cli.tier   tier.suggest      1       #                       2h ago       2h ago
+```
+
+The shape of activity is immediately visible: `curator.migrate` (50) dominates with 20 bars, `gui.tier` (25) takes half that, and the tail of 1-5 event groups all get 1-2 bars.
+
+### What's new
+
+- **`Activity` column** in Rich pretty-print output (always shown by default):
+  - Fixed `width=22` and `no_wrap=True` so the 20-char bar always fits on one line
+  - Width-22 = 20 bar chars + 2 chars padding
+  - Bar length = `max(1, round(count / max_count * 20))` — normalized to the LARGEST displayed group
+  - Minimum 1 bar even for the smallest group (visibility floor)
+- **`--no-bars` flag** for opt-out:
+  - Suppresses the Activity column entirely; falls back to the v1.7.18 5-column layout
+  - Useful for narrow terminals or for users who prefer the original look
+- **JSON and CSV outputs are unchanged** — the histogram is Rich-only (data-format outputs should be structured, not visual)
+- **Normalization choice:** the max count is taken over the **displayed slice** (`sorted_groups[:limit]`), not the full result set. This means if you `--limit 5`, the 5th group gets compared to the 1st of the displayed five, not to a hidden outlier. Avoids the "all bars look tiny because one outlier was cut off" problem.
+
+### Files changed
+
+- `src/curator/cli/main.py` — +25 lines (flag declaration + Activity column + bar rendering loop)
+- `docs/releases/v1.7.21.md` — new release notes
+
+### Verification
+
+- **8-test subprocess suite** (`test_audit_histogram.py`):
+  1. `--no-bars` listed in `--help`
+  2. Default output contains `Activity` column header AND `#` bar chars
+  3. `--no-bars` suppresses both the column and all `#` chars
+  4. JSON output never contains bar chars; no `bar`/`activity` keys in JSON groups
+  5. CSV output unchanged (header still `actor,action,count,first,last`; no bars)
+  6. **Bar length proportional**: top row has more bars than second; top row capped at 20
+  7. Smallest count still gets >= 1 bar (visibility floor)
+  8. With `--limit 1`, top row gets exactly 20 bars (full BAR_WIDTH)
+- **Live CLI demo**: 7 real audit groups, 50/25/5/3/3/3/1 events → 20/10/2/1/1/1/1 bars (visual ratio matches numerical)
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 22-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**2 bugs caught and fixed during testing:**
+
+1. **First attempt used `"\u2588"` (U+2588 FULL BLOCK)** for prettier rendering. **Rich crashes in non-TTY Windows pipes** because cp1252 codec can't encode U+2588. Diagnosed via the subprocess error message (`UnicodeEncodeError: 'charmap' codec can't encode characters`). Fix: switch to ASCII `#` which works everywhere. Lesson: **prefer ASCII over Unicode in CLI output that may be piped**, especially on Windows where cp1252 is the default codec for non-TTY destinations. **Lesson #50 logged**.
+2. **First attempt let Rich auto-size the Activity column.** This caused the 20-char bar to wrap across multiple lines when piped to non-TTY destinations (Rich's default behavior). Test 6 caught it: "Top row bars: 11" instead of expected 20+. Fix: set explicit `width=22, no_wrap=True` on the column.
+
+**Lesson #51 logged**: Rich auto-sizing of fixed-content columns (histograms, sparklines, ASCII-art) should always use explicit `width=` + `no_wrap=True`. Otherwise piping to non-TTY destinations causes silent visual mangling.
+
+**Test design catch**: subprocess output on Windows includes `\r\n` line endings even when `csv.writer(lineterminator="\n")` is set, because Python's `sys.stdout` defaults to text mode. Test 5's assertion `first_line == "actor,action,..."` failed because the actual first line was `"actor,action,...\r"`. Fixed with `.rstrip("\r")` in the test.
+
+### v1.7.21 limitations
+
+- **ASCII `#` only** — unicode block characters (U+2588 █) render more beautifully in TTY but crash in piped output. Could detect TTY with `sys.stdout.isatty()` and use unicode in interactive mode, ASCII otherwise. Deferred.
+- **Fixed BAR_WIDTH=20** — not configurable via flag. A `--bar-width N` option could allow narrower or wider sparklines.
+- **No color encoding by magnitude** — all bars are green. A future enhancement could color them by relative size (top = red, smaller = yellow/green).
+- **Linear normalization only** — a group with 50 events vs a group with 1 event gets a 20:1 ratio of bar width. Log-scale would compress that to a more readable range for highly-skewed data; not implemented.
+
 ## [1.7.20] — 2026-05-11 — curator audit-summary --no-header + --local
 
 **Headline:** Two more `audit-summary` flag enhancements: **`--no-header`** suppresses the CSV header row for piping/appending, and **`--local`** renders timestamps in the system's local timezone instead of UTC across all output formats. Completes the trio of v1.7.18/v1.7.19/v1.7.20 audit-summary refinements.
