@@ -1,7 +1,7 @@
 # Curator — Building Blocks (source-level inventory)
 
 **The actual `.py` files, scripts, and source artifacts that make Curator work.**
-As of v1.7.2 (HEAD 0a1f827) — 2026-05-11.
+As of v1.7.4 (HEAD c61ea02 + release notes staged) — 2026-05-11.
 
 Organized by architectural tier from the inside out: **Models → Storage → Plugins → Services → CLI / GUI / MCP → External plugins → Tests → Scripts → Installer**.
 
@@ -477,15 +477,15 @@ Curator/ECOSYSTEM_DESIGN.md         (37 KB)    Where Curator fits in the Ad Astr
 | **Curator tests/ total** | **94** | All test artifacts |
 | Workflow scripts | 13 | .ps1 + .bat + README |
 | Installer | 3 | .bat + .ps1 + README |
-| docs/ markdown | 29 | Design + user docs (+3 release notes files for v1.7.0, v1.7.1, v1.7.2 in v1.7.x doc-refresh pass) |
+| docs/ markdown | 31 | Design + user docs (+5 release notes files for v1.7.0–v1.7.4) |
 | docs/ binary assets | 8 | 7 PNGs + 1 demo TXT |
 | Github/ | 2 | Loose metadata notes |
 | examples/ | 1 | watch_demo.py |
 | Top-level Curator/ | 8 | pyproject + .gitignore + 6 design/changelog .md |
-| **CURATOR REPO TOTAL** | **253** | Verified via `git ls-files` on 2026-05-11 (v1.7.2 + full release notes set) |
-| atrium-safety | 17 | 6 src + 6 tests + 5 metadata |
+| **CURATOR REPO TOTAL** | **255** | Verified via `git ls-files --cached` 2026-05-11 (v1.7.4 + release notes for v1.7.3 + v1.7.4) |
+| atrium-safety | 18 | 6 src + 7 tests (+test_pre_trash_retention.py v0.4.0) + 5 metadata |
 | atrium-citation | 19 | 7 src + 6 tests + 6 metadata |
-| **GRAND TOTAL (all 3 repos)** | **289** | |
+| **GRAND TOTAL (all 3 repos)** | **292** | |
 
 ---
 

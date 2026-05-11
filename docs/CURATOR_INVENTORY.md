@@ -1,12 +1,12 @@
 # Curator — Complete Inventory of Tools, Utilities, and Assets
 
-**As of Curator v1.7.2 (HEAD 0a1f827) — 2026-05-11**
+**As of Curator v1.7.4 (HEAD c61ea02) — 2026-05-11**
 
 Everything you can click, run, or open. Copy any code block as-is. Items grouped by surface (CLI / GUI / MCP / Workflows / Plugins / Files).
 
 ---
 
-## 1. CLI Commands (44 total)
+## 1. CLI Commands (47 total)
 
 The CLI is your primary surface. Activate the venv first, then run any command below.
 
@@ -648,7 +648,7 @@ docs/lessons/2026-05-09_install_mcp_session.md
 ```
 https://github.com/KULawHawk/Curator
 ```
-Main Curator repo (HEAD = v1.7.2 tag at commit `0a1f827`).
+Main Curator repo (HEAD = v1.7.4 tag at commit `c61ea02`).
 
 ```
 https://github.com/KULawHawk/curatorplug-atrium-safety
@@ -696,6 +696,6 @@ See the last day's activity.
 
 ---
 
-**Total surface count (v1.7.2):** 44 CLI commands + 9 MCP tools + 9 GUI tabs + 16 GUI menu actions + 5 workflow scripts + 9 plugins + 27 doc files + 3 installer files + 3 config files + 4 GitHub repos = **129 discrete clickable items**.
+**Total surface count (v1.7.4):** 47 CLI commands + 9 MCP tools + 9 GUI tabs + 16 GUI menu actions + 5 workflow scripts + 9 plugins + 31 doc files + 3 installer files + 3 config files + 4 GitHub repos = **136 discrete clickable items**.
 
-**Delta v1.6.5 → v1.7.2:** +1 GUI tab (Sources), +5 menu actions (Tools placeholders → real dialogs + 2 NEW: Version stacks + Forecast), +6 doc files (FEATURE_TODO, BUILDING_BLOCKS, ALL_FILES, CURATOR_INVENTORY, 3 release notes), +1 CLI command (`forecast`), +0 new MCP tools, +1 new service (ForecastService).
+**Delta v1.7.2 → v1.7.4:** +3 CLI commands (`status set/get/report`), +2 doc files (v1.7.3 + v1.7.4 release notes), +0 GUI surface, +0 MCP tools, atrium-safety bumped v0.3.0 → v0.4.0 (T-B02 hookimpl). v1.7.3 = foundation; v1.7.4 = cross-repo coordinated release (no Curator code changes, just doc/version-bump marker).
