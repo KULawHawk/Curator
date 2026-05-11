@@ -4,6 +4,65 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.12] — 2026-05-11 — T-B04 v4: Twilio + Mailgun + Discord patterns
+
+**Headline:** `curator scan-pii` gains 3 more HIGH-severity API key patterns: **Twilio Account SID**, **Mailgun API key** (all 3 prefix variants), **Discord bot token**. Total patterns: **14** (was 11). The exact set v1.7.11 release notes flagged as deferred.
+
+### Why this matters
+
+The v1.7.11 release notes called out: "*No Mailgun key... No Discord bot token... No Twilio account SID... could batch-add in v1.7.12 if demand surfaces.*" These three providers issue tokens that show up in shared Slack/email/Discord configs regularly. Each has a documented distinctive format that makes detection precise.
+
+### What's new
+
+3 new default patterns:
+
+| Name | Severity | Regex |
+|---|---|---|
+| `twilio_account_sid` | HIGH | `\bAC[a-f0-9]{32}\b` |
+| `mailgun_api_key` | HIGH | `\b(?:key\|private\|pubkey)-[a-zA-Z0-9]{32}\b` |
+| `discord_bot_token` | HIGH | `\b[MN][A-Za-z0-9_\-]{23,30}\.[A-Za-z0-9_\-]{6,7}\.[A-Za-z0-9_\-]{27,}\b` |
+
+**Design notes:**
+- **Twilio** uses lowercase hex specifically (Twilio docs guarantee this) which prevents collision with the AWS ASIA pattern (uppercase). Verified by Test 6.
+- **Mailgun** covers all 3 documented variants: classic `key-` (deprecated but still in deployed configs), plus `private-` and `pubkey-` (current). All require 32 alphanumeric chars after the prefix.
+- **Discord** bot tokens have 3 dot-separated segments with M/N prefix constraint. The M/N requirement cuts false positives on random base64-shaped 3-segment strings.
+
+### Files changed
+
+- `src/curator/services/pii_scanner.py` — +37 lines (3 new PIIPattern entries)
+- `docs/FEATURE_TODO.md` — T-B04 entry updated with v1.7.12 delivery
+- `docs/releases/v1.7.12.md` — new release notes
+
+### Verification
+
+- **7-test headless suite** (`test_tb04_v4.py`):
+  1. Twilio: 2 valid matches; rejects too-short and uppercase variants
+  2. Mailgun: matches all 3 prefix variants; rejects unknown prefix + too-short
+  3. Discord: matches M and N prefix; rejects Q prefix and single-segment
+  4. `DEFAULT_PATTERNS` count is exactly 14
+  5. Combined scan with all 14 pattern types in one text → all 14 present
+  6. **Collision check**: Twilio (AC+hex) and AWS ASIA (uppercase) don't double-match
+  7. Backward compat: v1.7.11 patterns (Google, Stripe, OpenAI) still work
+- **Live CLI smoke**: `curator scan-pii <temp file>` correctly identifies all 3 patterns; Mailgun matches both `key-` and `private-` lines
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 13-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**1 test-data length bug caught immediately** by lesson #45 (programmatic-construction principle):
+- Test 6's first version had a hand-typed Twilio SID: `ACabcdef0123456789abcdef0123456789ab`. Counted manually as 32 hex chars; actually 34. Test failed showing 0 Twilio matches instead of 1.
+- **Fix**: replaced with computed string `twilio_hex = "abcdef0123" * 3 + "ab"` plus `assert len(twilio_hex) == 32` BEFORE the regex test.
+- **Lesson #45 reinforced**: this is the second occurrence in two consecutive ships where hand-typed regex test data had off-by-N length errors. The fix is mechanical: every time test data must match an exact-length regex, construct it programmatically and assert length first.
+
+**0 regex bugs caught** — the 3 new patterns worked first-try once test data was correct.
+
+### v1.7.12 limitations
+
+- **No Twilio Auth Token** — these are 32-char hex with no distinctive prefix; FP rate would be high without contextual detection
+- **No GCP service account JSON** — multi-line, requires structural scanner
+- **No JWT detection** — the `xxx.yyy.zzz` base64 format is too broad without parsing the header
+- **No Atlassian / Bitbucket / GitLab tokens** — deferred until needed
+- **No Conclave hookspec for custom validators** — still on v1.8 list
+
 ## [1.7.11] — 2026-05-11 — T-B04 v3: 3 more API key patterns
 
 **Headline:** `curator scan-pii` gains 3 more HIGH-severity API key patterns: **Google API key** (Maps/Firebase/YouTube/GCP), **Stripe secret key** (live + test mode), **OpenAI API key** (legacy sk- + new sk-proj-). All prefix-distinct so they don't collide with each other or with the v1.7.10 set. Total patterns: **11** (was 8).

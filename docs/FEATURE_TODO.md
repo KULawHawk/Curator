@@ -85,13 +85,14 @@ New code, but slots cleanly into existing services.
 - **Notes:** False positives are the killer (npm install ≠ ransomware). First ship is **alert-only**; opt-in auto-pause comes later.
 
 ### `T-B04` — PII & Sensitivity Scanning (regex baseline + Conclave hookspec)
-- **Status:** **shipped v1.7.6, enhanced v1.7.10, expanded v1.7.11** (11 patterns total; Conclave/semantic version still deferred to T-D02)
+- **Status:** **shipped v1.7.6, enhanced v1.7.10, expanded v1.7.11, expanded v1.7.12** (14 patterns total; Conclave/semantic version still deferred to T-D02)
 - **Effort:** M
 - **Depends on:** none for regex; `T-D02` for semantic version
 - **What:** Regex detector for SSN, MRN, case numbers. Organize-service routing rule: "if matches sensitive pattern, never select for migration to a destination flagged 'public'."
 - **v1.7.6 delivery:** `services/pii_scanner.py` with `PIIScanner`, `PIIMatch`, `PIISeverity` (HIGH=ssn/credit_card, MEDIUM=phone_us/email), `PIIScanReport`. Methods: `scan_text(text)`, `scan_file(path)` (2 MB cap, configurable), `scan_directory(dir, recursive, extensions)`. CLI: `curator scan-pii <path> [--ext .txt --high-only --show-matches --head-bytes N]` with redacted output (last-4 chars visible). Wired into `CuratorRuntime.pii_scanner` for downstream consumers. Detect-only; routing/quarantine hooks deferred until FP/FN rate is measured against real data.
 - **v1.7.10 delivery:** `PIIPattern.validator` hook (callable that filters regex matches). 4 new patterns: **ipv4** (LOW, octet-range validated), **github_pat** (HIGH, ghp_/gho_/ghu_/ghs_/ghr_ prefixes), **aws_access_key_id** (HIGH, AKIA/ASIA prefixes), **slack_token** (HIGH, xox[abprs]- prefix). **Luhn validation** on credit_card cuts ~10x of false positives (random 16-digit numeric strings no longer match). PIISeverity gains LOW tier. Total patterns: 8.
 - **v1.7.11 delivery:** 3 additional HIGH-severity API key patterns: **google_api_key** (AIza prefix + 35 chars), **stripe_secret_key** (sk_live_/sk_test_ prefix), **openai_api_key** (sk- and sk-proj- prefixes). Stripe & OpenAI patterns explicitly designed to not collide (sk_ vs sk-). Total patterns: 11.
+- **v1.7.12 delivery:** 3 more HIGH-severity API key patterns: **twilio_account_sid** (AC + 32 lowercase hex), **mailgun_api_key** (key-/private-/pubkey- prefixes + 32 chars), **discord_bot_token** (3-segment dot format with M/N prefix). Twilio's lowercase-hex constraint distinguishes from AWS ASIA (uppercase). Total patterns: 14.
 - **Why:** Forensic psych work demands it. The regex baseline gets you 90% of the value in 30 lines. Conclave will plug into the hookspec later for semantic detection.
 
 ### `T-B05` — Tiered Storage Manager (`curator tier`)

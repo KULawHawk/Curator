@@ -334,6 +334,43 @@ def _build_default_patterns() -> list[PIIPattern]:
             severity=PIISeverity.HIGH,
             description="OpenAI API key (sk- or sk-proj- prefix)",
         ),
+        # ----- v1.7.12 additions: 3 more API key patterns -----------------
+        PIIPattern(
+            name="twilio_account_sid",
+            # Twilio Account SID: AC prefix + exactly 32 lowercase hex chars.
+            # Length is fixed by Twilio (34 chars total). The lowercase
+            # hex constraint distinguishes from generic AC-prefixed strings.
+            pattern=re.compile(r"\bAC[a-f0-9]{32}\b"),
+            severity=PIISeverity.HIGH,
+            description="Twilio Account SID (AC prefix + 32 hex chars)",
+        ),
+        PIIPattern(
+            name="mailgun_api_key",
+            # Mailgun keys: classic 'key-' prefix (deprecated but still in
+            # use) + newer 'private-' / 'pubkey-' formats. All followed
+            # by 32 chars. Hex-only for the new format; alphanumeric for
+            # the older 'key-' format (matches Mailgun's docs).
+            pattern=re.compile(
+                r"\b(?:key|private|pubkey)-[a-zA-Z0-9]{32}\b"
+            ),
+            severity=PIISeverity.HIGH,
+            description="Mailgun API key (key-/private-/pubkey- prefix)",
+        ),
+        PIIPattern(
+            name="discord_bot_token",
+            # Discord bot tokens: 3 dot-separated segments. Start with
+            # 'M' (newer) or 'N' (older) for bot tokens. Format:
+            #   [MN][A-Za-z0-9_-]{23-30}.[A-Za-z0-9_-]{6-7}.[A-Za-z0-9_-]{27,}
+            # The starting M/N constraint cuts FPs on random base64-shaped
+            # 3-segment strings.
+            pattern=re.compile(
+                r"\b[MN][A-Za-z0-9_\-]{23,30}"
+                r"\.[A-Za-z0-9_\-]{6,7}"
+                r"\.[A-Za-z0-9_\-]{27,}\b"
+            ),
+            severity=PIISeverity.HIGH,
+            description="Discord bot token (3-segment dot format, M/N prefix)",
+        ),
     ]
 
 
