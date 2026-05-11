@@ -4,6 +4,63 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.11] — 2026-05-11 — T-B04 v3: 3 more API key patterns
+
+**Headline:** `curator scan-pii` gains 3 more HIGH-severity API key patterns: **Google API key** (Maps/Firebase/YouTube/GCP), **Stripe secret key** (live + test mode), **OpenAI API key** (legacy sk- + new sk-proj-). All prefix-distinct so they don't collide with each other or with the v1.7.10 set. Total patterns: **11** (was 8).
+
+### Why this matters
+
+The v1.7.10 release notes explicitly listed Google API key, Stripe key, and OpenAI key as candidates for "v1.7.11 if demand surfaces." These three providers issue the most-leaked secrets in real codebases (Google for client-side Maps embeds that should have referrer restrictions but rarely do; Stripe for backend webhooks; OpenAI for the cottage industry of personal projects). Each has a distinctive prefix that makes detection both high-recall and effectively zero false-positive rate.
+
+### What's new
+
+3 new default patterns (no infrastructure changes — the validator hook from v1.7.10 already supports adding more):
+
+| Name | Severity | Regex | Notes |
+|---|---|---|---|
+| `google_api_key` | HIGH | `\bAIza[0-9A-Za-z\-_]{35}\b` | 39-char total length is fixed by Google |
+| `stripe_secret_key` | HIGH | `\bsk_(?:live\|test)_[A-Za-z0-9]{24,}\b` | Only **secret** keys; `pk_` publishable not flagged |
+| `openai_api_key` | HIGH | `\bsk-(?:proj-)?[A-Za-z0-9_\-]{20,}\b` | Covers legacy `sk-` and new `sk-proj-` |
+
+**Collision design:** Stripe uses `sk_` (underscore) while OpenAI uses `sk-` (dash). The patterns are mutually exclusive by their prefix character — a Stripe key cannot match the OpenAI regex and vice versa. Verified by Test 4 of the new test suite.
+
+### Files changed
+
+- `src/curator/services/pii_scanner.py` — +37 lines (3 new PIIPattern entries)
+- `docs/FEATURE_TODO.md` — T-B04 entry updated with v1.7.11 delivery
+- `docs/releases/v1.7.11.md` — new release notes
+
+### Verification
+
+- **7-test headless suite** (`test_tb04_v3.py`):
+  1. Google API key: 2 valid matches; rejects too-short
+  2. Stripe secret key: matches `sk_live_` + `sk_test_`; rejects `pk_live_` (publishable) and `sk_other_` (unknown prefix)
+  3. OpenAI API key: matches `sk-` + `sk-proj-`; rejects too-short
+  4. **Collision test**: `sk_live_X` matches Stripe only; `sk-Y` matches OpenAI only; no double-counting
+  5. Combined scan with all 11 pattern types in one text → all 11 patterns present in results
+  6. `DEFAULT_PATTERNS` length is exactly 11
+  7. Backward compat: v1.7.10 patterns (SSN, credit_card with Luhn, ipv4, github_pat) still detect correctly
+- **Live CLI smoke**: `curator scan-pii <temp file>` against mixed-pattern content correctly detects all 3 new patterns with proper redaction
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 12-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**2 test-data length bugs caught by assert statements:**
+- Initial test data for `good_body_2` was `"ABCDEFGHIJKLMNOPQRSTUVWXYZ_012345678"` — visually looks like 35 chars but is actually 36 (`_012345678` is 10 chars not 9). `assert len(good_body_2) == 35` caught immediately.
+- Test 5 combined-scan had a typo'd Google key construction that produced 40 chars instead of 39. Same assertion pattern caught it.
+- **Fix**: use computed-length strings (`"a" * 35`) instead of manually-typed bodies. Manual counting in regex test data is error-prone; let Python compute it.
+- **Lesson logged**: when test data must match an exact-length regex, **construct the data programmatically** rather than typing it out. Add length assertions BEFORE the regex test runs so the failure shows clearly as a test-data bug, not a regex bug.
+
+**0 regex bugs caught** — the 3 new patterns worked first-try once test data was correct. The pattern of "unique prefix + character class" continues to be reliable for API tokens with documented formats.
+
+### v1.7.11 limitations
+
+- **No Mailgun key** (`key-[0-9a-f]{32}`) — deferred; older Mailgun keys are being deprecated in favor of `private-` and `pubkey-` prefixed keys, format still stabilizing
+- **No Discord bot token** — the 3-segment dot format requires more careful tuning; deferred to v1.7.12 if needed
+- **No Twilio account SID** (`AC[a-z0-9]{32}`) — distinctive prefix but typically appears with the auth token nearby; would benefit from contextual detection
+- **No GCP service account JSON detection** — these are multi-line; needs a different scanner (`scan_text` works line-oriented for the line-number tracking)
+- **No Conclave hookspec for custom validators** — still on the v1.8 list; the `validator` field is Python-callable but not yet pluggable from outside the module
+
 ## [1.7.10] — 2026-05-11 — T-B04 enhancement: Luhn validation + 4 new PII patterns
 
 **Headline:** `curator scan-pii` gains **8 patterns** (up from 4) and a **Luhn validator** that cuts ~10x of credit-card false positives. New patterns target the highest-leverage gaps: **IPv4 addresses** (with octet-range check), **GitHub Personal Access Tokens**, **AWS Access Key IDs**, **Slack API tokens**. Each high-value-secret pattern has unambiguous prefix structure that makes detection both precise and high-recall.

@@ -299,6 +299,41 @@ def _build_default_patterns() -> list[PIIPattern]:
             severity=PIISeverity.HIGH,
             description="Slack API token",
         ),
+        # ----- v1.7.11 additions: 3 high-value API key patterns -----------
+        PIIPattern(
+            name="google_api_key",
+            # Google Cloud API keys: AIza prefix + 35 chars of
+            # [A-Za-z0-9_-]. Used for Maps, Firebase, YouTube, GCP REST APIs.
+            # The prefix is unique and the 39-char total length is fixed.
+            pattern=re.compile(r"\bAIza[0-9A-Za-z\-_]{35}\b"),
+            severity=PIISeverity.HIGH,
+            description="Google API key (Maps/Firebase/YouTube/GCP)",
+        ),
+        PIIPattern(
+            name="stripe_secret_key",
+            # Stripe secret keys: sk_live_ (production), sk_test_ (test mode).
+            # Followed by 24+ chars of [A-Za-z0-9]. Distinct from Stripe
+            # publishable keys (pk_live_/pk_test_) which are intentionally
+            # public; we only flag SECRET keys here.
+            pattern=re.compile(
+                r"\bsk_(?:live|test)_[A-Za-z0-9]{24,}\b"
+            ),
+            severity=PIISeverity.HIGH,
+            description="Stripe secret key (live or test mode)",
+        ),
+        PIIPattern(
+            name="openai_api_key",
+            # OpenAI keys: legacy sk- prefix (48 char total) + new
+            # sk-proj- project-scoped keys. Distinct from Stripe's sk_
+            # (underscore not dash) so the patterns don't collide.
+            # Pattern requires DASH after sk to avoid matching
+            # Stripe's sk_live_/sk_test_ prefix.
+            pattern=re.compile(
+                r"\bsk-(?:proj-)?[A-Za-z0-9_\-]{20,}\b"
+            ),
+            severity=PIISeverity.HIGH,
+            description="OpenAI API key (sk- or sk-proj- prefix)",
+        ),
     ]
 
 
