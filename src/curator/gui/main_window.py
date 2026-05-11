@@ -150,12 +150,20 @@ class CuratorMainWindow(QMainWindow):
         menu_edit.addAction(self._act_bundle_edit)
 
         # v1.6.2: Tools menu — placeholders for v1.7 native dialogs.
-        # v1.7 alpha: Health check is now wired to the real HealthCheckDialog
-        # (first native dialog replacing a placeholder). The other 4 still
-        # surface the 'coming in v1.7' placeholder for now.
+        # v1.7 alpha: Two items now graduated from placeholders to real
+        # in-process PySide6 dialogs:
+        #   * Health check  → HealthCheckDialog  (shipped earlier)
+        #   * Scan folder   → ScanDialog         (this commit)
+        # The other 3 items (Find duplicates / Cleanup / Sources manager)
+        # still surface the 'coming in v1.7' placeholder for now.
         menu_tools = self.menuBar().addMenu("&Tools")
+
+        # v1.7 alpha: real ScanDialog wired directly.
+        act_scan = QAction("&Scan folder...", self)
+        act_scan.triggered.connect(self._slot_open_scan_dialog)
+        menu_tools.addAction(act_scan)
+
         for label, key in [
-            ("&Scan folder...", "scan"),
             ("Find &duplicates...", "group"),
             ("&Cleanup junk...", "cleanup"),
             ("&Sources manager...", "sources"),
@@ -1369,6 +1377,31 @@ class CuratorMainWindow(QMainWindow):
         dlg = HealthCheckDialog(self.runtime, self)
         dlg.exec()
 
+    def _slot_open_scan_dialog(self) -> None:
+        """Open the native ScanDialog (v1.7 alpha).
+
+        Second Tools-menu item to graduate from placeholder. Picks a
+        source + folder + (eventually) ignore globs, runs the scan in
+        a QThread with indeterminate progress, and renders the full
+        ScanReport on completion. Closes the three biggest gaps from
+        the v1.6.4 smoke test: live progress feedback, native directory
+        picker, in-app modal vs separate console window.
+
+        Imported lazily so a broken scan_signals or ScanDialog module
+        can't prevent the main window from opening.
+        """
+        try:
+            from curator.gui.dialogs import ScanDialog
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self,
+                "Scan dialog unavailable",
+                f"Could not import ScanDialog: {e}",
+            )
+            return
+        dlg = ScanDialog(self.runtime, self)
+        dlg.exec()
+
     def _slot_tools_placeholder(self, key: str) -> None:
         """Show 'coming in v1.7' notice for a Tools menu item.
 
@@ -1382,12 +1415,9 @@ class CuratorMainWindow(QMainWindow):
         first real dialog.
         """
         guidance = {
-            "scan": (
-                "<b>Scan folder</b> dialog will let you pick a source + folder + ignore"
-                " globs and watch progress. Coming in v1.7.<br><br>"
-                "<b>Today:</b> use Workflows → Initial scan, or run"
-                " <code>curator scan &lt;source&gt; &lt;folder&gt;</code> in PowerShell."
-            ),
+            # v1.7 alpha: 'scan' key removed — ScanDialog now opens directly
+            # via _slot_open_scan_dialog. Kept as a comment so future
+            # maintainers don't re-add it.
             "group": (
                 "<b>Find duplicates</b> dialog will show a duplicate-set browser with"
                 " --keep strategy picker + apply. Coming in v1.7.<br><br>"

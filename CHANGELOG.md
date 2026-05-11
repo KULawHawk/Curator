@@ -4,6 +4,44 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.0-alpha.2] — 2026-05-11 — ScanDialog (second native v1.7 dialog)
+
+**Headline:** Second Tools-menu item graduated from placeholder to a real in-process PySide6 dialog. `ScanDialog` lets the user pick a source + folder, runs the scan in a background `QThread` with indeterminate progress, and renders the full `ScanReport` (all 13+ fields) on completion. Closes the three biggest gaps from the v1.6.4 smoke-test feedback:
+
+  1. **Live progress feedback** — indeterminate today (spinner + status text); real percentage waits for `T-future` (ScanService progress callback).
+  2. **Native directory picker** — was: copy-paste path into PowerShell.
+  3. **In-app modal** — was: separate console window via .bat wrapper.
+
+### Files changed
+
+- **`src/curator/gui/scan_signals.py`** (new) — `ScanProgressBridge` (Qt signals: `scan_started`, `scan_completed`, `scan_failed`, `scan_progress`-reserved) + `ScanWorker(QThread)` that wraps `ScanService.scan()` and emits via the bridge. Mirrors the `MigrationProgressBridge` pattern.
+- **`src/curator/gui/dialogs.py`** — added `ScanDialog(QDialog)` class (~310 lines): source dropdown populated from `runtime.source_repo.list_all()`, path picker with `QFileDialog.getExistingDirectory`, indeterminate progress bar, structured report rendering with error-path highlighting.
+- **`src/curator/gui/main_window.py`** — Tools menu rewired: `"&Scan folder..."` now opens `ScanDialog` directly via `_slot_open_scan_dialog` instead of the v1.6.2 placeholder. The 3 remaining placeholders (Find duplicates / Cleanup / Sources manager) are unchanged.
+- **`docs/FEATURE_TODO.md`** (new) — single source of truth for the Curator feature backlog. 30+ features cataloged across 5 tiers with stable IDs, effort estimates, dependencies, and recommended priority order. Captures the brainstorm from the post-ScanDialog session.
+
+### v1.7-alpha limitations (tracked in FEATURE_TODO)
+
+- Progress is **indeterminate** — `ScanService.scan()` has no progress callback in v1.6.5. The dialog shows a spinner during the scan and the full report on completion.
+- **No cancellation** — ScanService doesn't support mid-scan cancel. Closing the dialog orphans the worker (it finishes; its terminal emit lands on a dead bridge slot, which Qt handles gracefully).
+- **No ignore-glob input** — ScanService accepts a generic options dict but there's no stable schema for ignore patterns yet.
+
+### Verification
+
+- Headless smoke (offscreen Qt platform): ✅ dialog instantiates, populates source dropdown, enables Scan button when path valid.
+- Real end-to-end test against canonical `Curator/docs/` folder (32 files): ✅ scan ran in ~2s, returned ScanReport with `files_seen=32`, `files_new=3`, `files_updated=2`, `files_unchanged=27`, `files_hashed=5`, `cache_hits=27`, `bytes_read=99107`, `errors=0`. Status label rendered green completion span correctly.
+- Full pytest suite: ✅ 1438 passed, 9 skipped, 0 failed (identical to v1.6.5 baseline).
+
+### Lessons logged
+
+- **Authoritative-source-first principle proved itself twice** during this build:
+  1. Assumed `runtime.scan_service`; actual is `runtime.scan` — caught via `inspect.getmembers(CuratorRuntime)`.
+  2. Assumed `source_repo.list_sources()`; actual is `list_all()` — caught via `inspect.getmembers(SourceRepository)`.
+  Both would have produced runtime crashes on the user's first scan attempt. Documented as `Lesson 24` in the session log: for every external attribute access, introspect before writing the dependent code.
+
+## [1.7.0-alpha.1] — 2026-05-10 — HealthCheckDialog (first native v1.7 dialog)
+
+**Headline:** First Tools-menu item graduated from placeholder to a real in-process PySide6 dialog. `HealthCheckDialog` runs the same 8-section diagnostic as `scripts/workflows/05_health_check.ps1` (filesystem layout / Python+venv / Curator+plugin versions / GUI deps / DB integrity / plugins registered / MCP config / real MCP probe) but without spawning a console window. Synchronous, ~4.1s elapsed (mostly MCP subprocess). 22/22 checks pass on canonical install.
+
 ## [1.6.5] — 2026-05-10 — plugin SDK fix: same `_owns()` lookup for gdrive
 
 **Headline:** Same fix as v1.6.4 applied symmetrically to the gdrive plugin. Custom source_ids registered via `curator sources add my_drive --type gdrive` are now dispatched to the gdrive plugin (instead of failing with `RuntimeError: No source plugin registered`). Closes the v1.6.x plugin-SDK limitation for both built-in source plugins.

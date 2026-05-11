@@ -1200,3 +1200,369 @@ class HealthCheckDialog(QDialog):
                 lines.append(f"  {marker} {r.label}" + (f": {r.detail}" if r.detail else ""))
             lines.append("")
         QApplication.clipboard().setText("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# ScanDialog (v1.7 alpha) -- second native dialog after HealthCheckDialog
+# ---------------------------------------------------------------------------
+#
+# Lets the user pick a source + root path + (optional) ignore globs,
+# kicks off a scan in a QThread, and shows progress + final ScanReport.
+#
+# v1.7 alpha limitations (tracked for v1.7.x):
+#   * Progress is INDETERMINATE -- ScanService.scan() has no progress
+#     callback in v1.6.5. The dialog shows a spinner + "Scanning..."
+#     label while the worker thread runs.
+#   * No cancellation -- ScanService doesn't support cancel mid-scan.
+#     Closing the dialog while scanning orphans the worker (it'll
+#     finish; its terminal emit lands on a dead bridge slot, which
+#     Qt handles gracefully).
+#   * No ignore-glob input yet -- ScanService takes a generic options
+#     dict but we don't have a stable schema for ignore patterns yet.
+
+
+class ScanDialog(QDialog):
+    """Run a scan from the GUI without spawning a console window.
+
+    Replaces the v1.6.2 "Scan folder..." placeholder under the Tools
+    menu. Closes the most-cited gaps from the v1.6.4 smoke test:
+
+      1. Live progress feedback (indeterminate today, real progress
+         once ScanService gains a callback).
+      2. Native directory picker (was: copy-paste path into PowerShell).
+      3. In-app modal (was: separate console window via .bat).
+
+    Reads its source list from ``runtime.source_repo.list_sources()``
+    and the scan service from ``runtime.scan``.
+    """
+
+    def __init__(self, runtime: "CuratorRuntime", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.runtime = runtime
+        self._worker: Any = None        # ScanWorker, set when scanning
+        self._bridge: Any = None        # ScanProgressBridge, set when scanning
+        self._last_report: Any = None   # ScanReport on completion
+
+        self.setWindowTitle("Curator - Scan folder")
+        self.setMinimumWidth(620)
+        self.resize(720, 540)
+        self._build_ui()
+        self._populate_sources()
+        self._update_scan_enabled()
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        # Lazy import to keep file headers tidy and follow the
+        # HealthCheckDialog precedent.
+        from PySide6.QtWidgets import (
+            QComboBox,
+            QFileDialog,
+            QLineEdit,
+            QProgressBar,
+        )
+
+        layout = QVBoxLayout(self)
+
+        # --- Inputs group ----------------------------------------------
+        grp_inputs = QGroupBox("Scan inputs")
+        gi = QVBoxLayout(grp_inputs)
+
+        # Source picker
+        row_src = QHBoxLayout()
+        row_src.addWidget(QLabel("Source:"))
+        self._cb_source = QComboBox()
+        self._cb_source.setMinimumWidth(220)
+        row_src.addWidget(self._cb_source)
+        row_src.addStretch(1)
+        gi.addLayout(row_src)
+
+        # Path picker
+        row_path = QHBoxLayout()
+        row_path.addWidget(QLabel("Folder:"))
+        self._le_path = QLineEdit()
+        self._le_path.setPlaceholderText("(pick a folder to scan)")
+        self._le_path.textChanged.connect(self._update_scan_enabled)
+        row_path.addWidget(self._le_path, 1)
+        self._btn_browse = QPushButton("Browse...")
+        self._btn_browse.clicked.connect(self._on_browse_clicked)
+        row_path.addWidget(self._btn_browse)
+        gi.addLayout(row_path)
+
+        # Hint label
+        hint = QLabel(
+            "<i>Tip: scan a small folder (say ~100 files) before running on a"
+            " whole drive. Progress is indeterminate in v1.7 alpha -- the dialog"
+            " will appear to hang on large scans until the report comes back.</i>"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #5C6BC0; padding: 4px;")
+        gi.addWidget(hint)
+
+        layout.addWidget(grp_inputs)
+
+        # --- Progress group --------------------------------------------
+        grp_progress = QGroupBox("Progress")
+        gp = QVBoxLayout(grp_progress)
+
+        self._lbl_status = QLabel("Idle. Pick a source + folder, then click Scan.")
+        self._lbl_status.setWordWrap(True)
+        gp.addWidget(self._lbl_status)
+
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 1)       # determinate-by-default with 1 max
+        self._progress.setValue(0)
+        self._progress.setFormat("")
+        gp.addWidget(self._progress)
+
+        layout.addWidget(grp_progress)
+
+        # --- Results group (built once; rows added on completion) ------
+        self._grp_results = QGroupBox("Results")
+        self._gr_layout = QVBoxLayout(self._grp_results)
+        self._lbl_no_results = QLabel("<i>No scan run yet.</i>")
+        self._lbl_no_results.setStyleSheet("color: gray; padding: 8px;")
+        self._gr_layout.addWidget(self._lbl_no_results)
+        layout.addWidget(self._grp_results, 1)
+
+        # --- Buttons row ------------------------------------------------
+        row_btn = QHBoxLayout()
+        self._btn_scan = QPushButton("Scan")
+        self._btn_scan.setDefault(True)
+        self._btn_scan.clicked.connect(self._on_scan_clicked)
+        row_btn.addWidget(self._btn_scan)
+
+        self._btn_close = QPushButton("Close")
+        self._btn_close.clicked.connect(self.reject)
+        row_btn.addWidget(self._btn_close)
+        row_btn.addStretch(1)
+
+        layout.addLayout(row_btn)
+
+    # ------------------------------------------------------------------
+    # Source population
+    # ------------------------------------------------------------------
+
+    def _populate_sources(self) -> None:
+        """Load registered sources from runtime.source_repo into the dropdown.
+
+        Uses :meth:`SourceRepository.list_all` (the actual method name on
+        the repo as of v1.6.5; earlier drafts of this dialog mistakenly
+        referenced ``list_sources`` which doesn't exist).
+        """
+        try:
+            sources = self.runtime.source_repo.list_all()
+        except Exception as e:  # noqa: BLE001
+            self._cb_source.addItem(f"(error loading sources: {e})")
+            self._cb_source.setEnabled(False)
+            return
+        if not sources:
+            self._cb_source.addItem("(no sources configured)")
+            self._cb_source.setEnabled(False)
+            return
+        for s in sources:
+            label = f"{s.source_id} ({s.source_type})"
+            self._cb_source.addItem(label, s.source_id)
+
+    def _selected_source_id(self) -> str | None:
+        if not self._cb_source.isEnabled():
+            return None
+        sid = self._cb_source.currentData()
+        return sid if isinstance(sid, str) and sid else None
+
+    # ------------------------------------------------------------------
+    # User actions
+    # ------------------------------------------------------------------
+
+    def _on_browse_clicked(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        start_dir = self._le_path.text().strip()
+        if not start_dir or not Path(start_dir).is_dir():
+            start_dir = str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(
+            self,
+            "Select folder to scan",
+            start_dir,
+        )
+        if chosen:
+            self._le_path.setText(chosen)
+
+    def _update_scan_enabled(self) -> None:
+        """Enable the Scan button only when source + path are both valid."""
+        path = self._le_path.text().strip()
+        path_ok = bool(path) and Path(path).is_dir()
+        src_ok = self._selected_source_id() is not None
+        in_flight = self._worker is not None and self._worker.isRunning()
+        self._btn_scan.setEnabled(path_ok and src_ok and not in_flight)
+
+    def _on_scan_clicked(self) -> None:
+        sid = self._selected_source_id()
+        root = self._le_path.text().strip()
+        if not sid or not root:
+            return
+
+        try:
+            from curator.gui.scan_signals import ScanProgressBridge, ScanWorker
+        except Exception as e:  # noqa: BLE001
+            self._lbl_status.setText(
+                f"<span style='color: #C62828;'>Could not load ScanWorker: {e}</span>"
+            )
+            return
+
+        self._clear_results()
+        self._set_indeterminate(True)
+        self._lbl_status.setText(
+            f"Scanning <b>{root}</b> as source <b>{sid}</b>..."
+        )
+        self._btn_scan.setEnabled(False)
+        self._btn_browse.setEnabled(False)
+        self._cb_source.setEnabled(False)
+        self._le_path.setEnabled(False)
+
+        self._bridge = ScanProgressBridge(self)
+        self._bridge.scan_started.connect(self._on_scan_started)
+        self._bridge.scan_completed.connect(self._on_scan_completed)
+        self._bridge.scan_failed.connect(self._on_scan_failed)
+
+        self._worker = ScanWorker(
+            runtime=self.runtime,
+            source_id=sid,
+            root=root,
+            options=None,
+            bridge=self._bridge,
+            parent=self,
+        )
+        self._worker.start()
+
+    # ------------------------------------------------------------------
+    # Slots -- run on the GUI thread via QueuedConnection
+    # ------------------------------------------------------------------
+
+    def _on_scan_started(self, payload: object) -> None:
+        # payload is (source_id, root); status text already set in click handler.
+        pass
+
+    def _on_scan_completed(self, report: object) -> None:
+        self._last_report = report
+        self._set_indeterminate(False)
+        self._progress.setRange(0, 1)
+        self._progress.setValue(1)
+        self._lbl_status.setText(
+            f"<span style='color: #2E7D32;'><b>Scan complete</b></span>"
+            f" -- {getattr(report, 'files_seen', '?')} files seen,"
+            f" {getattr(report, 'files_new', '?')} new,"
+            f" {getattr(report, 'files_updated', '?')} updated,"
+            f" {getattr(report, 'errors', '?')} errors."
+        )
+        self._render_report(report)
+        self._reenable_controls()
+
+    def _on_scan_failed(self, exc: object) -> None:
+        self._set_indeterminate(False)
+        self._progress.setRange(0, 1)
+        self._progress.setValue(0)
+        msg = f"{type(exc).__name__}: {exc}"
+        self._lbl_status.setText(
+            f"<span style='color: #C62828;'><b>Scan failed:</b></span> {msg}"
+        )
+        self._reenable_controls()
+
+    def _reenable_controls(self) -> None:
+        self._btn_browse.setEnabled(True)
+        if self._cb_source.count() > 0:
+            first_text = self._cb_source.itemText(0)
+            if "no sources" not in first_text and "error" not in first_text:
+                self._cb_source.setEnabled(True)
+        self._le_path.setEnabled(True)
+        self._update_scan_enabled()
+
+    # ------------------------------------------------------------------
+    # Progress + results rendering
+    # ------------------------------------------------------------------
+
+    def _set_indeterminate(self, on: bool) -> None:
+        if on:
+            self._progress.setRange(0, 0)  # busy-spinner mode
+            self._progress.setFormat("Scanning...")
+        else:
+            self._progress.setFormat("")
+
+    def _clear_results(self) -> None:
+        while self._gr_layout.count() > 0:
+            item = self._gr_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._lbl_no_results = QLabel("<i>Scan in progress...</i>")
+        self._lbl_no_results.setStyleSheet("color: gray; padding: 8px;")
+        self._gr_layout.addWidget(self._lbl_no_results)
+
+    def _render_report(self, report: object) -> None:
+        """Render every ScanReport field in a structured table."""
+        while self._gr_layout.count() > 0:
+            item = self._gr_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        rows: list[tuple[str, str]] = []
+
+        def _get(attr: str, default: str = "") -> str:
+            v = getattr(report, attr, default)
+            return "" if v is None else str(v)
+
+        rows.append(("Job ID",                  _get("job_id")))
+        rows.append(("Source",                  _get("source_id")))
+        rows.append(("Root",                    _get("root")))
+        rows.append(("Started",                 _format_dt(getattr(report, "started_at", None))))
+        rows.append(("Completed",               _format_dt(getattr(report, "completed_at", None))))
+        rows.append(("Files seen",              _get("files_seen", "0")))
+        rows.append(("Files new",               _get("files_new", "0")))
+        rows.append(("Files updated",           _get("files_updated", "0")))
+        rows.append(("Files unchanged",         _get("files_unchanged", "0")))
+        rows.append(("Files hashed",            _get("files_hashed", "0")))
+        rows.append(("Cache hits",              _get("cache_hits", "0")))
+        bytes_read = getattr(report, "bytes_read", 0) or 0
+        rows.append(("Bytes read",              f"{bytes_read:,} ({_format_size(bytes_read)})"))
+        rows.append(("Fuzzy hashes computed",   _get("fuzzy_hashes_computed", "0")))
+        rows.append(("Classifications assigned",_get("classifications_assigned", "0")))
+        rows.append(("Lineage edges created",   _get("lineage_edges_created", "0")))
+        rows.append(("Files deleted (gone)",    _get("files_deleted", "0")))
+        rows.append(("Errors",                  _get("errors", "0")))
+
+        tbl = _make_kv_table(rows)
+        err_count = getattr(report, "errors", 0) or 0
+        if err_count > 0:
+            for r in range(tbl.rowCount()):
+                if tbl.item(r, 0) and tbl.item(r, 0).text() == "Errors":
+                    tbl.item(r, 1).setForeground(QColor("#C62828"))
+                    f = QFont()
+                    f.setBold(True)
+                    tbl.item(r, 1).setFont(f)
+                    break
+        self._gr_layout.addWidget(tbl)
+
+        error_paths = getattr(report, "error_paths", None) or []
+        if error_paths:
+            lbl_ep = QLabel(f"<b>Error paths ({len(error_paths)}):</b>")
+            lbl_ep.setStyleSheet("color: #C62828; padding-top: 6px;")
+            self._gr_layout.addWidget(lbl_ep)
+            ep_tbl = _make_table(["#", "Path"],
+                                 [[str(i + 1), p] for i, p in enumerate(error_paths[:50])])
+            self._gr_layout.addWidget(ep_tbl)
+            if len(error_paths) > 50:
+                lbl_more = QLabel(f"<i>... and {len(error_paths) - 50} more (see audit log)</i>")
+                lbl_more.setStyleSheet("color: gray;")
+                self._gr_layout.addWidget(lbl_more)
+
+    # ------------------------------------------------------------------
+    # Test / introspection helpers
+    # ------------------------------------------------------------------
+
+    @property
+    def last_report(self) -> Any:
+        """Return the ScanReport from the most recent scan, or None."""
+        return self._last_report
