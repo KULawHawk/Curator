@@ -4,6 +4,70 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.19] — 2026-05-11 — curator audit-summary --csv output
+
+**Headline:** `curator audit-summary` gains a `--csv` flag that emits `actor,action,count,first,last` CSV instead of the Rich pretty-print table. Mirrors v1.7.18's `--json` for users who want to dump audit data into Excel / Google Sheets / Pandas.
+
+### Why this matters
+
+JSON is great for scripting but awkward to paste into a spreadsheet. CSV is the universal spreadsheet interchange format — you can `curator audit-summary --csv > audit.csv`, double-click to open in Excel, and immediately pivot or chart the data. Same use case as v1.7.18 but a different consumer (humans with spreadsheets vs scripts).
+
+### What's new
+
+- **New `--csv` flag** on `audit-summary` (`cli/main.py`, +18 lines):
+  - Emits `actor,action,count,first,last` header row + one row per `(actor, action)` group
+  - `count` is a bare integer (parses cleanly as numeric in Excel/Sheets)
+  - `first` / `last` are ISO 8601 timestamps (parse to datetime in Excel via `=DATEVALUE()` or directly in Pandas)
+  - Respects all existing filter flags (`--days`, `--since`, `--actor`, `--action`, `--limit`)
+- **Precedence rule:** `--json` wins over `--csv` if both are set (early-return ordering)
+- **Sorted by activity** (same as table output): most-active groups first
+- Uses Python's stdlib `csv.writer` for proper quoting/escaping — actors with commas in their names (none today, but possible future plugins) work correctly
+
+### Example output
+
+```
+$ curator audit-summary --csv --days 30
+actor,action,count,first,last
+curator.migrate,migration.move,50,2026-05-09T03:21:34.007031,2026-05-09T03:21:40.408979
+gui.tier,tier.suggest,25,2026-05-11T11:43:19.786940,2026-05-11T13:09:46.370416
+gui.tier,tier.set_status,5,2026-05-11T12:34:36.776876,2026-05-11T12:42:49.836948
+gui.tier,trash,3,2026-05-11T12:37:55.316253,2026-05-11T12:42:50.735946
+curator.scan,scan.complete,3,2026-05-09T00:15:35.585415,2026-05-09T03:21:31.605613
+curator.scan,scan.start,3,2026-05-09T00:15:34.366404,2026-05-09T03:21:29.895107
+cli.tier,tier.suggest,1,2026-05-11T11:33:19.422364,2026-05-11T11:33:19.422364
+```
+
+### Files changed
+
+- `src/curator/cli/main.py` — +24 lines (flag declaration + emit branch)
+- `docs/releases/v1.7.19.md` — new release notes
+
+### Verification
+
+- **7-test subprocess suite** (`test_audit_csv.py`):
+  1. `--csv` listed in `audit-summary --help`
+  2. Emits valid CSV that `csv.DictReader` parses correctly
+  3. `--limit 2` caps output to 2 data rows
+  4. `--actor gui.tier` filters — all rows have `actor=gui.tier`
+  5. **CSV vs JSON consistency**: same group count, top row matches `actor`/`action`/`count` between formats
+  6. **`--json` precedence**: when both flags set, output is JSON (validates as such)
+  7. **CSV round-trip**: `parse(out) → serialize → == out` byte-for-byte
+- **Live CLI smoke**: 7 real audit groups emit clean CSV
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 20-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**1 bug caught and fixed via the test process (but not in the code itself):** my first `Filesystem:edit_file` call used the oldText `"        typer.echo(_json.dumps(payload, indent=2))\n        return\n\n    # Rich pretty-print\n"`. This pattern appears in **4 different CLI commands** (`scan-pii`, `export-clean`, `tier`, `audit-summary`) and the edit landed in the wrong one (`scan-pii`) because that one happens first in the file. **Reverted and re-did with more specific anchor text including `period_end = datetime.utcnow()` which uniquely identifies the audit-summary command.**
+
+**Lesson #49 logged**: when using line-based `Filesystem:edit_file` (or any pattern-match-based editor) in a 3800+ line file with multiple similar code blocks, **the oldText anchor must include a sentinel string unique to the target command/function**. Generic patterns like `"# Rich pretty-print"` after `return` exist 4+ times; the right anchor is the first unique line *inside* the target function (here: `period_end = datetime.utcnow()`).
+
+### v1.7.19 limitations
+
+- **No `--csv` for other commands** — `scan-pii`, `tier`, `export-clean`, `forecast` all have `--json` but no CSV. Could be batched as a v1.8 enhancement.
+- **No header suppression flag** — always emits the `actor,action,count,first,last` row. A `--no-header` flag would be useful for piping into other tools.
+- **No streaming output** — the whole report is built in memory before emit. For 50k+ event audit logs this could matter; not relevant at current scale.
+- **TSV / pipe-separated formats not supported** — only standard comma-separated. Could add `--csv-dialect=tsv` if needed.
+
 ## [1.7.18] — 2026-05-11 — curator audit-summary CLI command
 
 **Headline:** New CLI command `curator audit-summary` aggregates recent audit events by `(actor, action)` pairs with counts and relative-time ("2m ago", "3d ago") timestamps. Forensic-grade visibility into what the system has been doing across all sessions — a different surface area from the recent TierDialog and PII pattern ships.

@@ -4104,6 +4104,12 @@ def audit_summary_cmd(
         20, "--limit",
         help="Cap the number of (actor, action) groups displayed.",
     ),
+    csv_output: bool = typer.Option(
+        False, "--csv",
+        help="Emit CSV (actor,action,count,first,last) instead of the "
+             "pretty table. Useful for spreadsheet imports. Mutually "
+             "exclusive with --json (JSON wins if both are set).",
+    ),
 ) -> None:
     """Aggregate recent audit events by actor and action (T-B04-adjacent, v1.7.18).
 
@@ -4192,6 +4198,24 @@ def audit_summary_cmd(
             ],
         }
         typer.echo(_json.dumps(payload, indent=2))
+        return
+
+    # CSV output (v1.7.19) - simple flat table for spreadsheet imports.
+    # JSON wins if both flags are set (the early-return above means we
+    # never reach this branch when --json was set).
+    if csv_output:
+        import csv as _csv
+        import sys as _sys
+        writer = _csv.writer(_sys.stdout, lineterminator="\n")
+        writer.writerow(["actor", "action", "count", "first", "last"])
+        for (actor_v, action_v), g in sorted_groups[:limit]:
+            writer.writerow([
+                actor_v,
+                action_v,
+                g["count"],
+                g["first"].isoformat() if g["first"] else "",
+                g["last"].isoformat() if g["last"] else "",
+            ])
         return
 
     # Rich pretty-print
