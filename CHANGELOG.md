@@ -4,6 +4,110 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.34] — 2026-05-11 — Pre-commit hook for lesson #50 lint (layer 4)
+
+**Headline:** New optional git pre-commit hook at `.githooks/pre-commit` that runs the v1.7.32 lesson #50 lint test before allowing a commit. Activated per-clone with one command (`git config core.hooksPath .githooks`). Closes the v1.7.32 limitation that a developer who skipped pytest before commit could still push a literal glyph regression. **Lesson #50 now defended at four layers** (code helper, pytest lint, docs, git hook) — each layer is opt-in but stacks additively.
+
+### Why this matters
+
+v1.7.32 added the test-level lint. It runs when developers run `pytest tests/`. If they skip pytest (because they think their change is small, or they're hot-fixing, or they forgot), a literal glyph can still slip in. v1.7.34 closes that gap by making the lint **mandatory at commit time** rather than "please remember to run pytest."
+
+Four layers now:
+
+| Layer | Mechanism | Trigger |
+|---|---|---|
+| 1. Code | `curator.cli.util` (9 glyph constants) | Compile time — safe path is the easy path |
+| 2. Tests | `test_no_literal_glyphs_in_cli_outside_util` | Test time — catches regressions when pytest runs |
+| 3. Docs | CHANGELOG v1.7.30 / v1.7.32 / v1.7.33 / v1.7.34 | Code review / archaeology |
+| 4. **Hook** | **`.githooks/pre-commit`** | **Commit time — mandatory unless `--no-verify`** |
+
+The layers are independent. Bypassing the hook (`git commit --no-verify`) still leaves the test as a safety net on the next `pytest tests/` run. Bypassing both leaves the helper module as the path-of-least-resistance for new code. The defense is now **resilient against any single layer being skipped**.
+
+### What's new
+
+**`.githooks/pre-commit`** (POSIX shell, 56 lines):
+  * Tries `.venv/Scripts/python.exe` (Windows venv) → `.venv/bin/python` (Unix venv) → system `python` → `python3`
+  * Runs `pytest tests/unit/test_cli_util.py::test_no_literal_glyphs_in_cli_outside_util -q --no-header`
+  * Sets `QT_QPA_PLATFORM=offscreen` so the test doesn't try to open a Qt display
+  * On failure: prints "pre-commit: lesson #50 lint failed. Commit refused." with bypass instructions
+  * Cost: ~600ms per commit (Python startup + Qt import + scan; the actual file scan is microseconds)
+
+**`.githooks/README.md`** (one-time activation docs):
+  * `git config core.hooksPath .githooks` to activate for this clone
+  * Bypass with `git commit --no-verify` for emergencies
+  * Tracks-in-repo design (`.githooks/` is committed; `.git/hooks/` would not be)
+  * Opt-in by design — new clones don't auto-activate
+
+**`.gitattributes`** (LF preservation for hooks):
+  * `.githooks/* text eol=lf` keeps POSIX shell scripts as LF on Windows clones
+  * Without this, Git for Windows would normalize to CRLF on checkout, breaking the shebang line
+
+### Verification
+
+Both directions tested live:
+
+**Positive test (passing commit allowed)**:
+  * Staged the new hook files
+  * Ran `git commit`
+  * Hook output: `1 passed in 0.72s`
+  * Commit allowed; exit code 0
+
+**Negative test (failing commit blocked)**:
+  * Wrote a temporary `src/curator/cli/_hook_neg.py` containing the actual codepoint U+2713 (via `chr(0x2713)` to ensure the codepoint hit disk, not the escape sequence)
+  * Staged and ran `git commit`
+  * Hook output:
+    ```
+    FAILED tests/unit/test_cli_util.py::test_no_literal_glyphs_in_cli_outside_util
+    1 failed in 0.73s
+    
+    pre-commit: lesson #50 lint failed. Commit refused.
+    pre-commit: fix the glyph(s) flagged above, or run with --no-verify to bypass.
+    ```
+  * Commit REFUSED; exit code 1
+  * Cleanup: unstaged + deleted the bad file; working tree clean
+
+Both cases match the contract: hook passes good commits, blocks bad ones, emits actionable error messages.
+
+### Files changed
+
+- `.githooks/pre-commit` — NEW (56 lines, POSIX shell)
+- `.githooks/README.md` — NEW (61 lines, activation + design docs)
+- `.gitattributes` — NEW (4 lines, LF preservation for hooks)
+- `CHANGELOG.md` — v1.7.34 entry
+- `docs/releases/v1.7.34.md` — release notes
+
+### Authoritative-principle catches (this turn)
+
+**1 test-methodology bug caught and fixed during the ship.** The initial negative test wrote `"\u2713"` to disk via a PowerShell here-string, expecting the hook to block the commit. The hook didn't block it. **Why**: PowerShell's `@'...'@` is a verbatim here-string — `\u2713` went to disk as 6 ASCII characters (`\`, `u`, `2`, `7`, `1`, `3`), not the codepoint U+2713 (3 bytes in UTF-8: `\xe2\x9c\x93`). The lint correctly didn't flag a file that didn't actually contain the codepoint.
+
+Redid the test using Python's `chr(0x2713)` to inject the actual codepoint. Hook then blocked the commit as designed.
+
+**Codified as lesson #54: when testing that a system catches a Unicode codepoint, ensure the codepoint actually hits disk — PowerShell verbatim strings, raw Python `r''` strings, and shell quoting all silently preserve the ASCII escape sequence rather than expanding it. Use `chr()` / `\u` outside raw-string context / `printf` with `%b` / `python -c` with explicit `chr()` to inject codepoints reliably.**
+
+This lesson generalizes: any test that verifies handling of a special character must verify that the character actually lands in the test fixture, not just the literal-source representation of it.
+
+### v1.7.34 limitations
+
+- **Opt-in, not auto-applied.** New clones don't auto-activate the hook. The user must run `git config core.hooksPath .githooks` once per clone. This is intentional (matches Curator's broader "layers are independent" philosophy), but it means the hook protects only developers who choose to enable it. A future ship could add a `scripts/setup_dev_env.py` that runs the config command + other dev-environment setup.
+- **Bash-only hook.** The script is POSIX shell. Works under Git for Windows (which bundles `sh.exe`), macOS, Linux. Doesn't work in environments without a POSIX shell. PowerShell-native variant could be added if needed.
+- **Single lint test.** The hook runs only `test_no_literal_glyphs_in_cli_outside_util`. If future code-quality tests are added (e.g., a check for missing docstrings, or import-order checks), the hook would need to expand. The 600ms budget supports ~5-6 small fast tests before users notice the commit lag.
+- **Bypassable with `--no-verify`.** This is a deliberate escape hatch for emergencies, but it means the hook is a *strong nudge*, not an *absolute guarantee*. The pytest layer remains the hard line: a `--no-verify` commit still fails CI when someone runs the test suite.
+
+### Lesson #54 (new): codepoint test fixtures
+
+> **When testing that a system handles a specific Unicode codepoint, ensure the codepoint actually hits disk in the test fixture. PowerShell verbatim strings (`@'...'@`), Python raw strings (`r"\u2713"`), and shell single-quoted strings all preserve the literal escape-sequence ASCII rather than expanding it to the codepoint. Use `chr(0x2713)` / `"\u2713"` (non-raw, non-verbatim) / `python -c "print(chr(0x2713))"` to inject codepoints reliably. Verify by reading the file back and confirming the codepoint is present: `chr(0x2713) in open(path, encoding='utf-8').read()` should be True.**
+
+Caught this ship when the first negative-test attempt failed silently — the hook didn't fire because the test fixture didn't actually contain the violating character.
+
+### Cumulative arc state (after v1.7.34)
+
+- 34 ships, all tagged, all baselines green
+- pytest: 1462 / 9 / 0 (unchanged — hook reuses the v1.7.32 lint test, no new test functions added)
+- CLI commands with CSV output: 6
+- Glyph constants codified: 9
+- Defensive layers for lesson #50: 4 (code, tests, docs, git hook)
+- Lessons in commit-message corpus: #46–#54
+
 ## [1.7.33] — 2026-05-11 — CSV parity batch + lesson #50 strike #6 (caught automatically)
 
 **Headline:** Three commands gain `--csv` and `--no-header` flags (`forecast`, `export-clean`, `tier`), completing the CSV output pattern that `audit-summary` / `scan-pii` / `audit-export` already followed. Bundled in the same ship: the **v1.7.32 lint test caught a 6th lesson-#50 strike automatically** — the `R²` (U+00B2 SUPERSCRIPT TWO) in `forecast_cmd`'s slope-rate display, hiding in the codebase since the forecast command shipped. Adding `U+00B2` to `_GLYPH_FALLBACKS` triggered the lint test the moment the codepoint joined the set, exactly as the v1.7.32 design intended. This is the first strike where the defense system worked without a human noticing the symptom first.

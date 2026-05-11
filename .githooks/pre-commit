@@ -1,0 +1,63 @@
+#!/bin/sh
+# Curator pre-commit hook (v1.7.34)
+#
+# Runs the lesson #50 lint test before allowing a commit. Blocks commits
+# that would introduce a literal Unicode glyph from _GLYPH_FALLBACKS into
+# any file under src/curator/cli/ outside util.py itself.
+#
+# Why: even with the v1.7.32 pytest-level lint, a developer can skip
+# pytest before commit and push code that crashes cp1252 capture. This
+# hook closes that gap by making the lint mandatory at commit time.
+#
+# Activation (one-time, per clone):
+#     git config core.hooksPath .githooks
+#
+# Bypass (when intentional, e.g. emergency hotfix without working pytest):
+#     git commit --no-verify
+#
+# Cost: runs in ~600ms because it executes a single pytest function, not
+# the full suite. Slowest part is Python startup + Qt import; the actual
+# scan finishes in microseconds.
+#
+# Compatibility:
+#   - POSIX shell (works under Git for Windows' bundled sh.exe, mac, linux)
+#   - Requires a working venv at .venv/Scripts/python.exe (Windows) or
+#     .venv/bin/python (Unix). Falls back to system `python` if missing.
+
+set -e
+
+# Locate Python interpreter. Try Windows venv first, then Unix venv, then
+# system python. Bail out with a helpful message if none works.
+if [ -x ".venv/Scripts/python.exe" ]; then
+    PYTHON=".venv/Scripts/python.exe"
+elif [ -x ".venv/bin/python" ]; then
+    PYTHON=".venv/bin/python"
+elif command -v python >/dev/null 2>&1; then
+    PYTHON="python"
+elif command -v python3 >/dev/null 2>&1; then
+    PYTHON="python3"
+else
+    echo "pre-commit: no Python interpreter found." >&2
+    echo "pre-commit: activate .venv or install python on PATH." >&2
+    echo "pre-commit: to bypass this hook, run: git commit --no-verify" >&2
+    exit 1
+fi
+
+# Run the lesson #50 lint test only. Quiet mode so the commit summary
+# stays readable when the hook passes; verbose only on failure (pytest
+# emits the helpful diagnostic message automatically when the test
+# fails, so we don't need to add anything).
+QT_QPA_PLATFORM=offscreen "$PYTHON" -m pytest \
+    tests/unit/test_cli_util.py::test_no_literal_glyphs_in_cli_outside_util \
+    -q --no-header 2>&1 | tail -3
+
+# If pytest exited non-zero, refuse the commit.
+PYTEST_EXIT=${PIPESTATUS:-$?}
+if [ "$PYTEST_EXIT" != "0" ]; then
+    echo "" >&2
+    echo "pre-commit: lesson #50 lint failed. Commit refused." >&2
+    echo "pre-commit: fix the glyph(s) flagged above, or run with --no-verify to bypass." >&2
+    exit "$PYTEST_EXIT"
+fi
+
+exit 0

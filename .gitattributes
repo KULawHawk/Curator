@@ -1,0 +1,7 @@
+# Curator .gitattributes
+# Preserve LF line endings for files that POSIX shells need to read
+# (notably git hooks under .githooks/). Without this, Git for Windows
+# can convert them to CRLF on checkout, which breaks shebang lines and
+# heredocs on the next pull-and-run.
+
+.githooks/* text eol=lf
