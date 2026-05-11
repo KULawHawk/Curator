@@ -4,6 +4,56 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.16] — 2026-05-11 — TierDialog keyboard shortcuts (T-B05 GUI v3)
+
+**Headline:** The Tier scan dialog now supports keyboard shortcuts on the candidate table: **Enter** opens Inspect, **Delete** sends-to-trash (with confirmation). Completes the v1.7.14 actions story so power users don't need to right-click.
+
+### Why this matters
+
+v1.7.14 added right-click context menu actions (Inspect / Set status / Send to trash). For keyboard-driven users, that still requires reaching for the mouse. v1.7.16 adds the obvious shortcut equivalents — Enter and Delete — so users can arrow-key through candidates and act on them without touching the trackpad. Standard desktop UX convention.
+
+### What's new
+
+- **`eventFilter(obj, event)` method** on `TierDialog` — listens for `QEvent.KeyPress` on the candidate table widget
+- **Two keyboard shortcuts:**
+  - **Enter / Return** → dispatches to `_action_inspect(file_ent)` for the currently selected row (same as right-click → Inspect)
+  - **Delete** → dispatches to `_action_send_to_trash(file_ent)` with confirmation dialog (same as right-click → Send to trash)
+- **`_handle_enter_shortcut()` + `_handle_delete_shortcut()` slot methods** — read `currentRow()`, resolve via the new helper, dispatch to existing action handlers
+- **Refactored: `_resolve_row_to_file_entity(row)` helper** — extracted the row→FileEntity resolution logic from `_on_table_context_menu` so both keyboard and mouse paths share one well-tested implementation. Returns `None` on out-of-range / missing / malformed / deleted; pops the "file not found" warning only when appropriate.
+- **Event filter installed** in `_build_ui` via `self._table.installEventFilter(self)` right after the context menu policy setup.
+- **Non-matching keys fall through** — `eventFilter` returns `False` for any key other than Enter/Delete, so normal table behavior (typeahead search, arrow navigation, page-up/down) is preserved.
+- **Event filter scoped to the table** — events from other widgets are explicitly ignored (Test 7 verifies).
+
+### Files changed
+
+- `src/curator/gui/dialogs.py` — +50 lines net (-22 from refactor extracting `_resolve_row_to_file_entity`; +72 for the new `eventFilter`, 2 shortcut handlers, and helper)
+- `docs/releases/v1.7.16.md` — new release notes
+
+### Verification
+
+- **7-test headless suite** (`test_tierdialog_keys.py`):
+  1. `eventFilter` method exists + helper methods (`_handle_enter_shortcut`, `_handle_delete_shortcut`) are callable
+  2. `_resolve_row_to_file_entity` returns `None` cleanly on out-of-range rows (-1, 99999)
+  3. Synthetic file flows through scan → row found → `_resolve_row_to_file_entity` returns matching FileEntity
+  4. `_handle_enter_shortcut` dispatches to `_action_inspect` with correct curator_id (monkeypatched recorder)
+  5. `_handle_delete_shortcut` dispatches to `_action_send_to_trash` with correct curator_id
+  6. **`eventFilter` intercepts real `QKeyEvent`** for Enter + Delete (returns `True`); 'A' key falls through (returns `False`)
+  7. Event filter ignores events from non-table objects
+- **Full pytest baseline**: ✅ 1438 passed, 9 skipped, 0 failed (unchanged across the 17-feature arc)
+
+### Authoritative-principle catches (this turn)
+
+**0 bugs caught.** Clean first-try ship. The refactor (extracting `_resolve_row_to_file_entity`) was the trickiest part because it required preserving exact behavior — the prior v1.7.14 code popped a warning dialog only in the "file not found in DB" case, not on the other no-op conditions. Test 2's out-of-range assertion plus Test 3's resolution success caught this design correctness on first run.
+
+**Lesson #48 logged**: when adding a second consumer of an existing inline code path (here: keyboard shortcuts on top of an existing context-menu resolution chain), **extract the shared logic into a helper before adding the second consumer**. The shared helper is then tested once (out-of-range, valid path, error paths) and both consumers benefit from the same correctness guarantees — no need to duplicate the resolution logic + risk drift.
+
+### v1.7.16 limitations
+
+- **No status-change shortcuts** — 1/2/3/4 keys could map to vital/active/provisional/junk, but those would conflict with future typeahead-search functionality if the table ever gains it. Deferred.
+- **No multi-select bulk shortcuts** — Delete still acts on the single current row even if multiple are selected. Bulk operations on the whole selection set would be a v1.8 addition.
+- **No Escape-to-close** — default dialog behavior handles this via QDialog; no custom wiring needed.
+- **No accelerator hints in UI** — the menu items don't show "(Del)" or "(Enter)" suffix yet. A future polish could add `QAction.setShortcut(QKeySequence.Delete)` for proper Qt menu rendering.
+
 ## [1.7.15] — 2026-05-11 — T-B04 v5: JWT + GitLab + Atlassian patterns
 
 **Headline:** `curator scan-pii` gains 3 more HIGH-severity patterns: **JWT** (with the dual `eyJ` prefix trick that distinguishes it from Discord's 3-segment format), **GitLab Personal Access Token**, **Atlassian API token** (Jira/Confluence/Bitbucket). Total patterns: **17** (was 14).

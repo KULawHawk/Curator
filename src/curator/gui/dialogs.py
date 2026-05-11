@@ -3499,6 +3499,9 @@ class TierDialog(QDialog):
         # the exact cursor position.
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._on_table_context_menu)
+        # v1.7.16: install event filter for keyboard shortcuts
+        # (Enter = Inspect, Del = Send to trash) on the table widget.
+        self._table.installEventFilter(self)
         h = self._table.horizontalHeader()
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
@@ -3618,7 +3621,85 @@ class TierDialog(QDialog):
 
     # ------------------------------------------------------------------
     # v1.7.14: Right-click context menu
+    # v1.7.16: Keyboard shortcuts (Enter = Inspect, Del = Trash)
     # ------------------------------------------------------------------
+
+    def _resolve_row_to_file_entity(self, row: int):
+        """Map a table row index back to a :class:`FileEntity`.
+
+        Shared resolution helper used by both the right-click context
+        menu (v1.7.14) and the keyboard shortcut handlers (v1.7.16).
+        Returns ``None`` if the row is out of range, doesn't have a
+        stored curator_id, has a malformed UUID string, or the file
+        no longer exists in the DB.
+
+        Pops a ``QMessageBox.warning`` only in the "file no longer
+        exists" case (the others are silent no-ops that an interactive
+        UI shouldn't make noise about).
+        """
+        if row < 0 or row >= self._table.rowCount():
+            return None
+        path_item = self._table.item(row, 0)
+        if path_item is None:
+            return None
+        curator_id_str = path_item.data(Qt.ItemDataRole.UserRole)
+        if not curator_id_str:
+            return None
+
+        import uuid as _uuid
+        try:
+            curator_id = _uuid.UUID(curator_id_str)
+        except (ValueError, TypeError):
+            return None
+        try:
+            file_ent = self.runtime.file_repo.get(curator_id)
+        except Exception:  # noqa: BLE001
+            file_ent = None
+        if file_ent is None:
+            QMessageBox.warning(
+                self, "File not found",
+                f"Could not load file metadata for {curator_id}. "
+                "It may have been removed since the scan ran.",
+            )
+            return None
+        return file_ent
+
+    def eventFilter(self, obj, event):
+        """Handle keyboard shortcuts on the candidate table (v1.7.16).
+
+        Listens for keyPress events on ``self._table``:
+          * Enter / Return → Inspect (same as right-click → Inspect)
+          * Delete           → Send to trash (with confirmation)
+
+        Returns True to consume the event (so default table behavior —
+        like opening an inline editor on Enter — doesn't fire). All other
+        events fall through to the default handler.
+        """
+        from PySide6.QtCore import QEvent
+        if obj is self._table and event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self._handle_enter_shortcut()
+                return True
+            if key == Qt.Key.Key_Delete:
+                self._handle_delete_shortcut()
+                return True
+        # Fall through for everything else; preserve parent behavior
+        return super().eventFilter(obj, event)
+
+    def _handle_enter_shortcut(self) -> None:
+        """Enter key: invoke Inspect on the currently selected row."""
+        row = self._table.currentRow()
+        file_ent = self._resolve_row_to_file_entity(row)
+        if file_ent is not None:
+            self._action_inspect(file_ent)
+
+    def _handle_delete_shortcut(self) -> None:
+        """Delete key: invoke Send-to-trash (with confirmation) on the selected row."""
+        row = self._table.currentRow()
+        file_ent = self._resolve_row_to_file_entity(row)
+        if file_ent is not None:
+            self._action_send_to_trash(file_ent)
 
     def _on_table_context_menu(self, pos) -> None:
         """Show a right-click context menu for the candidate under the cursor.
@@ -3634,31 +3715,8 @@ class TierDialog(QDialog):
         from PySide6.QtWidgets import QMenu
 
         row = self._table.rowAt(pos.y())
-        if row < 0:
-            return
-        path_item = self._table.item(row, 0)
-        if path_item is None:
-            return
-        curator_id_str = path_item.data(Qt.ItemDataRole.UserRole)
-        if not curator_id_str:
-            return
-
-        # Resolve to FileEntity (the table might be filtered/sorted)
-        import uuid as _uuid
-        try:
-            curator_id = _uuid.UUID(curator_id_str)
-        except (ValueError, TypeError):
-            return
-        try:
-            file_ent = self.runtime.file_repo.get(curator_id)
-        except Exception:  # noqa: BLE001
-            file_ent = None
+        file_ent = self._resolve_row_to_file_entity(row)
         if file_ent is None:
-            QMessageBox.warning(
-                self, "File not found",
-                f"Could not load file metadata for {curator_id}. "
-                "It may have been removed since the scan ran.",
-            )
             return
 
         menu = QMenu(self)
