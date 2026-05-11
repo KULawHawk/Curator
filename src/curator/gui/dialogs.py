@@ -3192,3 +3192,181 @@ class VersionStackDialog(QDialog):
     @property
     def last_stacks(self):
         return self._last_stacks
+
+
+# ---------------------------------------------------------------------------
+# ForecastDialog (v1.7.2, T-B01) — drive capacity prediction
+# ---------------------------------------------------------------------------
+#
+# Read-only viewer for ForecastService.compute_all_drives() results.
+# Pure UI; the math lives in services/forecast.py.
+
+
+class ForecastDialog(QDialog):
+    """Read-only viewer for drive-capacity forecasts.
+
+    Mirrors the ``curator forecast`` CLI output in a GUI window.
+    """
+
+    def __init__(self, runtime: "CuratorRuntime", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.runtime = runtime
+        self._last_forecasts: list[Any] = []
+
+        self.setWindowTitle("Curator - Drive capacity forecast")
+        self.setMinimumWidth(680)
+        self.resize(740, 560)
+        self._build_ui()
+        self._refresh()
+
+    def _build_ui(self) -> None:
+        from PySide6.QtWidgets import QScrollArea
+
+        layout = QVBoxLayout(self)
+
+        # Header
+        header = QLabel(
+            "<b>Drive capacity forecast</b><br>"
+            "<i>Linear-fits monthly indexing rate from the files table"
+            " and projects when each drive hits 95% / 99% capacity.</i>"
+        )
+        header.setWordWrap(True)
+        header.setStyleSheet("padding: 4px;")
+        layout.addWidget(header)
+
+        # Scrollable container for per-drive cards
+        self._drives_container = QWidget()
+        self._drives_layout = QVBoxLayout(self._drives_container)
+        self._drives_layout.setContentsMargins(0, 0, 0, 0)
+        self._drives_layout.addStretch(1)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self._drives_container)
+        layout.addWidget(scroll, 1)
+
+        # Footer
+        footer = QHBoxLayout()
+        self._btn_refresh = QPushButton("Refresh")
+        self._btn_refresh.clicked.connect(self._refresh)
+        footer.addWidget(self._btn_refresh)
+        footer.addStretch(1)
+        self._btn_close = QPushButton("Close")
+        self._btn_close.clicked.connect(self.reject)
+        footer.addWidget(self._btn_close)
+        layout.addLayout(footer)
+
+    def _refresh(self) -> None:
+        # Clear existing drive cards (keep trailing stretch)
+        while self._drives_layout.count() > 1:
+            item = self._drives_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        try:
+            forecasts = self.runtime.forecast.compute_all_drives()
+        except Exception as e:  # noqa: BLE001
+            err = QLabel(
+                f"<span style='color: #C62828;'><b>Error:</b>"
+                f" {type(e).__name__}: {e}</span>"
+            )
+            err.setWordWrap(True)
+            self._drives_layout.insertWidget(0, err)
+            return
+
+        self._last_forecasts = forecasts
+
+        if not forecasts:
+            lbl = QLabel("<i>No fixed drives found.</i>")
+            lbl.setStyleSheet("color: gray; padding: 8px;")
+            self._drives_layout.insertWidget(0, lbl)
+            return
+
+        # Render one card per drive
+        for f in forecasts:
+            self._drives_layout.insertWidget(
+                self._drives_layout.count() - 1,
+                self._build_drive_card(f),
+            )
+
+    def _build_drive_card(self, f) -> "QGroupBox":
+        # Color-code by status
+        colors = {
+            "fit_ok": ("#2E7D32", "OK"),
+            "past_95pct": ("#EF6C00", "WARNING"),
+            "past_99pct": ("#C62828", "CRITICAL"),
+            "insufficient_data": ("#757575", "INSUFFICIENT DATA"),
+            "no_growth": ("#757575", "NO GROWTH"),
+        }
+        color, badge = colors.get(f.status, ("#757575", f.status.upper()))
+
+        grp = QGroupBox(f.drive_path)
+        gl = QVBoxLayout(grp)
+
+        # Top row: percentage badge + key stats
+        top = QHBoxLayout()
+        pct_lbl = QLabel(
+            f"<span style='font-size: 22pt; color: {color}; font-weight: bold;'>"
+            f"{f.current_pct:.1f}%</span>"
+        )
+        top.addWidget(pct_lbl)
+
+        stats_text = (
+            f"<b>{f.current_used_gb:.1f} GB</b> used / {f.current_total_gb:.1f} GB total<br>"
+            f"<b>{f.current_free_gb:.1f} GB</b> free<br>"
+            f"<span style='color: {color}; font-weight: bold;'>[{badge}]</span>"
+        )
+        if f.slope_gb_per_day is not None:
+            stats_text += (
+                f"<br><i>Fill rate: {f.slope_gb_per_day:.3f} GB/day"
+                f" (R\u00b2={f.fit_r_squared:.2f})</i>"
+            )
+        stats_lbl = QLabel(stats_text)
+        top.addWidget(stats_lbl, 1)
+        gl.addLayout(top)
+
+        # Status message
+        msg = QLabel(f.status_message)
+        msg.setWordWrap(True)
+        msg.setStyleSheet(f"color: {color}; padding: 6px;")
+        gl.addWidget(msg)
+
+        # Projection table (if we have one)
+        if f.days_to_95pct is not None or f.days_to_99pct is not None:
+            rows = []
+            if f.eta_95pct is not None:
+                rows.append([
+                    "95% (warning)",
+                    f"{f.days_to_95pct} day(s)",
+                    f.eta_95pct.strftime("%Y-%m-%d"),
+                ])
+            if f.eta_99pct is not None:
+                rows.append([
+                    "99% (critical)",
+                    f"{f.days_to_99pct} day(s)",
+                    f.eta_99pct.strftime("%Y-%m-%d"),
+                ])
+            if rows:
+                proj = _make_table(["Threshold", "Days from now", "ETA"], rows)
+                proj.setMinimumHeight(80)
+                proj.setMaximumHeight(120)
+                gl.addWidget(proj)
+
+        # History
+        if f.monthly_history:
+            hist_lbl = QLabel(f"<b>History:</b> {len(f.monthly_history)} month(s)")
+            gl.addWidget(hist_lbl)
+            hist_rows = [
+                [b.month, f"{b.file_count:,}", f"{b.gb_added:.2f} GB"]
+                for b in f.monthly_history[-6:]
+            ]
+            hist_tbl = _make_table(["Month", "Files added", "GB added"], hist_rows)
+            hist_tbl.setMinimumHeight(min(28 * (len(hist_rows) + 1) + 10, 180))
+            gl.addWidget(hist_tbl)
+
+        return grp
+
+    @property
+    def last_forecasts(self):
+        return self._last_forecasts

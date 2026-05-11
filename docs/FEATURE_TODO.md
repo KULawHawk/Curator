@@ -61,11 +61,12 @@ The heavy machinery exists. Work is wiring + a small UI/glue layer.
 New code, but slots cleanly into existing services.
 
 ### `T-B01` — Heuristic Space Forecasting
-- **Status:** proposed
+- **Status:** **shipped v1.7.2**
 - **Effort:** S
-- **Depends on:** none (uses existing `file_repo` + `audit_repo`)
-- **What:** `curator forecast` subcommand that linear-regresses scan history to predict when local drives hit capacity.
-- **Why:** Zero risk, useful, ~200 lines. Settings-tab widget can show "47 days to 95% full" inline.
+- **Depends on:** none (uses existing `file_repo` + psutil)
+- **What:** `curator forecast` subcommand + Tools menu dialog that linear-regresses scan history to predict when local drives hit capacity.
+- **v1.7.2 delivery:** `ForecastService` with `compute_disk_forecast()` + `compute_all_drives()`. CLI command + ForecastDialog (Tools menu). 5 status states including `past_95pct` / `past_99pct` for already-over-threshold drives.
+- **Why:** Zero risk, useful, ~210 lines. Caught the canonical-DB 99.8%-full signal immediately on first run.
 
 ### `T-B02` — Compliance Retention Enforcement
 - **Status:** proposed

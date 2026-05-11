@@ -40,6 +40,7 @@ from curator.services import (
     ScanService,
     TrashService,
 )
+from curator.services.forecast import ForecastService
 from curator.storage import CuratorDB
 from curator.storage.repositories import (
     AuditRepository,
@@ -97,6 +98,7 @@ class CuratorRuntime:
     document: DocumentService
     cleanup: CleanupService
     migration: MigrationService
+    forecast: ForecastService
 
     # Output controls (set by CLI flags)
     json_output: bool = False
@@ -216,6 +218,7 @@ def build_runtime(
         migration_jobs=migration_job_repo,
         pm=pm,
     )
+    forecast = ForecastService(db)
 
     return CuratorRuntime(
         config=config,
@@ -244,6 +247,7 @@ def build_runtime(
         document=document,
         cleanup=cleanup,
         migration=migration,
+        forecast=forecast,
         json_output=json_output,
         no_color=no_color,
         verbosity=verbosity,

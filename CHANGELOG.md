@@ -4,6 +4,58 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.2] — 2026-05-11 — T-B01 Heuristic Space Forecasting
+
+**Headline:** Second feature shipped from the v1.7.0 backlog. New `ForecastService` linear-fits monthly indexing rate from the files table; `curator forecast` CLI + Tools menu "Drive capacity forecast..." dialog surface days-to-95%/99%-full projections per drive.
+
+### Why this matters
+
+The canonical DB has 86,943 files / 10.74 GB indexed. Jake's actual C:\ drive is currently **99.8% full** (950.5 / 952.8 GB). Forecasting matters — but more critically, the dialog surfaces the "already past threshold, cleanup urgent" signal directly so it's not just a future-projection toy.
+
+### Files changed
+
+- **`src/curator/services/forecast.py`** — NEW. ~210 lines. `ForecastService(db)` with `compute_disk_forecast(drive_path) -> DiskForecast` and `compute_all_drives() -> list[DiskForecast]`. Pure-function `_linear_fit(history)` helper does least-squares math on monthly buckets. `DiskForecast` + `MonthlyBucket` dataclasses encode results. 5 status states: `fit_ok`, `past_95pct`, `past_99pct`, `insufficient_data`, `no_growth`.
+- **`src/curator/cli/runtime.py`** — added `ForecastService` import + `forecast: ForecastService` field on `CuratorRuntime` + construction in `build_runtime()`.
+- **`src/curator/cli/main.py`** — added `curator forecast [drive]` command (~95 lines). Pretty-printed Rich output color-coded by status. `--json` mode produces machine-readable payload with all fields including ISO-format ETA timestamps.
+- **`src/curator/gui/dialogs.py`** — added `ForecastDialog(QDialog)` class (~150 lines). Per-drive cards with large color-coded percentage badge, used/free/rate stats, projection table (threshold / days from now / ETA date), monthly history (last 6 months). Read-only.
+- **`src/curator/gui/main_window.py`** — Tools menu: new "Drive capacity forecast..." item + `_slot_open_forecast` method.
+- **`docs/FEATURE_TODO.md`** — marked T-B01 shipped.
+
+### CLI behavior on canonical DB
+
+```
+$ curator forecast
+
+C:\
+  Used:     950.5 GB / 952.8 GB  (99.8%)
+  Free:       2.3 GB
+  Drive is already at 99.8% capacity (>= 99% critical). No projection needed - cleanup is urgent.
+  History (1 month(s)):
+    2026-05: +86,943 files, +10.74 GB
+```
+
+### v1.7.2 limitations
+
+- **Index size != drive used space.** Curator only knows files it has indexed. The fill rate assumes indexed-growth is representative of total-drive-growth, which is a strong assumption. For more accurate forecasting, scan more roots.
+- **Need >=2 months of `seen_at` history** for linear fit. With 1 month (current canonical state) the dialog/CLI reports `insufficient_data`.
+- **No retroactive snapshots.** True forecasting would need historical "DB size at month N" snapshots; we don't store those. The current fit treats each file's `seen_at` as its addition time — close but not identical to scan-snapshot-history.
+- **`compute_all_drives` skips removable/optical drives** (per `psutil.disk_partitions(all=False)`).
+
+### Verification
+
+- 5-test service suite: linear-fit math correctness (perfect fit → R²=0.999; noisy data → R²<1.0); canonical-DB ForecastService probe; compute_all_drives works; synthetic 4-month growing-drive scenario yields expected slope. All PASS.
+- 3-test dialog E2E suite: opens + auto-refreshes against canonical, refresh recomputes, runtime has forecast attribute. All PASS.
+- Full pytest: ✅ 1438 passed, 9 skipped, 0 failed.
+
+### Authoritative-source-first principle applied
+
+Caught **3 model/field assumptions** during the build:
+1. `scan_jobs.files_added` / `.bytes_indexed` → actual `files_seen` / `files_hashed`; **NO `bytes_indexed` column exists**. Pivoted forecast to use `files.size` aggregated by `seen_at` instead.
+2. `rt.db.execute(sql)` — reused the lesson from v1.7.1 (`CuratorDB.execute()` is exposed directly, not via `_conn` or `conn()`).
+3. Rich `console` is not module-level in `cli/main.py`; needs `console = _console(rt)` at the start of each command function.
+
+All caught by `inspect.signature` + `model_fields` + a live CLI smoke test before commit.
+
 ## [1.7.1] — 2026-05-11 — T-A01 Fuzzy-Match Version Stacking (read-only viewer)
 
 **Headline:** First feature shipped from the v1.7.0 backlog — a UI for the "Draft_1 / Draft_Final / Draft_FINAL_v2" pattern. New `LineageService.find_version_stacks()` method walks NEAR_DUPLICATE + VERSION_OF edges as connected components; new `VersionStackDialog` (accessible via Tools menu) renders each stack as a collapsible group.

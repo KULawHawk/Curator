@@ -3305,5 +3305,102 @@ def _render_migration_report(
             console.print(f"  [dim]... and {len(failed) - 20} more[/]")
 
 
+# ------------------------------------------------------------------
+# v1.7.2 (T-B01): curator forecast - drive capacity prediction
+# ------------------------------------------------------------------
+
+@app.command(name="forecast")
+def forecast_cmd(
+    ctx: typer.Context,
+    drive: str = typer.Argument(
+        None,
+        help="Drive mount point (e.g. 'C:\\' on Windows, '/' on Unix). "
+             "Omit to forecast every mounted fixed disk.",
+    ),
+) -> None:
+    """Predict when local drives reach capacity.
+
+    Linear-fits monthly indexing rate from the files table and projects
+    when each drive hits 95% / 99% capacity. With <2 months of history,
+    reports 'insufficient data' and asks you to check back later.
+
+    Already-past-threshold drives are flagged with no projection - they
+    need cleanup now, not later.
+    """
+    rt: CuratorRuntime = ctx.obj
+    console = _console(rt)
+
+    if drive:
+        forecasts = [rt.forecast.compute_disk_forecast(drive)]
+    else:
+        forecasts = rt.forecast.compute_all_drives()
+
+    if not forecasts:
+        console.print("[yellow]No fixed drives found.[/]")
+        return
+
+    if rt.json_output:
+        import json
+        payload = []
+        for f in forecasts:
+            payload.append({
+                "drive_path": f.drive_path,
+                "current_used_gb": round(f.current_used_gb, 2),
+                "current_total_gb": round(f.current_total_gb, 2),
+                "current_free_gb": round(f.current_free_gb, 2),
+                "current_pct": round(f.current_pct, 1),
+                "slope_gb_per_day": (
+                    round(f.slope_gb_per_day, 3)
+                    if f.slope_gb_per_day is not None else None
+                ),
+                "fit_r_squared": (
+                    round(f.fit_r_squared, 3)
+                    if f.fit_r_squared is not None else None
+                ),
+                "days_to_95pct": f.days_to_95pct,
+                "days_to_99pct": f.days_to_99pct,
+                "eta_95pct": f.eta_95pct.isoformat() if f.eta_95pct else None,
+                "eta_99pct": f.eta_99pct.isoformat() if f.eta_99pct else None,
+                "status": f.status,
+                "status_message": f.status_message,
+            })
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    for f in forecasts:
+        # Color-code by status
+        status_colors = {
+            "fit_ok": "green",
+            "past_95pct": "yellow",
+            "past_99pct": "red",
+            "insufficient_data": "dim",
+            "no_growth": "dim",
+        }
+        color = status_colors.get(f.status, "white")
+
+        console.print(f"\n[bold]{f.drive_path}[/]")
+        console.print(
+            f"  Used:  {f.current_used_gb:>8.1f} GB / {f.current_total_gb:.1f} GB"
+            f"  ([{color}]{f.current_pct:.1f}%[/])"
+        )
+        console.print(f"  Free:  {f.current_free_gb:>8.1f} GB")
+
+        if f.slope_gb_per_day is not None:
+            console.print(
+                f"  Rate:  {f.slope_gb_per_day:>8.3f} GB/day"
+                f"  (R²={f.fit_r_squared:.3f})"
+            )
+
+        console.print(f"  [{color}]{f.status_message}[/]")
+
+        if f.monthly_history:
+            console.print(f"  [dim]History ({len(f.monthly_history)} month(s)):[/]")
+            for b in f.monthly_history[-6:]:  # last 6 months at most
+                console.print(
+                    f"    [dim]{b.month}: +{b.file_count:>6,} files, "
+                    f"+{b.gb_added:>6.2f} GB[/]"
+                )
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()

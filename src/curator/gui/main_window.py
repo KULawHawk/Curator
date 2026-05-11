@@ -186,6 +186,11 @@ class CuratorMainWindow(QMainWindow):
         act_stacks.triggered.connect(self._slot_open_version_stacks)
         menu_tools.addAction(act_stacks)
 
+        # v1.7.2 (T-B01): Drive capacity forecast dialog.
+        act_forecast = QAction("&Drive capacity forecast...", self)
+        act_forecast.triggered.connect(self._slot_open_forecast)
+        menu_tools.addAction(act_forecast)
+
         # v1.7 alpha: real HealthCheckDialog (native PySide6, in-process).
         act_health = QAction("&Health check", self)
         act_health.triggered.connect(self._slot_open_health_check)
@@ -1857,6 +1862,25 @@ class CuratorMainWindow(QMainWindow):
             )
             return
         dlg = GroupDialog(self.runtime, self)
+        dlg.exec()
+
+    def _slot_open_forecast(self) -> None:
+        """Open the ForecastDialog (v1.7.2, T-B01).
+
+        Reads :class:`ForecastService.compute_all_drives` and renders
+        per-drive cards with current usage, fill rate, and projected
+        days-to-95%/99% capacity.
+        """
+        try:
+            from curator.gui.dialogs import ForecastDialog
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self,
+                "Forecast dialog unavailable",
+                f"Could not import ForecastDialog: {e}",
+            )
+            return
+        dlg = ForecastDialog(self.runtime, self)
         dlg.exec()
 
     def _slot_open_version_stacks(self) -> None:
