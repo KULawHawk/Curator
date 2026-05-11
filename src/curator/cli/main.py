@@ -2827,6 +2827,20 @@ def migrate_cmd(
              "warning (no atomic-rename hook in the source plugin "
              "contract yet). Phase 3 P2.",
     ),
+    no_autostrip: bool = typer.Option(
+        False, "--no-autostrip",
+        help="v1.7.35: opt out of the v1.7.29 auto-strip behavior for "
+             "migrations to a destination source with share_visibility="
+             "'public'. Default (without this flag): when dst is public "
+             "and a MetadataStripper is wired, every successfully migrated "
+             "file gets its metadata auto-stripped in place after the "
+             "verified move. With --no-autostrip: the move still happens "
+             "but the stripping does not. The override is audit-logged "
+             "(action='migration.autostrip.opted_out') when the dst is "
+             "actually public, so the trail records WHY the strip didn't "
+             "happen on a posture that would normally trigger it. No-op "
+             "when dst is private/team (no strip was going to happen).",
+    ),
     keep_source: bool = typer.Option(
         False, "--keep-source/--trash-source",
         help="--keep-source: dst created+verified, src untouched, index "
@@ -3045,6 +3059,7 @@ def migrate_cmd(
             include_caution=include_caution,
             max_retries=max_retries,
             on_conflict=on_conflict,
+            no_autostrip=no_autostrip,
         )
     except ValueError as e:
         # set_on_conflict_mode raised on an unknown mode
@@ -4169,6 +4184,13 @@ def tier_cmd(
         False, "--no-header",
         help="Suppress the CSV header row. Only meaningful with --csv.",
     ),
+    no_autostrip: bool = typer.Option(
+        False, "--no-autostrip",
+        help="v1.7.35: opt out of the v1.7.29 auto-strip behavior when "
+             "migrating to a public-share_visibility source via --apply. "
+             "See 'curator migrate --help' for full semantics. No-op "
+             "without --apply or when dst is not public.",
+    ),
 ) -> None:
     """Tiered storage manager — identify files for cold-tier migration (T-B05).
 
@@ -4470,6 +4492,7 @@ def tier_cmd(
         full_plan,
         keep_source=keep_source,
         include_caution=True,
+        no_autostrip=no_autostrip,
     )
 
     # Tally outcomes

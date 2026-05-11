@@ -4,6 +4,100 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.35] — 2026-05-11 — `--no-autostrip` migration opt-out (closes v1.7.29 limitation)
+
+**Headline:** New `--no-autostrip` flag on `curator migrate` and `curator tier --apply` lets the caller opt out of v1.7.29's auto-strip behavior on a per-migration basis. When the destination source has `share_visibility='public'`, the default is to auto-strip EXIF/docProps/PDF metadata on every successfully migrated file (v1.7.29 T-B07 completion). With `--no-autostrip`, the move still happens but the stripping doesn't — with the override recorded in the audit log so administrators can see why a public-dst migration didn't strip when they'd expect it to. **Bonus**: this ship also adds dedicated test coverage for the v1.7.29 auto-strip path (`tests/unit/test_migration_autostrip.py`, +5 tests), which was a real coverage gap.
+
+### Why this matters
+
+v1.7.29's T-B07 completion made metadata-stripping the **default** for migrations to a `share_visibility='public'` destination. This was the right default for privacy: a public dst presumably means "someone outside my org will see these files," and EXIF/GPS-coords/Author-fields leak personally identifying information by default. Stripping by default prevents accidental leakage.
+
+But there are legitimate cases where you want to migrate without stripping:
+
+* **Forensic archival** — you specifically want to preserve the original EXIF / docProps / PDF metadata as evidence. Stripping would destroy the chain of custody.
+* **Cross-system replication** — you're moving files to another Curator instance you control, and the auto-strip is wasted work because the destination has its own privacy posture.
+* **Re-organization within a public source** — you're moving files between subfolders of the same public dst; stripping again every time isn't necessary.
+* **Debugging / dry-run** — you want to see what would migrate without the side effect of permanent metadata removal.
+
+v1.7.35 makes the opt-out an explicit, audit-logged choice rather than requiring users to temporarily flip the source's `share_visibility` away from public (which would lose the default protection for all subsequent migrations) or to bypass the migration system entirely.
+
+### What's new
+
+**`--no-autostrip` flag** on two commands:
+  * `curator migrate ... --no-autostrip` (the direct migration command)
+  * `curator tier RECIPE --apply --no-autostrip` (the tiered-storage migration command)
+
+**`MigrationService.apply(..., no_autostrip=False)` kwarg**:
+  * New keyword argument with `False` default (preserves v1.7.29 behavior exactly)
+  * When `True` AND destination source has `share_visibility='public'` AND a metadata_stripper is wired: emits a new `migration.autostrip.opted_out` audit event with details `{reason, plan_move_count, dst_share_visibility}` and skips the strip phase
+  * When `True` but destination is private/team: no-op (auto-strip wasn't going to happen anyway; no audit event because no behavior change occurred)
+  * When `True` but no metadata_stripper is wired: no-op (the gating condition never holds)
+
+**Audit event semantics**:
+
+| Scenario | Audit event |
+|---|---|
+| dst public + no flag (default) | `migration.autostrip.enabled` (v1.7.29) |
+| dst public + `--no-autostrip` | `migration.autostrip.opted_out` **(NEW)** |
+| dst private/team + anything | None (nothing to log) |
+
+The opt-out event is only logged when the override actually changes behavior. Quiet no-ops don't pollute the audit log.
+
+**New test module** `tests/unit/test_migration_autostrip.py` (+5 tests):
+  * `test_autostrip_fires_when_dst_is_public` — verifies v1.7.29 baseline (strip fires + enabled event)
+  * `test_no_autostrip_blocks_strip_when_dst_is_public` — verifies v1.7.35 opt-out skips strip
+  * `test_no_autostrip_audit_event_when_dst_is_public` — verifies the opted_out event fires
+  * `test_no_autostrip_is_noop_when_dst_is_private` — verifies private-dst path is silent
+  * `test_no_autostrip_is_noop_when_no_stripper_wired` — verifies missing-stripper path is silent
+
+The test module also fills the v1.7.29 coverage gap — prior to this ship, the auto-strip path had zero test coverage despite shipping in v1.7.29. The RecordingStripper test double makes it easy to verify auto-strip behavior across all four configuration combinations.
+
+### Files changed
+
+- `src/curator/services/migration.py` — +28 lines (kwarg + opted_out branch + audit event)
+- `src/curator/cli/main.py` — +32 lines (flag + plumbing in 2 commands)
+- `tests/unit/test_migration_autostrip.py` — NEW (313 lines, 5 tests)
+- `CHANGELOG.md` — this entry
+- `docs/releases/v1.7.35.md` — release notes
+
+### Verification
+
+- **All 5 new autostrip tests pass** in 2.87s
+- **Full pytest baseline**: ✅ **1467 passed**, 9 skipped, 0 failed in 197s (was 1462 at v1.7.34; +5 new tests, all passing)
+- **CLI signature check**: `migrate_cmd` and `tier_cmd` both have `no_autostrip` kwarg with `OptionInfo` (typer flag) default; `MigrationService.apply` has `no_autostrip` kwarg with `False` default
+- **Lesson #50 lint**: still passing on every push via the v1.7.34 pre-commit hook
+
+### Authoritative-principle catches (this turn)
+
+**1 test harness bug caught and fixed.** The first test attempt used `dst_source_id="public_dst"` while seeding files under `src_source_id="local"`, which triggered the cross-source migration path. That path requires plugin hooks (`curator_source_read_bytes`, `curator_source_write`) that the unit test harness doesn't provide, so the migrations failed with `RuntimeError: cross-source: no plugin handled curator_source_read_bytes`. Fix: keep `src_source_id == dst_source_id == "local"` and update the local source's `share_visibility` field in place (auto-strip gates on dst source's visibility, not on whether src == dst). Same code path, correct condition.
+
+**Codified as lesson #55: when writing tests for a feature whose gating depends on a source attribute (not on source identity), update the existing source's attribute in place rather than registering a new source. Cross-source migrations need plugin infrastructure (`curator_source_read_bytes` / `curator_source_write` hooks) that unit tests typically don't have; staying same-source keeps the test on the local-FS code path.**
+
+**0 production bugs caught.** The autostrip code from v1.7.29 was correct; the v1.7.35 additions were a clean extension. The v1.7.32 lint test passed throughout (no new glyph-related strikes).
+
+### Limitations
+
+- **Phase 1 only.** `MigrationService.apply()` got the kwarg; `MigrationService.run_job()` (Phase 2 persistent path) did not. v1.7.29 only wired auto-strip into Phase 1, so the persistent path was already a `--no-autostrip` no-op. If Phase 2 ever gains auto-strip, this ship's flag will need to be plumbed there too. Documented in the service-level docstring.
+- **No per-file granularity.** The flag is per-migration, not per-file. If you want to strip some files but not others, you need two separate migrations (or a custom `MigrationService` subclass). The simpler design fits the common case; per-file control would add API surface for a use case nobody has reported yet.
+- **No `--strip` (force-enable) flag.** v1.7.35 only adds the opt-OUT direction. There's no `--strip` flag to force stripping on a private dst because stripping a private file you control by default isn't meaningfully helpful — the user can just call `curator export-clean` directly. The asymmetry is deliberate.
+- **GUI parity not yet shipped.** The `--no-autostrip` flag is CLI-only. The GUI's migration dialog (added in v1.7.27) has no equivalent toggle. v1.7.27's TierDialog can drive a CLI-via-subprocess migration that accepts the flag, but the in-process GUI path uses the service API directly and doesn't expose this kwarg in the dialog yet.
+
+### Lesson #55 (new): same-source vs cross-source in unit tests
+
+> **When testing a feature whose gating depends on a *source attribute* (e.g. `share_visibility`, `enabled`, plugin type) rather than on *source identity*, modify the existing source's attribute in place instead of registering a new source. Cross-source code paths in MigrationService and similar services require plugin hooks (`curator_source_read_bytes`, `curator_source_write`, `curator_source_rename`) that unit-test harnesses typically don't provide; staying same-source keeps the test on the local-FS code path. If the feature legitimately requires cross-source semantics, write the test under `tests/unit/test_migration_cross_source.py` where the plugin-stub harness is already established.**
+
+Caught this ship when the first round of autostrip tests all failed with `RuntimeError: cross-source: no plugin handled curator_source_read_bytes`. Fix took 5 minutes once the diagnostic was clear. The mistake was a category error (testing a same-source feature on the cross-source path because the test fixture used different source_ids); the lesson generalizes to any service whose dispatch is by source-id matching.
+
+### Cumulative arc state (after v1.7.35)
+
+- **35 ships**, all tagged, all baselines green
+- **pytest**: 1467 / 9 / 0 (+5 from v1.7.34, all v1.7.35 autostrip tests)
+- **CLI commands with `--no-autostrip`**: 2 (migrate, tier)
+- **Glyph constants codified**: 9 (CHECK, CROSS, ARROW, LARROW, ELLIPSIS, BLOCK, TIMES, WARN, SUPER2)
+- **Defensive layers for lesson #50**: 4 (code, tests, docs, git hook)
+- **Lessons in commit-message corpus**: #46–#55
+- **v1.7.29 T-B07 limitation closed**: the no-strip override is now an explicit, audit-logged choice rather than requiring a permanent share_visibility flip
+
 ## [1.7.34] — 2026-05-11 — Pre-commit hook for lesson #50 lint (layer 4)
 
 **Headline:** New optional git pre-commit hook at `.githooks/pre-commit` that runs the v1.7.32 lesson #50 lint test before allowing a commit. Activated per-clone with one command (`git config core.hooksPath .githooks`). Closes the v1.7.32 limitation that a developer who skipped pytest before commit could still push a literal glyph regression. **Lesson #50 now defended at four layers** (code helper, pytest lint, docs, git hook) — each layer is opt-in but stacks additively.

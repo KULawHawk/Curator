@@ -628,6 +628,7 @@ class MigrationService:
         include_caution: bool = False,
         max_retries: Any = _UNCHANGED,
         on_conflict: Any = _UNCHANGED,
+        no_autostrip: bool = False,
     ) -> MigrationReport:
         """Execute the plan with hash-verify-before-move per file.
 
@@ -699,23 +700,46 @@ class MigrationService:
         # in-place after the verified move completes. Both deps are
         # optional; callers wiring an old-style MigrationService get the
         # legacy behavior (migration only, no stripping).
+        #
+        # v1.7.35: callers can override the auto-strip via no_autostrip=True
+        # (surfaced as the --no-autostrip CLI flag). When the destination
+        # IS public, the override is audit-logged with action
+        # 'migration.autostrip.opted_out' so downstream tooling can see
+        # why a strip didn't happen on a posture that would normally
+        # trigger it. When the destination is NOT public, the override
+        # is a no-op (no strip was going to happen anyway).
         auto_strip = False
         if (self.source_repo is not None
                 and self.metadata_stripper is not None):
             dst_source = self.source_repo.get(plan.dst_source_id)
             if dst_source is not None and dst_source.share_visibility == "public":
-                auto_strip = True
-                if self.audit is not None:
-                    self.audit.log(
-                        actor="curator.migration",
-                        action="migration.autostrip.enabled",
-                        entity_type="source",
-                        entity_id=plan.dst_source_id,
-                        details={
-                            "reason": "dst_source has share_visibility=public",
-                            "plan_move_count": len(plan.moves),
-                        },
-                    )
+                if no_autostrip:
+                    # v1.7.35: explicit caller opt-out via --no-autostrip
+                    if self.audit is not None:
+                        self.audit.log(
+                            actor="curator.migration",
+                            action="migration.autostrip.opted_out",
+                            entity_type="source",
+                            entity_id=plan.dst_source_id,
+                            details={
+                                "reason": "caller passed no_autostrip=True (--no-autostrip)",
+                                "plan_move_count": len(plan.moves),
+                                "dst_share_visibility": dst_source.share_visibility,
+                            },
+                        )
+                else:
+                    auto_strip = True
+                    if self.audit is not None:
+                        self.audit.log(
+                            actor="curator.migration",
+                            action="migration.autostrip.enabled",
+                            entity_type="source",
+                            entity_id=plan.dst_source_id,
+                            details={
+                                "reason": "dst_source has share_visibility=public",
+                                "plan_move_count": len(plan.moves),
+                            },
+                        )
 
         for src_move in plan.moves:
             # Build fresh result copy (preserve plan-time fields, set apply-time fields)
