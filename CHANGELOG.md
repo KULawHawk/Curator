@@ -4,6 +4,87 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.44] — 2026-05-11 — Relative test import (second CI-caught bug)
+
+**Headline:** v1.7.43's CI run #2 surfaced a second latent local-vs-CI mismatch: `tests/unit/test_migration_autostrip.py` used `from tests.unit.test_migration import ...` (absolute) which worked locally via pytest's namespace-package handling but failed on CI with `ModuleNotFoundError: No module named 'tests'`. The fix is a 1-line switch to a relative import (`from .test_migration import ...`), valid because `tests/unit/__init__.py` exists.
+
+### Why this matters
+
+Second consecutive CI-caught bug in two ships. The pattern is now clearly visible: any latent local-vs-CI mismatch that's invisible to the developer running pytest in their .venv is exactly the class of bug that CI is designed to surface.
+
+The root cause was subtle: a mix of `__init__.py` files in the test tree:
+  * `tests/__init__.py` -- **MISSING**
+  * `tests/unit/__init__.py` -- exists
+  * `tests/gui/__init__.py` -- MISSING
+  * `tests/integration/__init__.py` -- exists
+
+With this mixed state, `tests` itself becomes a namespace package (Python 3.3+). Locally, pytest's rootdir + sys.path tricks make `from tests.unit.X` resolvable; on CI's clean install path, those tricks don't apply the same way and the import fails at collection time.
+
+The smallest fix that works everywhere: use a relative import. Since `tests/unit/__init__.py` DOES exist, `tests/unit/` is a real package and `.test_migration` is a valid sibling-module reference inside it.
+
+### What's new
+
+**`tests/unit/test_migration_autostrip.py` (changed L41-L46)**
+
+Before:
+```python
+from tests.unit.test_migration import (
+    migration_runtime,  # noqa: F401
+    _seed_real_file,
+)
+```
+
+After:
+```python
+# v1.7.44: switched from absolute to relative import (see comment for full
+# context). Worked locally via namespace-package tricks; failed on CI's
+# clean install path. Relative form is portable.
+from .test_migration import (
+    migration_runtime,  # noqa: F401
+    _seed_real_file,
+)
+```
+
+The inline comment documents the diagnosis so a future contributor doesn't "clean up" the import back to the absolute form without understanding the CI-vs-local subtlety.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `tests/unit/test_migration_autostrip.py` | +7 (comment) -1 (absolute import) | Relative import + diagnostic comment |
+| `CHANGELOG.md` | +N | v1.7.44 entry |
+| `docs/releases/v1.7.44.md` | +N | release notes |
+
+### Verification
+
+- **Local re-run**: 5/5 tests in `test_migration_autostrip.py` pass in 11.46s (verified post-fix)
+- **Audit of other test files**: only 1 file (this one) had a `from tests.` absolute import. No other files affected.
+- **Reproduction**: CI run #2 on `861d3d2` showed `ModuleNotFoundError: No module named 'tests'` at the test_migration_autostrip.py:42 import line
+- **Fix validation**: CI run #3 on this v1.7.44 push will be the proof. If green, v1.7.44 is closed and CI's first three runs ('found dep gap' -> 'found import gap' -> 'green') document the multiplier effect.
+
+### Authoritative-principle catches
+
+**Catch -- namespace-package handling differs between local and CI.** When pytest collects tests from a directory that mixes `__init__.py`-having and `__init__.py`-missing subdirs, the rootdir + sys.path discovery has subtly different behavior depending on:
+  * Whether the project was installed via `pip install -e .` (and which versions of pip / setuptools)
+  * Whether pytest's `rootdir` was inferred from `pyproject.toml`, a `pytest.ini`, or the CWD
+  * Whether the parent of `tests/` is on sys.path (often true locally via editable-install + .pth files, but not always on CI)
+
+This variability is structurally invisible without a clean-environment test run. **This is exactly what CI is for.**
+
+No new lesson codified -- this is again lesson #61 ("infrastructure beats features when missing") in concrete form. The second one in 30 minutes.
+
+### Limitations
+
+- **Asymmetric `__init__.py` files remain.** `tests/__init__.py` and `tests/gui/__init__.py` are still missing while `tests/unit/__init__.py` and `tests/integration/__init__.py` exist. The fix in v1.7.44 only changes the single broken import; the broader asymmetry isn't touched. A future cleanup ship could either add all four `__init__.py` files (making tests a regular package tree) OR remove the two existing ones (making everything a namespace package consistently). Either is portable; the mixed state is the source of subtle bugs like this one.
+- **Other CI-vs-local mismatches may exist.** Like the v1.7.43 catch, this is a pattern: each fresh CI run may reveal another latent issue. The fix pattern is the same: identify, fix, ship, validate.
+
+### Cumulative arc state (after v1.7.44)
+
+- **44 ships**, all tagged, anticipating green CI run #3
+- **pytest**: 1549 / 9 / 0 (unchanged)
+- **CI-caught bugs fixed**: 2 (v1.7.43 missing dep, v1.7.44 import resolution)
+- **Lessons captured**: #46–#61 (unchanged; this is lesson #61 demonstrated again)
+
 ## [1.7.43] — 2026-05-11 — Add `pytest-timeout` to `[dev]` extras (CI caught it on first run)
 
 **Headline:** v1.7.42's first CI run failed within 4 minutes with `pytest: error: unrecognized arguments: --timeout=120`. The local dev environment had `pytest-timeout` installed manually but pyproject's `[dev]` extras didn't declare it. Any new contributor running `scripts/setup_dev_env.py` would have hit the same error. v1.7.43 fixes the missing dep declaration -- a 1-line pyproject change.

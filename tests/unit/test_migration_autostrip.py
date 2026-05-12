@@ -38,8 +38,15 @@ from curator.services.migration import (
 )
 from curator.services.safety import SafetyLevel, SafetyReport
 
-# Import the fixtures from test_migration so we don't duplicate harness code
-from tests.unit.test_migration import (
+# Import the fixtures from test_migration so we don't duplicate harness code.
+# v1.7.44: switched from absolute (`from tests.unit.test_migration import ...`)
+# to relative import. Absolute form worked locally via pytest's namespace-
+# package handling but failed on CI with `ModuleNotFoundError: No module
+# named 'tests'` because `tests/__init__.py` doesn't exist (making `tests`
+# itself a namespace package whose discoverability depends on rootdir +
+# sys.path tricks that aren't portable). Relative import works because
+# `tests/unit/__init__.py` DOES exist, so this file lives in a real package.
+from .test_migration import (
     migration_runtime,  # noqa: F401 (re-exported pytest fixture)
     _seed_real_file,
 )
