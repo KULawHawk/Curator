@@ -4,6 +4,67 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.82] — 2026-05-12 — Phase Gamma: `services/lineage.py` unit tests (54% → 94%)
+
+Adds 32 focused unit tests for `LineageService`. Coverage on `services/lineage.py` lifts from **54.17% to 93.98%** (+39.81 pp).
+
+### What landed
+
+- `tests/unit/test_lineage_service.py` (+ ~580 lines, 32 tests, 5 test classes)
+- 4 stubs: `StubFileRepository`, `StubLineageRepository`, `StubPluginManager` (with `StubHooks` / `StubHookCaller`), `StubFuzzyIndex`
+- Test classes:
+  - `TestThreshold` (5) — per-kind auto-confirm + escalate fallback
+  - `TestGetEdgesFor` (2) — repo passthrough
+  - `TestComputeForPair` (6) — detector invocation, None filtering, threshold filtering, persist=False semantics, mixed-confidence splits
+  - `TestComputeForFile` (9) — candidate selection (xxhash, size, parent dir, fuzzy_index), self-maintenance of fuzzy_index, query-raises fallback, empty-index fallback, dedup across paths
+  - `TestFindVersionStacks` (10) — union-find: empty, pair, transitive chain, disjoint, biggest-first sort, deleted-file dropping, singleton-stack dropping, mtime-desc within stack, min_confidence and kinds parameters
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `src/curator/services/lineage.py` | 54.17% | 93.98% |
+
+### Lessons captured (kept rich per directive)
+
+**Lesson #68 — "Pure service" doesn't mean "pluggy-free."** I told Jake that lineage.py had "no pluggy entanglement" when proposing it as a target vs bundle.py. That was wrong: lineage uses pluggy for `_run_detectors` (the `curator_compute_lineage` hook). The mistake came from skimming for `pluggy.PluginManager` in the constructor without tracing how the hook calls flow through `compute_for_pair` and `compute_for_file`. Going forward: **before recommending a test target, trace the actual method bodies, not just the constructor signature.** The constructor reveals dependencies; method bodies reveal hook usage patterns and stub complexity.
+
+**Lesson #69 — Coverage estimates should be honest, not optimistic.** I claimed lineage.py would reach "90%+" in the bundle-vs-lineage tradeoff table. The first pass landed at 73%. Reaching 94% required a second pass adding FuzzyIndex stub + 5 more tests. Future estimates should be ranges ("70-90% depending on how far we push the stub scaffolding") not point estimates. The cleaner pattern: do one pass, measure, then explicitly decide whether to push further. v1.7.81's tier.py hit 99% in one pass because the module had simpler dependencies — that was a lucky shape, not a baseline expectation.
+
+**Lesson #70 — Stubs should match real-API behavior, not test convenience.** The `StubFileRepository.query()` method returns `self._query_results` regardless of the `FileQuery` filters passed in. That's enough for testing LineageService's *use* of `query()`, but it would hide bugs where lineage passes the wrong FileQuery shape. The integration tests catch that class of bug. Unit tests at this layer test *what the service does with results*, not *whether the query was correctly constructed*. Document the boundary in the stub docstring.
+
+### Uncovered branches (intentional)
+
+The remaining 6% (~5 lines + branches) are:
+  * FuzzyIndex returning the file's own curator_id — defensive de-self filter
+  * Files with `mtime=None` in `find_version_stacks` sort key (`mtime if not None else 0.0`)
+  * The fresh-fetch arm of the FuzzyIndex path when the candidate isn't already in `candidates` from size/hash buckets (subtle stub-overlap issue I'd need to engineer around)
+  * Defensive parent-dir query exception handler
+
+All are reachable in production but each requires more elaborate stub coordination for marginal coverage gain. Documented here rather than silently skipped.
+
+### Files changed
+
+| File | Lines |
+|---|---|
+| `tests/unit/test_lineage_service.py` | +580 (new) |
+| `CHANGELOG.md` | this entry |
+| `docs/releases/v1.7.82.md` | release notes |
+
+No source code changes. Test count: 1866 → 1898 (+32).
+
+### Arc state
+
+- 82 ships, all tagged
+- pytest local: 1898 / 10 / 0
+- Coverage local: ~67.3% → ~67.8% (small bump from one module going to 94%)
+- CI: 8 verified all-green runs in post-arc series
+- Doctrine: still v1.0; three new lessons (#68, #69, #70) added to the lessons-captured record
+
+### Next
+
+Next Phase Gamma candidate (by under-coverage + minimal pluggy entanglement): `storage/queries.py` at 75.91% (small module, pure query construction). Or services/safety.py at 67% (bigger module, more value).
+
 ## [1.7.81] — 2026-05-12 — Phase Gamma starter: `services/tier.py` unit tests (53% → 99%)
 
 **First Phase Gamma ship after the v1.7.80 capstone.** Adds 27 focused unit tests for `TierService` and its data classes. Coverage on `services/tier.py` lifts from **52.78% to 98.61%** — one line missed (a defensive `assert` that's never legitimately triggered).
