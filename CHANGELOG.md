@@ -4,6 +4,144 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.63] — 2026-05-12 — macOS SafetyService fix: `/private` was over-broad
+
+**Headline:** v1.7.62 successfully fixed the Rich-help tests — **6 of 9 CI cells went GREEN** (all Windows + all Ubuntu). The 3 macOS cells still failed, but with a completely different error: SafetyService misclassifies pytest's tmp_path as OS_MANAGED (REFUSE) instead of SAFE/APP_DATA (CAUTION). Root cause: `_macos_os_managed_paths()` listed `Path("/private")` wholesale, which on macOS includes `/private/var/folders/...` — the user TMPDIR where pytest puts everything. **Fix: replace the bare `/private` with explicit system-managed subdirs.**
+
+### Diagnosis
+
+With PAT log access, the macOS failures were obvious:
+
+```
+FAILED test_cli_safety.py::test_caution_for_project_file
+    AssertionError: assert 'CAUTION' in '/private/var/folders/tb/.../myproj/src/x.py\nverdict: REFUSE'
+FAILED test_migration.py::test_caution_files_appear_in_plan_but_marked_caution
+    AssertionError: assert <SafetyLevel.REFUSE> == <SafetyLevel.CAUTION>
+FAILED test_safety.py::test_extra_app_data_paths_extend_defaults
+    assert False = any(c[0] == APP_DATA for c in report.concerns)
+```
+
+All 3 tests use pytest's `tmp_path` fixture. On macOS, that's `/private/var/folders/tb/.../pytest-of-runner/pytest-N/...`. The SafetyService check order is:
+  1. **OS_MANAGED → REFUSE** (short-circuits all further checks)
+  2. APP_DATA → CAUTION
+  3. SYMLINK → CAUTION
+  4. PROJECT_FILE → CAUTION
+
+With `/private` in os_managed, step 1 fires for every tmp_path file and returns REFUSE before step 2-4 can identify them as APP_DATA, PROJECT_FILE, etc.
+
+### Why this is a real bug, not just a test mismatch
+
+macOS path conventions are non-obvious:
+  * `/tmp` is a symlink to `/private/tmp`
+  * `/var` is a symlink to `/private/var`
+  * `TMPDIR` env var on a default macOS install points to `/private/var/folders/<hash>/T/` (the user's per-session temp)
+
+All three are USER-WRITABLE temp directories that Python's `tempfile` and pytest's `tmp_path` use heavily. Blocking `/private` wholesale prevents Curator from EVER organizing files in user temp directories on macOS — which is a real user workflow (e.g., "sort files in my Downloads, including the ones I extracted to /tmp/work_2024/").
+
+The intent of `/private` in the original list was to block system-managed directories like `/private/etc` (system config), `/private/var/db` (LaunchDaemon state, dyld cache, etc.), `/private/var/log` (system logs), etc. The bare `Path("/private")` was a shortcut that swept too much.
+
+### Fix
+
+```python
+def _macos_os_managed_paths() -> list[Path]:
+    return [
+        Path("/System"),
+        # v1.7.63: replaced Path("/private") with specific subdirs.
+        # The bare "/private" was over-broad: macOS uses /private/var/folders
+        # as the user TMPDIR (where pytest's tmp_path lives), and /private/tmp
+        # is the symlink target of /tmp. Both are user-writable and must NOT
+        # be OS-managed.
+        Path("/private/etc"),
+        Path("/private/var/db"),
+        Path("/private/var/log"),
+        Path("/private/var/run"),
+        Path("/private/var/spool"),
+        Path("/Volumes"),
+        Path("/usr"),
+        Path("/sbin"),
+        Path("/bin"),
+        Path("/dev"),
+    ]
+```
+
+The 5 specific `/private/...` paths now blocked:
+  * `/private/etc` — system config (was `/etc`'s real location)
+  * `/private/var/db` — LaunchDaemon state, dyld cache, system databases
+  * `/private/var/log` — system logs
+  * `/private/var/run` — runtime PID files, sockets (was `/var/run`)
+  * `/private/var/spool` — print queue, mail queue
+
+Not blocked (now organize-able by Curator):
+  * `/private/var/folders/...` — user TMPDIR (pytest tmp_path, Python tempfile)
+  * `/private/tmp` — `/tmp` symlink target (user temp)
+  * `/private/var/tmp` — `/var/tmp` (per-user temp, persistent across reboots)
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `src/curator/services/safety.py` | +10, -1 | Replace `/private` with specific subdirs in `_macos_os_managed_paths` |
+| `CHANGELOG.md` | +N | v1.7.63 entry |
+| `docs/releases/v1.7.63.md` | +N | release notes |
+
+### Verification
+
+- **Local Windows pytest of test_safety.py**: 37 passed, 1 skipped, 2 deselected in 0.97s ✅ (Windows doesn't run macOS code path, no regression possible)
+- **Targeted fix to macOS-only code path**: only `_macos_os_managed_paths()` changed
+- **Expected CI result on macOS**: the 3 SafetyService tests should pass with CAUTION/APP_DATA classification
+
+### What this fix does NOT do
+
+- **Doesn't address the underlying "OS_MANAGED short-circuits all other checks" architecture.** A future refactor could let APP_DATA + OS_MANAGED coexist as separate concerns with the final level being the max. For now, more conservative `/private/...` listing is the right immediate fix.
+- **Doesn't audit the Linux `_linux_os_managed_paths()` for similar over-broad entries.** It blocks `/var` wholesale which is also broad (`/var/tmp` is user temp on Linux), but pytest doesn't use `/var` on Linux (it uses `/tmp`), so no tests fail. Future audit candidate.
+- **Doesn't fix the Windows live recycle-bin test bug.** Still deferred from v1.7.59.
+- **Doesn't address Node.js 20 deprecation warning.**
+- **Doesn't add CI status badge to README.** Fifth ship noting this.
+
+### Authoritative-principle catches
+
+**Catch -- v1.7.62 success exposed v1.7.63's bug.** This is the canonical layered-CI-debugging pattern: each fix unmasks the next layer. v1.7.62 fixed Rich help substring assertions; macOS proceeded further into the test run and hit the SafetyService issue. **Quantitatively: 0/9 → 6/9 → 9/9 (expected).**
+
+**Catch -- `/private` wholesale was a known macOS gotcha.** macOS path conventions are well-documented; the `/tmp` → `/private/tmp` symlink + TMPDIR convention has been in place since OS X 10.0 (2001). The original implementer of `_macos_os_managed_paths` was likely thinking "block system config" but reached for `/private` as a shortcut. Lesson: when listing OS-managed paths, list specific subdirs not parent dirs that contain user-writable subtrees.
+
+**Catch -- discovered via macOS CI matrix, not local testing.** Curator's developer is on Windows; without the macOS CI cell, this bug would have shipped to any macOS user. **The macOS CI matrix earned its keep this ship.**
+
+**Catch -- considered 3 alternatives, chose minimal subdir list:**
+  1. **Add a `_macos_user_writable_exemptions` list** that overrides os_managed if matched — architecturally clean but invasive (changes check_path logic)
+  2. **Move tmp_path checks before OS_MANAGED in check ordering** — risks reordering bugs in production
+  3. **List specific `/private/...` subdirs to block** — minimal, idiomatic, matches Linux's pattern of listing specific dirs
+
+  Chose (3). 10-line change, zero architectural risk.
+
+### Lessons captured
+
+**No new lesson codified.** Reinforces:
+  * #66 ("green local pytest does not imply green CI") — sixth ship in this CI-green sub-arc
+  * #67 ("diagnose with logs, not with hypotheses") — second application this turn
+  * Subordinate lesson: **OS-managed path lists should enumerate specific system subdirs, not parent dirs containing user-writable subtrees.**
+
+### Limitations
+
+- **Doesn't audit Linux `_linux_os_managed_paths` for the same pattern.** Future ship.
+- **Doesn't refactor OS_MANAGED short-circuit.** Future architectural improvement.
+- **No CI status badge in README.** Fifth ship noting.
+
+### Cumulative arc state (after v1.7.63)
+
+- **63 ships**, all tagged.
+- **pytest local Windows**: 1807 / 10 / 0 (unchanged this ship)
+- **pytest CI v1.7.62** (Windows + Ubuntu): all passing. **Expected after v1.7.63: all 9 cells GREEN.**
+- **Coverage local**: 66.96% (unchanged)
+- **CI matrix**: 9 cells. v1.7.62 = 6/9 green. v1.7.63 expected = **9/9 green**, finally closing the 19-ship CI-red arc since v1.7.42.
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed (fully addressed)
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **CI hygiene**: 5 ships in (v1.7.59–v1.7.63); v1.7.63 expected to FINALLY close the arc.
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67 (no new this ship)
+- **Detacher-pattern ships**: 19 (unchanged; targeted source fix didn't need full baseline)
+
 ## [1.7.62] — 2026-05-12 — Strip ANSI + use result.output in 3 Rich-help tests
 
 **Headline:** v1.7.61's `COLUMNS=200` env var didn't actually fix the 3 failing tests (same `1808 passed, 3 failed` on Ubuntu/3.12). With GitHub PAT-enabled log access, the failure was traceable to Rich writing help output via a Console that goes to a stream `CliRunner.result.stdout` doesn't capture on POSIX (likely stderr or a separate FD). **Fix: edit the 3 tests to use `result.output` (combined stdout+stderr) and strip ANSI codes via `re.sub(r"\x1b\[[0-9;]*m", "", ...)` before substring matching.** This is the more robust fix v1.7.61's CHANGELOG already flagged as a future improvement.

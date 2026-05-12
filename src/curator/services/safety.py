@@ -265,7 +265,16 @@ def _macos_app_data_paths() -> list[Path]:
 def _macos_os_managed_paths() -> list[Path]:
     return [
         Path("/System"),
-        Path("/private"),
+        # v1.7.63: replaced Path("/private") with specific subdirs.
+        # The bare "/private" was over-broad: macOS uses /private/var/folders
+        # as the user TMPDIR (where pytest's tmp_path lives), and /private/tmp
+        # is the symlink target of /tmp. Both are user-writable and must NOT
+        # be OS-managed. List only system-managed /private subdirs explicitly.
+        Path("/private/etc"),
+        Path("/private/var/db"),
+        Path("/private/var/log"),
+        Path("/private/var/run"),
+        Path("/private/var/spool"),
         Path("/Volumes"),
         Path("/usr"),
         Path("/sbin"),
