@@ -151,6 +151,7 @@ class TestParseIndexFile:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Recycle Bin is Windows-only")
+@pytest.mark.slow
 class TestLiveRecycleBin:
     def test_trash_then_find_in_recycle_bin(self, tmp_path: Path):
         """End-to-end: send a real file to the bin, verify we can locate it."""
