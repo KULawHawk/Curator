@@ -70,13 +70,19 @@ pip install -e .[dev]
 Curator's CI pipeline runs a 9-cell matrix (`{windows, ubuntu, macos} × {Python 3.11, 3.12, 3.13}`) on every push. To keep that matrix green, the repo carries three project-invariant lints and two git hooks. A one-shot installer wires them up:
 
 ```powershell
+# Windows / PowerShell
 .\scripts\setup_dev_hooks.ps1
 ```
 
-The installer is idempotent (re-running is safe) and does three things:
+```bash
+# macOS / Linux / WSL / Git Bash
+./scripts/setup_dev_hooks.sh
+```
+
+Both variants are functionally identical and idempotent (re-running is safe). They do three things:
 
 1. **Sets `git config core.hooksPath .githooks`** so the per-repo hooks below activate.
-2. **Prompts for a GitHub Personal Access Token** (optional, skip with `-SkipPat`). Stored at `~/.curator/github_pat`. Only `actions:read` scope needed. Used by `ci_diag.ps1` and the pre-push hook.
+2. **Prompts for a GitHub Personal Access Token** (optional, skip with `-SkipPat` / `--skip-pat`). Stored at `~/.curator/github_pat`. Only `actions:read` scope needed. Used by `ci_diag.ps1` and the pre-push hook.
 3. **Verifies** that both hooks are present and reports a quick-reference for everyday workflows.
 
 ### What the hooks do
