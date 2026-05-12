@@ -4,6 +4,138 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.55] — 2026-05-12 — pii_scanner.py test coverage lift (Tier 3)
+
+**Headline:** Writes the first comprehensive test suite for `src/curator/services/pii_scanner.py`. **Coverage on that module: 22.34% → 97.94% (+75.6 pp).** Total project coverage: 63.80% → **65.03% (+1.23 pp)**. **117 new tests** across 11 test classes covering all 17 PII patterns, 6 enrichment parsers, 2 validators (Luhn + IPv4), the `PIIScanner` service class (scan_text/scan_file/scan_directory), and edge cases (Unicode, truncation, non-UTF8 bytes, invalid base64). Closes the first weak-coverage module from the v1.7.51 baseline; second largest single-file coverage jump in the arc's history (after v1.7.47's warnings cleanup).
+
+### Why this matters
+
+v1.7.51's coverage report showed `pii_scanner.py` at 22.34% — the weakest covered module in `src/curator/services/`. Worse: **zero existing test files** referenced the module by name. The 22% was incidental coverage from other tests transitively importing it. Translation: there was no positive evidence that the PII detection logic actually worked. Every `curator scan` invocation that hit a PII pattern was running untested production code.
+
+PII detection is forensically sensitive. False negatives mean leaked sensitive data slips through unflagged; false positives generate noise that drowns the real signal. **You want very high test coverage on this file, not low coverage.** v1.7.55 fixes that.
+
+The file covers significant territory:
+  * 17 regex patterns (SSN, credit card, phone, email, IPv4, JWT, plus 11 API-key families)
+  * 2 validators (Luhn checksum, IPv4 octet range) with documented false-positive elimination
+  * 6 enrichment parsers (JWT, AWS, Stripe, Slack, GitHub PAT, OpenAI, Mailgun) that attach forensic metadata
+  * A service class with scan_text / scan_file / scan_directory entry points
+  * Edge cases: truncation, non-UTF8 bytes, malformed JWTs, custom pattern sets
+
+With 117 tests now exercising all of this, the next time someone touches `pii_scanner.py` they get immediate feedback if they break any of: a pattern's matching behavior, a validator's false-positive filter, a parser's metadata format, or the scanner's error handling.
+
+### Coverage breakdown
+
+```
+Before: pii_scanner.py    211 stmt   146 missed   80 branches   22.34%
+After:  pii_scanner.py    211 stmt     5 missed   80 branches   97.94%
+Gain:                              -141                     +75.60 pp
+```
+
+Missed lines (5 statements at 471, 753-754, 762-763): defensive paths in `_parse_jwt` (untestable without monkey-patching `json.loads` to raise mid-parse) and a rarely-hit error branch in `scan_file`'s decode fallback. Acceptable residual.
+
+Total project coverage moved from **63.80% (v1.7.53)** to **65.03% (v1.7.55)**. That's a substantial jump from a single ship.
+
+### What's new
+
+**`tests/unit/test_pii_scanner.py` (+560 lines, new, 117 tests across 11 classes)**
+
+| Test class | Count | Covers |
+|---|---|---|
+| `TestLuhnValid` | 10 | Visa/MC/Amex test numbers, dash/space tolerance, length bounds, no-digits edge |
+| `TestIPv4Valid` | 11 | Private/public IPs, broadcast, octets >255, leading zeros, non-numeric |
+| `TestPIIPattern` | 5 | `is_valid` with/without validator, exception swallow, short/long redaction |
+| `TestScanReport` | 5 | `has_high_severity`, `match_count`, `by_pattern` grouping |
+| `TestSSNPattern` | 2 | Matches XXX-XX-XXXX, does not match continuous digits |
+| `TestCreditCardPattern` | 2 | Valid Visa accepted, Luhn-invalid rejected |
+| `TestPhonePattern` | 3 | Paren/dash formats, MEDIUM severity |
+| `TestEmailPattern` | 2 | Standard email, rejects no-TLD addresses |
+| `TestIPv4Pattern` | 2 | Valid IP matched, out-of-range rejected by validator |
+| `TestApiKeyPatterns` | 17 | github_pat (all 5 prefixes), AWS (AKIA/ASIA), Slack (bot), Google, Stripe (live/test), OpenAI (standard/project), Twilio, Mailgun (legacy/private), Discord, GitLab, Atlassian |
+| `TestJWTPattern` | 1 | Well-formed JWT with header.payload.signature structure |
+| `TestParseAWSKey` | 3 | AKIA/ASIA classification, unknown returns None |
+| `TestParseStripeKey` | 3 | sk_live_/sk_test_ classification, unknown returns None |
+| `TestParseSlackToken` | 7 | xoxa/b/p/r/s + unknown + too-short |
+| `TestParseGitHubPAT` | 6 | ghp/gho/ghu/ghs/ghr + unknown |
+| `TestParseOpenAIKey` | 3 | Project key, standard key, unknown |
+| `TestParseMailgunKey` | 4 | legacy/private/public + unknown |
+| `TestParseJWT` | 8 | Valid JWT, exp/expired derivation, malformed (2-segment / non-base64 / non-JSON), bogus epoch (year > 9999), partial parse |
+| `TestScanText` | 10 | Clean text, multi-pattern, offset sort, 1-based lines, source label, byte counts, truncation flag, redaction, metadata enrichment |
+| `TestScanFile` | 6 | Real file scan, missing file, directory-instead-of-file, truncation, no-truncation, non-UTF8 bytes |
+| `TestScanDirectory` | 5 | Multi-file, recursive, non-recursive skip, extension filter, invalid-dir error |
+| `TestCustomPatternSet` | 3 | Custom pattern only, `DEFAULT_PATTERNS` introspection, unique pattern names |
+
+Total: **117 tests**. All pass in 0.92s (very fast — pure-regex code, no I/O except temp-file fixtures).
+
+### Design choices in the test file
+
+  * **Imports private helpers by name.** `_luhn_valid`, `_ipv4_valid`, `_parse_*` are underscore-prefixed (informally private) but ARE the documented extension points ("Adding more is a one-line append to DEFAULT_PATTERNS"). Importing them by name locks the implementation contract; if a refactor renames them, the tests force a deliberate decision about whether the rename is API-compatible.
+  * **`pytest.fixture` for the scanner.** A default-config `PIIScanner` is needed in ~30 tests; a fixture eliminates the repetition and keeps the per-test boilerplate to the assertion logic.
+  * **Helper `_build_jwt()` in `TestParseJWT`.** Building syntactically-valid JWTs requires base64url-encoding two JSON dicts + appending a signature. Without a helper this would be 4 lines of setup per test; with it, each test focuses on what it's actually testing.
+  * **Helper `_mk_match()` in `TestScanReport`.** Same pattern — building a `PIIMatch` requires 7 fields; the helper accepts overrides for the 2 fields the test cares about.
+  * **Real `tmp_path` files for scan_file / scan_directory.** No mocking. The pytest `tmp_path` fixture provides clean per-test temp directories that are automatically cleaned up. Tests exercise the real filesystem path.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `tests/unit/test_pii_scanner.py` | +560 (new) | 117 tests across 11 classes |
+| `CHANGELOG.md` | +N | v1.7.55 entry |
+| `docs/releases/v1.7.55.md` | +N | release notes |
+
+No source code changed. This ship is pure test addition.
+
+### Verification
+
+- **Coverage check on pii_scanner.py**: 22.34% → **97.94%** (+75.6 pp)
+- **Total project coverage**: 63.80% → **65.03%** (+1.23 pp)
+- **New tests pass**: ✅ 117/117 in 0.92s
+- **Full pytest baseline (via detacher, with --cov)**: ✅ **1710 passed**, 10 skipped, 10 deselected, 0 failed in 343.25s
+  - Compare to v1.7.54: 1593 passed; +117 from new pii_scanner tests
+  - Zero failures in the existing 1593 (no regression)
+  - Coverage instrumentation noise (789 ResourceWarnings) unchanged in character; slight count fluctuation across runs
+  - Run time elevated to 343s (~1.4x v1.7.53's 257s) — attributable to the 117 new test functions + coverage being on. Default invocation without --cov should still be near 222s.
+- **Detacher pattern**: 15th consecutive ship; no MCP wedges
+
+### Authoritative-principle catches
+
+**Catch -- one test had a bug (test_google_api_key).** First run produced 116/117 passing. The Google API key pattern requires `AIza` + exactly 35 chars (with `\b` word boundary). I had given it 36 chars in the test. Fixed in a one-line edit. Failure cost: <30s to identify and fix. The pattern is correct; my test was wrong. (Lesson reinforcement: tests verify code, but code also verifies tests.)
+
+**Catch -- imported underscore-prefixed helpers deliberately.** Python convention treats `_foo` as private. But the module's docstring explicitly identifies the validator hook and the pattern set as documented extension points. Testing them by name locks the contract; if a future refactor wants to rename them, the tests force a conscious decision rather than silent breakage.
+
+**Catch -- `_build_jwt()` test helper does not sign cryptographically.** It only constructs the base64url + JSON structure. That's deliberate: `_parse_jwt` never verifies signatures (signing is a downstream concern; the parser is a forensic-info extractor). Testing with real signed JWTs would add no coverage — the signature would be the part NOT parsed.
+
+**Catch -- non-UTF8 file scan test uses `errors='replace'` path.** This exercises the v1.7.6 design choice: "Files that aren't valid UTF-8 are decoded with `errors='replace'`; we'd rather find PII in a partially-decoded file than miss it because of one bad byte." Concrete test: a binary file with `\xff\xfe` prefix + valid SSN + `\xff` suffix. The SSN is still found.
+
+**Catch -- residual 5 missed statements are acceptable.** Lines 471, 753-754, 762-763 are: error paths in `_parse_jwt` (require monkey-patching json.loads), a rarely-hit decode-error branch in scan_file. Pushing coverage from 97.94% to 100% would require fragile mocking of stdlib internals — disproportionate cost for the gain. Stop here.
+
+### Lessons captured
+
+**No new lesson codified.** Application of:
+  * #43 ("signal beats absence of signal") — coverage % gave us the signal that this module needed tests; we acted on it
+  * The general principle: forensically sensitive code deserves disproportionate test coverage. PII detection is in that category.
+
+### Limitations
+
+- **Doesn't test against real-world PII corpora.** All test inputs are synthetic. The patterns might still miss edge cases that real documents contain (e.g. unusual phone-number formats, internationalized email addresses, non-US SSN-shaped numbers). Future ship could integrate a curated corpus (e.g. CONLL2003 NER datasets, filtered).
+- **No performance tests.** Scanning a 2 MB file is the documented size cap, but actual throughput isn't measured. A future hardening could add a microbenchmark.
+- **JWT signature verification is out of scope.** The parser only extracts metadata. If someone wants verified JWTs, that's a separate service (would need pyJWT and the signing key).
+- **The 5 unmissed statements are pure defensive code.** Reaching 100% would require mocking stdlib internals like `json.loads`. Disproportionate effort.
+- **Other weak-coverage modules unchanged.** `metadata_stripper.py` (25%), `forecast.py` (29%), `watch.py` (41%) are still candidates for follow-up ships. Each is its own work.
+
+### Cumulative arc state (after v1.7.55)
+
+- **55 ships**, all tagged, all baselines green
+- **pytest**: 1710 / 10 / 0 / 0 warnings (default invocation; under `--cov`: 789 ResourceWarnings; same character as v1.7.53)
+- **Coverage**: **65.03%** (was 63.80% at v1.7.53; +1.23 pp from this ship alone)
+- **Per-module coverage flagship**: `pii_scanner.py` is now at **97.94%** (was 22.34%; the weakest module is now the SECOND-strongest after `gdrive_auth.py`'s 100%)
+- **CI matrix**: 9 cells (3 OSes × 3 Python versions; first cross-platform run completed at v1.7.54)
+- **Tier 1 backlog**: A1, A3, C1 closed; A2 has proven workaround
+- **Tier 2 backlog**: E3, C5, D3, A4, C6 closed (fully addressed)
+- **Tier 3**: pii_scanner closed this ship. Remaining weak-coverage targets: `metadata_stripper.py` (25%), `forecast.py` (29%), `watch.py` (41%)
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#63 (unchanged this ship)
+- **Detacher-pattern ships**: 15 (v1.7.39–v1.7.55; v1.7.50, v1.7.54 had no local pytest run)
+
 ## [1.7.54] — 2026-05-12 — OS matrix [Windows, Linux, macOS] in CI (closes C6)
 
 **Headline:** Adds an OS matrix `[windows-latest, ubuntu-latest, macos-latest]` to the existing Python version matrix `[3.11, 3.12, 3.13]`. CI now runs the full pytest baseline across **all 9 cells** of the matrix in parallel on every push and PR. `fail-fast: false` ensures every cell reports independently. **Closes C6 — the last remaining Tier 2 item.** With this ship, every category in the bulletproof-live backlog except A2 (which has a proven workaround) is closed.
