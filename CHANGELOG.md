@@ -4,6 +4,79 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.48] — 2026-05-11 — Migration-abort flake fix (closes A1)
+
+**Headline:** Eliminates the 5–10% false-fail rate on `tests/unit/test_migration_phase2.py::TestAbort::test_abort_during_run_marks_cancelled` by replacing two timing races with deterministic synchronization. The test now passes 10/10 in stress runs (was previously flaking ~1 in 20). Closes the last remaining Tier 1 item from the 44-item bulletproof analysis.
+
+### Why this matters
+
+The migration-abort test was a pre-existing threading-timing flake: it passed in isolation but had a 5–10% false-fail rate in the full baseline. Two distinct races caused it:
+
+  1. **"Abort too early"** -- the original test slept 50ms after spawning the worker thread, then called `abort_job`. On a slow machine the worker thread might not have registered its `abort_event` yet (the registration happens at `migration.py:2685-2687`); `abort_job` would silently no-op when no event was registered, and the job ran to natural completion -- ending with `status='completed'` instead of `'cancelled'`.
+  2. **"Abort too late"** -- the original used the shared `medium_library` fixture (only 12 small files). On a fast machine the worker could finish all 12 files within the 50ms sleep, again ending with `status='completed'`.
+
+The combined failure rate of these two races is non-trivial: when the machine is slow OR fast OR under load (e.g. during an MCP wedge), one of them fires. Hence the persistent flake.
+
+### What's new
+
+**`_wait_for_abort_event_registered` static helper (`tests/unit/test_migration_phase2.py`, +30 lines)**
+
+Deterministic polling for `svc._abort_events[job_id]` to be registered before calling `abort_job`. Polls every 5ms up to a 2s timeout (typically returns in <50ms). Eliminates race 1.
+
+**Test body rewritten (`test_abort_during_run_marks_cancelled`)**
+
+  * Replaced `time.sleep(0.05)` with the deterministic event-registration wait
+  * Replaced shared `medium_library` (12 files) with a test-local 300-file library so the worker is guaranteed to still be running when abort fires (eliminates race 2). 300 files of 100 bytes is ~30KB total disk -- still fast (<2s total)
+  * Added a sanity assertion: `report.processed_count < n_files` verifies abort actually interrupted (vs. happening to land at the right moment)
+  * Detailed docstring documenting both races and why each fix addresses them
+  * Improved assertion messages explaining which race failed if the test breaks again
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `tests/unit/test_migration_phase2.py` | +70 lines: `_wait_for_abort_event_registered` helper + rewritten test |
+| `CHANGELOG.md` | v1.7.48 entry |
+| `docs/releases/v1.7.48.md` | release notes |
+
+### Verification
+
+- **Stress test**: ✅ **10/10 consecutive passes** at 2.0–2.4s each (was: ~5–10% failure rate)
+- **Migration test class**: ✅ 35/35 pass in 9.83s
+- **Full pytest baseline (via detacher)**: ✅ **1561 passed**, 10 skipped, 10 deselected, 0 failed in 217.97s
+  - Compare to v1.7.47: `1554 passed, 10 skipped, 10 deselected, 0 failed, 0 warnings in 225.44s`
+  - Runtime stable (~218s vs 225s; well within noise)
+  - Zero warnings preserved (v1.7.47's gain is intact)
+- **Detacher pattern**: tenth consecutive ship using `run_pytest_detached.ps1`; zero MCP wedges with 45s poll cadence
+
+### Authoritative-principle catches
+
+**Catch -- the two races are independent and both needed fixing.** Initial draft only fixed race 1 (the event-registration wait). But the bigger library is also necessary: a sufficiently fast machine could still process all 12 files between the event registration AND the `abort_job` call, leaving the abort with nothing to interrupt. The sanity assertion (`processed_count < n_files`) explicitly verifies that abort actually interrupted, catching the case where a future change accidentally makes the library small again.
+
+**Catch -- `_wait_for_abort_event_registered` is in test code, not production.** The implementation depends on private `svc._abort_events` access, which is normally a code smell. But putting the wait in production code (e.g. adding an `is_running` predicate or a `wait_until_started` method) would expand the service's API for test-only needs. Tests being in the same package (`curator` -> `tests/unit/curator/...`) means accessing private state is acceptable here -- and the helper is well-documented for future readers.
+
+**Catch -- the assertion messages now explain WHICH race failed.** If the test breaks again, the message tells the developer whether it's the abort-signal race (race 1: status='completed' even though abort was called) or the abort-too-late race (race 2: processed_count == n_files). This is faster to debug than just "expected 'cancelled', got 'completed'".
+
+### Lessons captured
+
+**Lesson #62: For threading-timing tests, replace `time.sleep` with deterministic synchronization on the production code's actual signals.** If the test is racing the SUT's internal state machine, the right fix is to wait for a specific observable state transition (e.g. event registration, status field update, file count change), not to sleep for an arbitrary duration. The 50ms in the original test was a magic number that approximated "long enough" -- but `long enough` depends on machine speed, system load, and what else is happening. Polling for the actual condition is bulletproof.
+
+### Limitations
+
+- **Helper depends on private state.** `svc._abort_events` is private; if a future refactor changes the abort-signaling mechanism (e.g. to a per-worker queue), this helper breaks. Trade-off accepted because the test is in the same package and the helper has a clear docstring pointing to the registration site (`migration.py:2685-2687`).
+- **300 files is a heuristic.** On a much faster future machine it might still be possible to process all 300 files in <50ms total. If that ever happens, the sanity assertion (`processed_count < n_files`) will fire with a clear message, and we bump the count higher. Better to fail loudly than silently.
+- **The two other `TestAbort` tests are unchanged.** `test_abort_unknown_job_is_noop` and the rest don't have the same race because they don't depend on inter-thread timing. Leaving them as-is.
+- **No automated detection of similar flake patterns elsewhere.** A grep for `time.sleep` in threading-related tests would surface candidates, but each one needs individual analysis (some sleeps are legitimately for letting OS state propagate). Out of scope for this ship.
+
+### Cumulative arc state (after v1.7.48)
+
+- **48 ships**, all tagged, all baselines green
+- **pytest**: 1561 / 10 / 0 / 0 warnings (was 1554 at v1.7.47)
+- **Flake rate**: was ~5–10% on this test; now 0/10 in stress runs
+- **Lessons captured**: #46–#62 (+1 this ship)
+- **Detacher-pattern ships**: 10 (v1.7.39 through v1.7.48)
+- **Backlog items closed**: C1 (CI infra), A3 (datetime warnings), **A1 (flake)** -- last Tier 1 item, closed this ship
+
 ## [1.7.47] — 2026-05-11 — `datetime.utcnow()` deprecation cleanup (6037 warnings → 0)
 
 **Headline:** Eliminates ALL `DeprecationWarning: datetime.datetime.utcnow() is deprecated` warnings from the baseline. New `curator._compat.datetime.utcnow_naive()` is a drop-in replacement that produces bit-identical naive-UTC output without the deprecation. 117 call sites across 29 files were mechanically converted. Test baseline dropped from 6037 warnings to **0 warnings**; runtime improved 12% (256s → 225s) from removing the warning-serialization overhead.

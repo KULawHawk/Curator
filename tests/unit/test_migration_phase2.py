@@ -524,16 +524,78 @@ class TestResume:
 
 
 class TestAbort:
+    @staticmethod
+    def _wait_for_abort_event_registered(
+        svc, job_id, *, timeout: float = 2.0, poll: float = 0.005,
+    ):
+        """v1.7.48: poll until ``svc._abort_events[job_id]`` is registered.
+
+        Removes the "abort fired before worker thread registered the event"
+        race in the abort tests. Returns when the event is registered,
+        raises AssertionError on timeout.
+
+        The worker thread registers the event near the top of ``run_job``
+        (around L2685). Without this wait, calling ``abort_job`` immediately
+        after spawning the thread can land before that registration, in
+        which case ``abort_job`` silently no-ops (no event to set) and the
+        worker runs to natural completion -- the job ends with
+        ``status='completed'`` instead of ``'cancelled'``.
+        """
+        import time as _time
+        deadline = _time.monotonic() + timeout
+        while _time.monotonic() < deadline:
+            with svc._abort_lock:
+                if svc._abort_events.get(job_id) is not None:
+                    return
+            _time.sleep(poll)
+        raise AssertionError(
+            f"abort event for job_id={job_id!r} was never registered "
+            f"in {timeout}s -- worker thread may not have started, or "
+            f"the registration site moved."
+        )
+
     def test_abort_during_run_marks_cancelled(
-        self, migration_service, medium_library, tmp_path,
+        self, migration_service, migration_runtime, tmp_path,
     ):
         """abort_job from another thread sets the abort event; workers
-        finish current file then exit; final job status is 'cancelled'."""
-        rt, src_root, files = medium_library
+        finish current file then exit; final job status is 'cancelled'.
+
+        v1.7.48: rewritten to eliminate two timing races that produced a
+        5-10% false-fail rate in the full baseline:
+
+          1. **"Abort too early"** -- the original test slept 50ms and
+             then called abort_job. On a slow runner the worker thread
+             might not have registered its abort_event yet; abort_job
+             would silently no-op and the job ran to completion.
+             Fix: replace ``time.sleep(0.05)`` with
+             ``_wait_for_abort_event_registered`` which deterministically
+             polls for the event to appear before aborting.
+
+          2. **"Abort too late"** -- the original ``medium_library``
+             fixture has only 12 small files; on a fast machine the
+             worker could finish all of them within the 50ms sleep.
+             Fix: build a larger library inline (300 files) so the
+             worker is guaranteed to still be running when abort fires.
+             300 files of 100 bytes each is still ~30KB total disk; the
+             test stays fast (typically <2s).
+
+        We also add a sanity assertion that NOT all files were processed,
+        which verifies the abort actually interrupted (vs. just happening
+        to land at the right moment by coincidence).
+        """
+        rt = migration_runtime
+        src_root = tmp_path / "large_library"
+        # 300 files is enough that even a fast machine can't finish them
+        # in <50ms (the worker does real file I/O + DB updates per file).
+        n_files = 300
+        files = [
+            _seed_real_file(rt, src_root / f"track_{i:04d}.mp3", b"x" * 100)
+            for i in range(n_files)
+        ]
         plan = _build_plan(migration_service, src_root, tmp_path / "out")
         job_id = migration_service.create_job(plan)
 
-        # Spawn run_job in a thread, abort after a tiny delay
+        # Spawn run_job in a thread
         result_box: dict = {}
         def _run():
             try:
@@ -545,14 +607,35 @@ class TestAbort:
 
         t = threading.Thread(target=_run)
         t.start()
-        # Give workers a moment to start, then abort
-        time.sleep(0.05)
+
+        # v1.7.48: deterministically wait until the worker thread has
+        # registered its abort_event. Without this we race the worker's
+        # setup; abort_job called too early silently no-ops.
+        self._wait_for_abort_event_registered(migration_service, job_id)
+
         migration_service.abort_job(job_id)
         t.join(timeout=10)
         assert not t.is_alive(), "run_job should exit shortly after abort"
 
         job = rt.migration_job_repo.get_job(job_id)
-        assert job.status == "cancelled"
+        assert job.status == "cancelled", (
+            f"Expected job.status='cancelled' after abort_job; got "
+            f"{job.status!r}. Either the abort signal didn't reach the "
+            f"worker (race 1) or all files were processed before abort "
+            f"fired (race 2)."
+        )
+
+        # v1.7.48: sanity check that abort actually interrupted -- if
+        # somehow all 300 files were processed before abort fired, the
+        # assertion above would have passed but the test wouldn't be
+        # exercising what it claims to. Verify some files were skipped.
+        report = result_box.get("report")
+        if report is not None and hasattr(report, "processed_count"):
+            assert report.processed_count < n_files, (
+                f"Abort fired but all {n_files} files were already "
+                f"processed (processed_count={report.processed_count}). "
+                f"The test didn't actually exercise abort interruption."
+            )
 
     def test_abort_unknown_job_is_noop(self, migration_service):
         """Calling abort_job for a non-existent / non-running job doesn't error."""
