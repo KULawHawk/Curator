@@ -1,17 +1,21 @@
 #!/bin/sh
-# Curator pre-commit hook (v1.7.72)
+# Curator pre-commit hook (v1.7.73)
 #
-# Runs two pytest lints before allowing a commit:
+# Runs three pytest lints before allowing a commit:
 #   1. Lesson #50 lint (v1.7.32): no literal Unicode glyphs in
 #      src/curator/cli/ outside util.py (prevents cp1252 crashes).
 #   2. Lesson #66+#67 lint (v1.7.72): every ORDER BY in
 #      src/curator/storage/repositories/ has a deterministic tie-breaker
 #      (prevents the OS x Python matrix flakiness class v1.7.66 swept).
+#   3. DRY ANSI lint (v1.7.73): no inline ANSI-strip regex in tests/
+#      outside conftest.py (prevents regression of v1.7.68's strip_ansi
+#      fixture hoist).
 #
 # Why: even with the pytest-level lints, a developer can skip pytest
-# before commit and push code that crashes cp1252 capture or introduces
-# non-deterministic SQLite ordering. This hook closes that gap by
-# making the lints mandatory at commit time.
+# before commit and push code that crashes cp1252 capture, introduces
+# non-deterministic SQLite ordering, or re-introduces inline regex
+# duplication. This hook closes those gaps by making the lints
+# mandatory at commit time.
 #
 # Activation (one-time, per clone):
 #     git config core.hooksPath .githooks
@@ -47,12 +51,14 @@ else
     exit 1
 fi
 
-# Run both lint tests. Quiet mode so the commit summary stays readable
-# when the hooks pass; pytest emits the helpful diagnostic message
-# automatically when a lint fails, so we don't need to add anything.
+# Run all three lint tests. Quiet mode so the commit summary stays
+# readable when the hooks pass; pytest emits the helpful diagnostic
+# message automatically when a lint fails, so we don't need to add
+# anything.
 QT_QPA_PLATFORM=offscreen "$PYTHON" -m pytest \
     tests/unit/test_cli_util.py::test_no_literal_glyphs_in_cli_outside_util \
     tests/unit/test_repo_order_by_lint.py::test_every_order_by_has_deterministic_tie_breaker \
+    tests/unit/test_repo_ansi_lint.py::test_no_inline_ansi_strip_regex_outside_conftest \
     -q --no-header 2>&1 | tail -5
 
 # If pytest exited non-zero, refuse the commit.

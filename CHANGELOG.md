@@ -4,6 +4,163 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.73] — 2026-05-12 — Pre-commit inline ANSI regex lint: codify the v1.7.68 fixture hoist as a regression guard
+
+**Headline:** v1.7.68 hoisted 3 inline `re.sub(r"\x1b\[...")` patterns into a shared `strip_ansi` pytest fixture. **This ship adds a pytest-level lint that prevents regression**: any future test file that introduces an inline ANSI-strip regex (instead of using the fixture) gets blocked at commit time with a remediation message. Mirrors the v1.7.72 ORDER BY lint pattern. Third project-invariant lint codified.
+
+### Why this ship matters
+
+v1.7.68 release notes warned: "No pre-commit lint to catch new inline ANSI-strip regex patterns to prevent regression." v1.7.73 closes that gap. Without this lint, the rush-fix pattern that v1.7.68 cleaned up would reappear over time as new help-output tests are added.
+
+### The lint
+
+```python
+ANSI_REGEX_PATTERN = re.compile(r"\\x1b\\\[")
+
+EXEMPT_FILES: set[str] = {
+    "conftest.py",                # defines the fixture
+    "test_repo_ansi_lint.py",     # this file (documentation)
+}
+
+for py_path in tests_dir.rglob("*.py"):
+    if py_path.name in EXEMPT_FILES:
+        continue
+    for line_num, line in enumerate(lines, start=1):
+        if not ANSI_REGEX_PATTERN.search(line):
+            continue
+        if "ansi-lint:" in line:
+            continue  # inline exemption
+        violations.append(...)
+```
+
+Key design choices:
+  * **Filename-based exemption** — simpler than path-based; matches only basenames. Two files exempt: `conftest.py` (legitimately defines the fixture) and `test_repo_ansi_lint.py` (this file).
+  * **Single-line check, not window** — inline regex patterns are always on one line. No multi-line analysis needed (unlike v1.7.72's SQL window).
+  * **Inline exemption** via `# ansi-lint: <reason>` — different namespace from v1.7.72's `# order-by-lint:` to avoid collision. Allows legitimate exceptions like clearing non-color escape sequences (e.g. `\x1b[2J` for screen clear).
+  * **Scoped to `tests/`** — production code wouldn't typically have ANSI-strip regex; this is specifically a test-file concern.
+
+### Error message format
+
+When a violation is found:
+
+```
+Found 1 inline ANSI-strip regex pattern(s) in tests/ outside conftest.py:
+
+  tests/integration/test_foo.py:L42: output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+
+Fix: use the shared `strip_ansi` pytest fixture defined in
+tests/conftest.py instead of inlining the regex:
+
+  # Before
+  import re
+  output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+
+  # After
+  def test_help(self, runner, strip_ansi):
+      result = runner.invoke(app, ["--help"])
+      output = strip_ansi(result.output)
+
+Why: v1.7.62 inlined this regex in 3 test files; v1.7.68
+hoisted it into a shared fixture (DRY refactor, ~9 lines
+saved per regression). The fixture pattern compiles the
+regex once at conftest import time and returns a callable.
+...
+```
+
+Includes:
+  * File and line number
+  * **Before/after code examples** showing the fixture usage
+  * Explanation of the underlying technical reasoning
+  * Pointer to v1.7.68 release notes
+  * Inline exemption syntax for legitimate exceptions
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `tests/unit/test_repo_ansi_lint.py` | +135 | New lint test with detailed docstring + remediation message |
+| `.githooks/pre-commit` | +9, -5 | Add the new lint as third invocation; update header to v1.7.73 |
+| `CHANGELOG.md` | +N | v1.7.73 entry |
+| `docs/releases/v1.7.73.md` | +N | release notes |
+
+No source, workflow, or production-code changes.
+
+### Verification
+
+- **Lint passes against current state**: `pytest tests/unit/test_repo_ansi_lint.py` → 1 passed in 0.52s ✅
+- **Pre-commit hook now runs 3 lints** in one pytest invocation; all pass on this commit
+- **Expected CI result**: 9/9 GREEN (purely additive lint)
+- **Filename-based exemption verified**: `conftest.py` and `test_repo_ansi_lint.py` are correctly excluded
+
+### What this fix does NOT do
+
+- **Doesn't enforce the fixture USAGE pattern.** Tests can still inline `re.sub(...)` with completely different patterns (not `\x1b\[`). Only the canonical color/escape pattern is caught.
+- **Doesn't scan production code.** Source files under `src/` could theoretically contain ANSI patterns; scope intentional.
+- **Doesn't auto-fix violations.** Standard pre-commit hygiene: report, don't fix.
+- **Doesn't add a Windows PowerShell variant.** Python is sufficient.
+- **Doesn't generalize to other duplicated test patterns.** UUID stripping, path normalization, etc. would each need their own lint if duplication emerged.
+- **Doesn't update README** with the new lint rule (self-documenting error message).
+
+### Authoritative-principle catches
+
+**Catch -- mirrors v1.7.72 ORDER BY lint pattern exactly.** Same file structure (`test_repo_<X>_lint.py`), same pre-commit hook invocation, same error message style. Two project-invariant lints now share a recognizable structural pattern.
+
+**Catch -- different namespace for inline exemption.** v1.7.72 uses `# order-by-lint:`; v1.7.73 uses `# ansi-lint:`. Future lints get their own namespaces. Avoids collision; each lint can be exempted independently.
+
+**Catch -- filename-based exemption, not path-based.** `conftest.py` matches any conftest.py in the tree (currently only `tests/conftest.py`, but future subdirectories could add their own). Simpler matching, fewer false positives.
+
+**Catch -- self-exemption is explicit.** `test_repo_ansi_lint.py` exempts itself because its docstring and the `ANSI_REGEX_PATTERN` constant legitimately contain the very pattern it lints against. Without self-exemption, the lint would fail when run against itself (infinite recursion of the bug class).
+
+**Catch -- 3 lints in ONE pytest invocation.** Same pattern as v1.7.72: pytest run with multiple node IDs; one process startup. Hook cost stays ~1-2 seconds even with 3 lints.
+
+**Catch -- v1.7.68 limitations now closed.** v1.7.68 release notes explicitly identified "no pre-commit lint for new inline ANSI regex patterns" as a limitation. v1.7.73 closes that gap, consistent with how v1.7.72 closed v1.7.66's same limitation.
+
+### Lessons captured
+
+**No new lesson codified.** Reinforces:
+  * **Refactor ships pair naturally with regression lints.** v1.7.68 → v1.7.73 mirrors v1.7.66 → v1.7.72. The pattern: extract pattern, then prevent its reintroduction.
+  * **Inline exemption mechanisms scale.** Each lint can have its own namespace (`order-by-lint:`, `ansi-lint:`, etc.) without collision. Future lints can keep adding to the toolkit.
+  * **Self-referential lints need explicit self-exemption.** A lint test that scans for pattern X must exclude itself from the scan, or it will always fail.
+
+### Limitations
+
+- **Single-pattern detection only** (only `\x1b\[`)
+- **No README documentation** for the lint rule (error message is self-documenting)
+- **No production-code scan**
+- **No auto-fix capability**
+- **Pre-commit hook adds ~0.5-1s per additional lint** (still fast; 3 lints = ~1.5s total)
+
+### Cumulative arc state (after v1.7.73)
+
+- **73 ships**, all tagged.
+- **pytest local Windows**: 1809 / 10 / 0 (+1 from new lint test; was 1808 / 10 / 0 after v1.7.72)
+- **pytest CI v1.7.72**: in_progress at v1.7.73 ship time; v1.7.73 expected 9/9 GREEN.
+- **Coverage local**: 66.96% (unchanged; new test exercises path scanning, not production code)
+- **CI matrix**: 9 cells, on Node.js 24 since v1.7.67, watched by Dependabot since v1.7.71. 9/9 GREEN since v1.7.64.
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **CI hygiene + post-arc hardening + modernization + refactor + audit + hook + automation + lint x2**: 15 ships (v1.7.59–v1.7.73)
+  * v1.7.59–64: arc closure (red → green)
+  * v1.7.65: diagnostic tooling codified (lesson #67 mitigation #1)
+  * v1.7.66: bug-class sweep (ORDER BY rowid hardening)
+  * v1.7.67: Node.js 24 modernization
+  * v1.7.68: DRY refactor (strip_ansi fixture)
+  * v1.7.69: Linux `/var` audit (mirrors v1.7.63)
+  * v1.7.70: pre-push CI verification hook (lesson #67 mitigation #3 — lesson fully mitigated)
+  * v1.7.71: Dependabot automation
+  * v1.7.72: Pre-commit ORDER BY regression lint
+  * v1.7.73: Pre-commit inline ANSI regex lint (this ship)
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67
+- **Detacher-pattern ships**: 19 (unchanged)
+- **Tooling scripts**: `run_pytest_detached.ps1` (v1.7.39), `ci_diag.ps1` (v1.7.65)
+- **Git hooks**: `.githooks/pre-commit` (3 lints: glyph + ORDER BY + ANSI), `.githooks/pre-push` (CI warning)
+- **Shared test helpers**: `strip_ansi` fixture (v1.7.68)
+- **Automated tracking**: Dependabot (v1.7.71)
+- **Project invariant lints**: glyph lint (v1.7.32/34), ORDER BY lint (v1.7.72), ANSI regex lint (v1.7.73)
+
 ## [1.7.72] — 2026-05-12 — Pre-commit ORDER BY lint: codify the v1.7.66 sweep as a regression guard
 
 **Headline:** v1.7.66 swept 13 ORDER BY sites across 7 repositories, adding `, rowid <DIR>` as a deterministic tie-breaker. Without a lint, the next contributor could re-introduce a single-timestamp ORDER BY and reset the bug class clock. **This ship adds a pytest-level lint test (`test_repo_order_by_lint.py`) and wires it into the pre-commit hook**, making the v1.7.66 invariant mandatory at commit time.
