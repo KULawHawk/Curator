@@ -4,6 +4,117 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.57] — 2026-05-12 — forecast.py test coverage lift (Tier 3)
+
+**Headline:** Writes the first comprehensive test suite for `src/curator/services/forecast.py`. **Coverage on that module: 29.46% → 98.45% (+69.0 pp).** Total project coverage: 65.89% → **66.39% (+0.50 pp)**. **23 new tests** across 5 test classes covering all 5 status branches of `compute_disk_forecast` (past_99pct, insufficient_data, no_growth, past_95pct, fit_ok), the `_linear_fit` pure helper with 6 boundary cases, `compute_all_drives` with mocked psutil partitions including the error-swallow path, and `_monthly_history`'s SQL aggregation. Third of four Tier 3 coverage targets closed.
+
+### Why this matters
+
+v1.7.51's coverage baseline showed `forecast.py` at 29.46% — the third weakest module. v1.7.55 closed `pii_scanner` (22% → 98%); v1.7.56 closed `metadata_stripper` (25% → 94%); this ship closes `forecast`. **Zero existing test files** referenced forecast by name; the 29% was incidental coverage from transitive imports.
+
+Forecast accuracy matters in a different way than PII detection or metadata stripping: false positives here mean phantom warnings about drives that aren't actually filling up; false negatives mean missing a real crisis. The five status branches (past_99pct / insufficient_data / no_growth / past_95pct / fit_ok) are the entire UX surface — each is reported differently to the user. Untested branches = unknown reliability on each status's logic.
+
+With 23 tests now exercising all five branches plus the linear-fit math, the next time someone touches `forecast.py` they get immediate feedback if they break any of: status classification, slope/r² computation, days-to-threshold arithmetic, current-metrics population, or psutil partition iteration.
+
+### Coverage breakdown
+
+```
+Before: forecast.py    109 stmt   71 missed   20 branches   29.46%
+After:  forecast.py    109 stmt    1 missed   20 branches   98.45%
+Gain:                            -70                    +68.99 pp
+```
+
+1 statement missed (line 296): a defensive branch in the `fit_ok` path when `eta_99` arithmetic produces an edge case. Acceptable residual; reaching 100% would require constructing very specific slope/days values for one statement.
+
+Total project coverage moved from **65.89% (v1.7.56)** to **66.39% (v1.7.57)**. The three Tier 3 test-coverage ships (v1.7.55 + v1.7.56 + v1.7.57) combined raised total coverage by **2.59 percentage points** from the v1.7.51 baseline of 63.80%.
+
+### What's new
+
+**`tests/unit/test_forecast.py` (+445 lines, new, 23 tests across 5 classes)**
+
+| Class | Count | Covers |
+|---|---|---|
+| `TestMonthlyBucket` | 3 | gb_added conversion (1024^3 bytes = 1.0 GB), partial, zero |
+| `TestLinearFit` | 6 | Empty raises, single-bucket raises, two-bucket exact fit (r²=1.0), near-perfect 5-bucket (r²>0.99 due to variable month lengths), zero-growth slope=0, monotonic-cumulative slope |
+| `TestComputeDiskForecast` | 8 | past_99pct short-circuit, insufficient_data (0 history), insufficient_data (1 month), no_growth (slope=0), fit_ok normal projection, past_95pct (between warn and critical), current_metrics fields populated, zero_total_size guard |
+| `TestComputeAllDrives` | 3 | Aggregates partitions, skips empty fstype, swallows per-drive errors |
+| `TestMonthlyHistory` | 3 | Empty DB returns [], groups files by month (aggregates duplicates), orders by month ascending |
+
+Total: **23 tests**. All pass in 1.27s.
+
+### Design choices in the test file
+
+  * **`patch("curator.services.forecast.psutil.disk_usage")`** for all disk-usage tests. The real disk state would make tests non-deterministic; mocking returns a fake `_Usage` object with `.used`, `.total`, `.free` attributes that match what psutil returns.
+  * **Real `db` fixture** from `tests/conftest.py` provides a migrated CuratorDB. Tests insert file rows directly via `db.execute()` rather than going through repositories — the goal is to test forecast logic, not repository semantics.
+  * **`_seed_files` helper** handles the FK requirement (`files.source_id → sources.source_id`) by `INSERT OR IGNORE`ing a source row first, then inserting one file row per bucket entry. Uses the actual files-table column names (`curator_id`, `source_id`, `source_path`, `size`, `mtime`, `seen_at`) discovered via live schema query.
+  * **`_mk_usage(used_bytes, total_bytes, free_bytes)`** + **`_Partition(mountpoint, fstype)`** helpers build minimal psutil-shaped stand-ins. No need for `pytest.MonkeyPatch` ceremony; standard `unittest.mock.patch` context manager suffices.
+  * **r² tolerance relaxed for the 5-bucket near-perfect case.** Initially asserted `r² == 1.0`; the actual value was 0.9998 because uneven month lengths (Jan/Mar/May=31, Feb=28, Apr=30) make the day-offset x-axis non-evenly-spaced even when cumulative GB grows by an exact constant. Relaxed to `r² > 0.99` — still captures the "near-perfect linear fit" intent without false-failing on real math.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `tests/unit/test_forecast.py` | +445 (new) | 23 tests across 5 classes |
+| `CHANGELOG.md` | +N | v1.7.57 entry |
+| `docs/releases/v1.7.57.md` | +N | release notes |
+
+No source code changed. Pure test addition.
+
+### Verification
+
+- **Coverage check on forecast.py**: 29.46% → **98.45%** (+69.0 pp)
+- **Total project coverage**: 65.89% → **66.39%** (+0.50 pp)
+- **New tests pass**: ✅ 23/23 in 1.27s
+- **Full pytest baseline (via detacher, with --cov)**: ✅ **1769 passed**, 10 skipped, 10 deselected, 0 failed in 269.48s
+  - Compare to v1.7.56: 1746 passed; +23 from new forecast tests
+  - Zero regression in the existing 1746
+  - Coverage instrumentation noise (~801 ResourceWarnings) unchanged in character
+- **Detacher pattern**: 17th consecutive ship; no MCP wedges
+
+### Authoritative-principle catches
+
+**Catch -- two test bugs caught in first run.** Initial run produced 16/23 passing. Failures:
+  1. `test_perfectly_linear_growth` asserted `r² == 1.0` but got 0.9998 due to variable month lengths (Jan=31, Feb=28, Mar=31, Apr=30, May=31). The `_linear_fit` math treats each month as starting at day `(month_dt - first_dt).days + 30`, producing xs `[30, 61, 89, 120, 150]` — NOT evenly spaced. Cumulative GB grows exactly linearly in y, but x-spacing is uneven, so r² < 1.0. Fix: relaxed to `r² > 0.99`. The math is correct; my test assumption was wrong.
+  2. Six DB-seeding tests failed with `sqlite3.OperationalError: table files has no column named id`. The actual schema uses `curator_id TEXT PRIMARY KEY`, not `id`. Discovery via live schema query against a migrated DB. Fix: rewrote `_seed_files` to use the correct columns (`curator_id`, `source_id`, `source_path`, `size`, `mtime`, `seen_at`) AND insert a `sources` row first to satisfy the FK constraint on `files.source_id`.
+
+**Catch -- FK on files.source_id requires source-first insertion.** The `files` table has `source_id TEXT NOT NULL REFERENCES sources(source_id) ON DELETE RESTRICT`. The conftest `db` fixture applies migrations (creating the constraint) but doesn't seed a source row. The seed helper now INSERTs a source first via `INSERT OR IGNORE` (idempotent across multiple test calls within the same DB).
+
+**Catch -- `psutil.disk_usage` patched at the import site, not the source.** Production code does `from psutil import disk_usage` indirectly via `psutil.disk_usage`. The patch target is `curator.services.forecast.psutil.disk_usage`, not `psutil.disk_usage`. Patching at the import site (where the name is bound) is the correct approach.
+
+**Catch -- the 1 unmissed statement is a defensive edge case.** Line 296 covers a branch in the `fit_ok` status where eta_99 calculation hits a specific slope/days combination. Hitting it deterministically would require constructing pathological history values; the existing test coverage on `fit_ok` exercises the main path. Stop at 98.45%.
+
+**Catch -- `_monthly_history` SQL uses `strftime('%Y-%m', seen_at)`.** This means the test must insert files with `seen_at` formatted as ISO datetime strings. Helper uses `f"{month}-15T12:00:00"` (mid-month, any day works for the year-month bucket extraction).
+
+### Lessons captured
+
+**Lesson #64 (new):** When seeding test DB rows directly via `db.execute()`, verify the schema before writing the INSERT. Schema-by-memory is unreliable — column names drift across migrations, and dataclass field names don't always match column names. Discovery: a 30-second `SELECT sql FROM sqlite_master WHERE type='table' AND name='X'` saves debugging 6 failing tests at once. Applies whenever conftest provides a migrated DB fixture and tests bypass the repository layer.
+
+Also reinforces:
+  * #43 ("signal beats absence of signal") — coverage % directly identified this module as the next target
+  * v1.7.55/v1.7.56 lesson: code verifies tests as much as tests verify code (two bugs caught in first run, both in MY assumptions)
+
+### Limitations
+
+- **Doesn't test against real disk-fill scenarios.** All disk-usage values are synthetic. A long-running drive that's actually filling up might trigger different code paths around eta calculations near zero slope.
+- **No performance tests for the SQL aggregation.** `_monthly_history` queries the full `files` table grouped by month; with millions of rows this could be slow but isn't benchmarked.
+- **psutil partition listing is mocked.** Tests verify the iteration logic but not the actual psutil call. On exotic filesystems (network mounts, fuse) behavior might differ.
+- **The 1 unmissed statement is a fit_ok edge case.** Constructing fixtures to hit line 296 deterministically would require specific slope/days values; the main path is covered.
+- **`watch.py` (41%) is the only remaining Tier 3 coverage target.** Threading complexity makes it the hardest of the four. Likely the next ship.
+
+### Cumulative arc state (after v1.7.57)
+
+- **57 ships**, all tagged, all baselines green
+- **pytest**: 1769 / 10 / 0 / 0 warnings (default invocation; coverage adds ~801 instrumentation ResourceWarnings)
+- **Coverage**: **66.39%** (was 65.89% at v1.7.56; +0.50 pp from this ship; +2.59 pp total over v1.7.51 baseline of 63.80%)
+- **Per-module coverage flagship**: `forecast.py` now at **98.45%** (was third weakest; now in top 5 by coverage)
+- **CI matrix**: 9 cells (3 OSes × 3 Python versions)
+- **Tier 1 backlog**: A1, A3, C1 closed; A2 has proven workaround
+- **Tier 2 backlog**: E3, C5, D3, A4, C6 closed (fully addressed)
+- **Tier 3 (test coverage)**: pii_scanner (v1.7.55), metadata_stripper (v1.7.56), **forecast closed this ship**. Only `watch.py` (41%) remains.
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#64 (added #64 this ship)
+- **Detacher-pattern ships**: 17 (v1.7.39–v1.7.57; v1.7.50, v1.7.54 had no local pytest run)
+
 ## [1.7.56] — 2026-05-12 — metadata_stripper.py test coverage lift (Tier 3)
 
 **Headline:** Writes the first comprehensive test suite for `src/curator/services/metadata_stripper.py`. **Coverage on that module: 24.66% → 94.17% (+69.5 pp).** Total project coverage: 65.03% → **65.89% (+0.86 pp)**. **36 new tests** across 9 test classes covering the three format-specific strippers (image via Pillow, DOCX via zipfile, PDF via pypdf), dispatch logic, directory walks, and the entire `StripReport` aggregate-properties surface. Second weakest module after pii_scanner; closes the second of four Tier 3 coverage targets.
