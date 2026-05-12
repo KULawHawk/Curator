@@ -4,6 +4,135 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.79] — 2026-05-12 — Ad Astra constellation CI audit: documented finding (none of the sibling repos use GitHub Actions)
+
+**Headline:** v1.7.74–v1.7.78's backlog repeatedly listed "Audit Ad Astra sibling repos for similar Node 20 deprecation." **This ship performs and documents that audit.** Finding: **none of the 5 sibling repos under KULawHawk use GitHub Actions yet**, so they're unaffected by the Node.js 20 deprecation. Closure ship: `docs/AD_ASTRA_CI_AUDIT.md` records the findings, the audit methodology, and the reusable CI patterns Curator provides for future sibling-repo adoption.
+
+### What the audit found
+
+Queried `https://api.github.com/repos/KULawHawk/<repo>/contents/.github/workflows` for each sibling repo:
+
+| Repo | Has `.github/workflows/`? |
+|---|---|
+| `curatorplug-atrium-safety` | No |
+| `Atrium` | No |
+| `curatorplug-atrium-citation` | No |
+| `curatorplug-atrium-reversibility` | No |
+| `Ad-Astra` | No |
+
+**Curator is the only repo in the constellation that uses GitHub Actions CI.** The Node 20 deprecation (forcing date 2026-06-02) does not affect the sibling repos.
+
+### Why this ship matters
+
+The audit item appeared on five consecutive backlog lists (v1.7.74, v1.7.75, v1.7.76, v1.7.77, v1.7.78). Each time it was deferred because:
+  * It required cross-repo investigation
+  * It might or might not surface action items
+  * It wasn't blocking any other work
+
+v1.7.79 closes the loop. The audit is done; the result is recorded. Future contributors (or future-me) don't need to re-investigate.
+
+### Curator's reusable CI patterns documented
+
+The audit document lists the 8 CI artifacts Curator provides that could be copied to sibling repos when they adopt CI:
+  * `.github/workflows/test.yml` — 9-cell matrix
+  * `.github/dependabot.yml` — grouped weekly bumps
+  * `.githooks/pre-commit` — 3 project-invariant lints
+  * `.githooks/pre-push` — CI status warning
+  * `scripts/setup_dev_hooks.{ps1,sh}` — dev environment installer
+  * `scripts/ci_diag.{ps1,sh}` — CI diagnostic loop
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `docs/AD_ASTRA_CI_AUDIT.md` | +85 | New audit document |
+| `CHANGELOG.md` | +N | v1.7.79 entry |
+| `docs/releases/v1.7.79.md` | +N | release notes |
+
+No source, test, workflow, or production-code changes.
+
+### Verification
+
+- **API queries** for each sibling repo returned 404 for `.github/workflows`, confirming no CI workflows exist ✅
+- **Expected CI result**: 9/9 GREEN (doc-only ship)
+
+### What this fix does NOT do
+
+- **Doesn't add CI to any sibling repo.** That would be a per-repo ship in each sibling, not a Curator ship.
+- **Doesn't copy `.github/workflows/test.yml` to any sibling.** They might not need a 9-cell matrix; design depends on each repo's testing needs.
+- **Doesn't audit private repos** (none accessible to this PAT scope).
+- **Doesn't audit forks or branches.**
+- **Doesn't re-audit on a schedule.** The audit document specifies the re-audit cadence (new repos, new deprecation announcements) but doesn't automate it.
+- **Doesn't generate a sibling-repo CI bootstrap script.** Each sibling repo's CI design is its own decision.
+
+### Authoritative-principle catches
+
+**Catch -- audit closure documented, not just performed.** Future contributors who see the v1.7.74–v1.7.78 backlog entries will find `docs/AD_ASTRA_CI_AUDIT.md` and immediately know the audit's status. No re-investigation needed.
+
+**Catch -- result is informative even when negative.** "No action needed" is a valid audit outcome. Recording it has the same value as recording "action X needed."
+
+**Catch -- re-audit cadence specified.** The audit document explicitly says when to re-run (new sibling repo, new deprecation, etc.). Avoids the audit becoming stale silently.
+
+**Catch -- reusable patterns inventoried.** When sibling repos do eventually add CI, the audit document tells them which Curator artifacts to copy. Saves them from reinventing the same patterns.
+
+**Catch -- API queries used minimal-scope PAT.** Read-only Contents API access is sufficient; no need for org admin permissions.
+
+**Catch -- this is a small-but-real ship.** Document only, no code. But it closes a backlog item that's been carried for 5 ships. Defaults vs explicit decisions: an item explicitly closed is better than one perpetually deferred.
+
+### Lessons captured
+
+**No new lesson codified.** Reinforces:
+  * **Audit closure has value even when the result is "no action needed."** A documented negative result prevents re-investigation.
+  * **Backlog items deferred 3+ times should either be closed (with reasoning) or scheduled (with a concrete next step).** Perpetual deferral is a smell.
+  * **Document reusable patterns when you have them, not when you need them.** The Curator CI artifacts list in the audit doc is forward-looking infrastructure for sibling repo adoption.
+
+### Limitations
+
+- **Audit is a snapshot** (2026-05-12). New CI in any sibling repo invalidates the "no action" finding.
+- **No automated re-audit** — future audits require manual re-run
+- **Only public repos audited** (private repos weren't accessible)
+- **No assessment of sibling repos' CI needs** — audit only checks existence, not adequacy
+- **No CI bootstrap script** for new sibling repos (they'd manually copy Curator's patterns)
+
+### Cumulative arc state (after v1.7.79)
+
+- **79 ships**, all tagged.
+- **pytest local Windows**: 1809 / 10 / 0 (unchanged this ship; doc-only)
+- **pytest CI v1.7.78**: in_progress at v1.7.79 ship time; v1.7.79 expected 9/9 GREEN.
+- **Coverage local**: 66.96% (unchanged)
+- **CI matrix**: 9 cells, on Node.js 24, using checkout@v6, setup-python@v6, upload-artifact@v7. 9/9 GREEN since v1.7.64.
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **21 ships in CI-hygiene + post-arc arc** (v1.7.59–v1.7.79):
+  * v1.7.59–64: arc closure (red → green)
+  * v1.7.65: `ci_diag.ps1`
+  * v1.7.66: ORDER BY rowid sweep
+  * v1.7.67: Node.js 24 readiness (initial bump)
+  * v1.7.68: `strip_ansi` fixture
+  * v1.7.69: Linux `/var` audit
+  * v1.7.70: pre-push CI hook (lesson #67 fully mitigated)
+  * v1.7.71: Dependabot automation
+  * v1.7.72: pre-commit ORDER BY lint
+  * v1.7.73: pre-commit ANSI regex lint
+  * v1.7.74: PowerShell installer
+  * v1.7.75: README dev-setup section
+  * v1.7.76: bash installer
+  * v1.7.77: Accept Dependabot PR #1
+  * v1.7.78: `ci_diag.sh` bash variant
+  * v1.7.79: Ad Astra constellation CI audit (this ship)
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67
+- **Detacher-pattern ships**: 19 (unchanged)
+- **Tooling scripts (5)**: `run_pytest_detached.ps1`, `ci_diag.ps1`, `ci_diag.sh`, `setup_dev_hooks.ps1`, `setup_dev_hooks.sh`
+- **Git hooks**: `.githooks/pre-commit` (3 lints), `.githooks/pre-push` (CI warning)
+- **Project invariant lints**: glyph, ORDER BY, ANSI regex
+- **Top-level documentation**: README "Contributing — dev setup" section
+- **Cross-platform parity**: PowerShell + bash dev-setup installers + ci_diag variants
+- **Audit documents**: `docs/AD_ASTRA_CI_AUDIT.md` (v1.7.79)
+- **GitHub Actions versions**: checkout@v6, setup-python@v6, upload-artifact@v7
+
 ## [1.7.78] — 2026-05-12 — Bash variant of ci_diag for full cross-platform CI tooling parity
 
 **Headline:** v1.7.76 shipped a bash variant of `setup_dev_hooks` but `ci_diag` remained PowerShell-only — macOS/Linux/WSL contributors needed `pwsh` (PowerShell Core) installed to use the diagnostic loop. **This ship adds `scripts/ci_diag.sh`**, a functionally-equivalent bash variant. README now shows both invocations side by side. **Full cross-platform parity for the dev tooling.**
