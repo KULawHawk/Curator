@@ -4,6 +4,102 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.49] — 2026-05-11 — source_type repository-level immutability (closes E3)
+
+**Headline:** Hardens v1.7.40's GUI source_type immutability contract at the data layer. `SourceRepository.update()` now raises `ValueError` if a caller tries to change a source's `source_type`, with a clear error message explaining why (existing config_json was validated against a different plugin's schema). Closes the E3 backlog item.
+
+### Why this matters
+
+v1.7.40 added GUI source-edit support via `SourceAddDialog`'s edit mode. To prevent users from accidentally invalidating an existing source's config, the dialog disables the `source_type` combobox in edit mode with a tooltip explaining why. But that protection was **GUI-only** -- the underlying `SourceRepository.update()` would happily change `source_type` if called directly (via the CLI, via tests, via a third-party plugin, etc.). The v1.7.40 release notes explicitly flagged this:
+
+> source_type is mutable in SQL but immutable in GUI. [...] A future hardening could add validation at the repository layer that rejects source_type changes outright.
+
+v1.7.49 is that hardening. Now ANY path that goes through `update()` -- GUI, CLI, direct repository call, plugin -- is protected. Defense-in-depth.
+
+### What's new
+
+**`SourceRepository.update()` (`src/curator/storage/repositories/source_repo.py`, +50 lines)**
+
+Before writing, reads the existing row via `self.get(source.source_id)` and compares its `source_type` to the new value. If different, raises `ValueError` with a message that includes:
+  * Both source_types (old + new)
+  * The source_id
+  * Why it's blocked (immutability, config_json schema validation)
+  * The migration path (delete + re-insert)
+
+The check fires BEFORE any DB write, so failed updates leave the existing row completely untouched.
+
+### Behavior matrix
+
+| Scenario | v1.7.48 | v1.7.49 |
+|---|---|---|
+| `update()` with same `source_type` | succeeds | succeeds (back-compat) |
+| `update()` with different `source_type` | **silently corrupts config_json schema** | **raises ValueError** |
+| `update()` on non-existent `source_id` | silent no-op (0 rows affected) | silent no-op (preserved -- separate ship for "not found" error) |
+| `update()` changing display_name / config / enabled / share_visibility | succeeds | succeeds |
+
+### Tests (`tests/unit/test_source_repo_immutability.py`, +200 lines, 11 new tests)
+
+  * **TestSameTypeUpdateAllowed** (4 tests): same source_type with changed display_name / share_visibility / config / enabled all work
+  * **TestDifferentTypeRejected** (5 tests):
+    - Changing local → gdrive raises `ValueError`
+    - Error message mentions both source_types
+    - Error message mentions the source_id
+    - Error message uses the word "immutable"
+    - Failed update doesn't write (existing row untouched)
+  * **TestNonExistentSource** (2 tests):
+    - `update()` on unknown source_id silently no-ops (no error)
+    - Same with an arbitrary `source_type` (no existing row → no comparison → no error)
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `src/curator/storage/repositories/source_repo.py` | +50 | `update()` immutability guard + docstring |
+| `tests/unit/test_source_repo_immutability.py` | +200 (new) | 11 tests across 3 classes |
+| `CHANGELOG.md` | +N | v1.7.49 entry |
+| `docs/releases/v1.7.49.md` | +N | release notes |
+
+### Verification
+
+- **Immutability tests**: ✅ 11/11 pass in 2.44s
+- **v1.7.40 GUI source-edit tests**: ✅ 15/15 still pass (no regression to the edit path; the GUI never sends a different source_type so the new check is invisible)
+- **Storage tests**: ✅ 45/45 still pass
+- **Full pytest baseline (via detacher)**: ✅ **1572 passed**, 10 skipped, 10 deselected, 0 failed in 226.62s
+  - Compare to v1.7.48: 1561 passed in 217.97s
+  - +11 new tests (the immutability suite), all passing
+  - Runtime stable (~227s vs ~218s; within noise)
+  - Zero warnings preserved (v1.7.47's gain intact)
+- **Detacher pattern**: 11th consecutive ship using `run_pytest_detached.ps1`; no MCP wedges
+
+### Authoritative-principle catches
+
+**Catch -- the check fires BEFORE the SQL write.** Initial sketch put the comparison after the read but before the UPDATE statement — correct order. But I had to think carefully about transactional behavior: if `get()` and `UPDATE` were in different transactions, a concurrent update could slip in between (TOCTOU). They're not (each is a separate `self.db.conn()` context). SQLite's `BEGIN IMMEDIATE` or row-level locks would close this, but for source-config updates (very low frequency, single-writer assumption) the simple sequential check is sufficient. Documented in code; could be hardened later if multi-process source-config writers become a thing.
+
+**Catch -- non-existent source_id preserves silent no-op.** The temptation was to also raise on "not found" ("this update will affect 0 rows, that's weird, raise!"). But that's a separate behavior change with its own blast radius -- some test fixtures might create-then-update on shared state where the row could be deleted in between, and a sudden raise would break them. Disciplined scope: only enforce what E3 actually asked for (source_type immutability). The "not found" error is queued as a future ship if anyone wants it.
+
+**Catch -- the error message is the API.** Future debuggers will see this error and need to understand both WHAT broke and WHAT TO DO. The message explicitly tells them: "Delete and re-insert if you need to change the plugin type." Without that guidance, someone hitting this error would have to grep the codebase to figure out the workaround.
+
+### Lessons captured
+
+**No new lesson codified.** Application of pre-existing lessons: defense-in-depth (lesson #29), guards before mutations (lesson #34), clear error messages (lesson #41).
+
+### Limitations
+
+- **TOCTOU window between get() and UPDATE.** A concurrent writer could change the row's source_type between the read and the write. For source-config (low frequency, GUI-driven), this is acceptable. If multi-writer scenarios emerge, switch to `BEGIN IMMEDIATE` transactions or check-and-update in a single SQL statement.
+- **`upsert()` is not affected.** v1.7.40 was a v1.7.39 follow-up about the `update()` path; `upsert()` (INSERT OR REPLACE) deliberately replaces the entire row. If a future ship wants upsert to also enforce immutability, that's a separate, narrower change.
+- **`set_enabled()` bypasses the check.** That method updates only the `enabled` flag and doesn't take a `source_type`, so it's safe by construction. Documented in code.
+- **No equivalent CLI surface.** There's no CLI command to change source_type today, but if one is added in the future, the repository-level guard will catch attempts that try. The CLI would surface the `ValueError` as a clean error message via the standard error handler.
+
+### Cumulative arc state (after v1.7.49)
+
+- **49 ships**, all tagged, all baselines green
+- **pytest**: 1572 / 10 / 0 / 0 warnings (was 1561 at v1.7.48; +11 from new immutability tests)
+- **Tier 1 backlog**: A1, A3, C1 all closed (A2 detacher workaround is proven, root cause investigation deferred)
+- **Tier 2 backlog**: **E3 closed this ship**. Remaining: C5 (Python matrix), C6 (OS matrix), D3 (coverage), A4 (orphan curator-mcp.exe)
+- **Defense-in-depth layers** for source_type immutability: 2 (GUI dialog + repository); CLI gets it for free since there's no CLI surface for it today
+- **Lessons captured**: #46–#62 (unchanged this ship)
+- **Detacher-pattern ships**: 11 (v1.7.39 through v1.7.49)
+
 ## [1.7.48] — 2026-05-11 — Migration-abort flake fix (closes A1)
 
 **Headline:** Eliminates the 5–10% false-fail rate on `tests/unit/test_migration_phase2.py::TestAbort::test_abort_during_run_marks_cancelled` by replacing two timing races with deterministic synchronization. The test now passes 10/10 in stress runs (was previously flaking ~1 in 20). Closes the last remaining Tier 1 item from the 44-item bulletproof analysis.

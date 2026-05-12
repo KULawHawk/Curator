@@ -61,6 +61,56 @@ class SourceRepository:
             )
 
     def update(self, source: SourceConfig) -> None:
+        """Update a source row by source_id.
+
+        v1.7.49: ``source_type`` is now **immutable** at the repository
+        layer. Attempting to update a source with a different
+        ``source_type`` than the existing row raises ``ValueError``
+        before any DB write happens.
+
+        Rationale: changing ``source_type`` would invalidate the existing
+        ``config_json`` against a different plugin's schema. The GUI
+        already enforces this via a disabled combobox + tooltip in
+        :class:`SourceAddDialog` (v1.7.40), but the repository was
+        accepting type changes silently. v1.7.49 closes that gap at the
+        data layer.
+
+        Behavior preserved:
+          * Updating ``source_type`` to the SAME value is allowed (no-op
+            check passes).
+          * Calling ``update()`` on a non-existent ``source_id`` is still
+            a silent SQL no-op (matches pre-v1.7.49 behavior). Adding a
+            "not found" error is a separate, larger-scope ship.
+          * All other fields (``display_name``, ``config``, ``enabled``,
+            ``share_visibility``) remain freely mutable.
+
+        Migration path for callers that need to switch a source's plugin
+        type: delete the source (which cascades-restricts on FileEntity
+        rows that reference it) and re-insert with the new type.
+
+        Args:
+            source: The new :class:`SourceConfig` to write.
+
+        Raises:
+            ValueError: If ``source.source_type`` differs from the
+                existing row's ``source_type``.
+        """
+        # v1.7.49: source_type immutability guard. Read the existing row
+        # so we can compare types. If no row exists, fall through to the
+        # SQL UPDATE (it'll affect 0 rows -- silent no-op, matches
+        # historical behavior).
+        existing = self.get(source.source_id)
+        if existing is not None and existing.source_type != source.source_type:
+            raise ValueError(
+                f"source_type is immutable: cannot change "
+                f"{existing.source_type!r} -> {source.source_type!r} "
+                f"for source {source.source_id!r}. The existing "
+                f"config_json was validated against the "
+                f"{existing.source_type!r} plugin's schema and would "
+                f"not be valid for {source.source_type!r}. Delete and "
+                f"re-insert if you need to change the plugin type."
+            )
+
         with self.db.conn() as conn:
             conn.execute(
                 """
