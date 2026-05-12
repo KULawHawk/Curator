@@ -4,6 +4,69 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.45] — 2026-05-11 — `NO_COLOR=1` in CI (third CI-caught bug class)
+
+**Headline:** v1.7.44's CI run #3 surfaced two distinct failure classes. v1.7.45 fixes Class A (3 of 4 failures) with a 1-line CI env var: `NO_COLOR="1"`. Class B (the remaining recycle-bin path-normalization failure) is intentionally deferred to v1.7.46 as a separate ship -- different root cause, different fix path, different blast radius.
+
+### The two failure classes
+
+**Class A (3 failures, fixed in v1.7.45)** -- Rich/Typer help output wrapped in ANSI escape sequences:
+
+  * `tests/integration/test_cli_cleanup_duplicates.py::TestCleanupDuplicatesHelp::test_duplicates_help_lists_strategies` -- `assert '--keep-under' in ...`
+  * `tests/integration/test_cli_migrate.py::test_migrate_help_shows_phase_1_note` -- `assert '--apply' in ...`
+  * `tests/integration/test_organize_mb_enrichment.py::TestEnrichMbCliValidation::test_help_lists_enrich_mb` -- `assert '--enrich-mb' in ...`
+
+All three assertions look for a substring of the option name in the help output. Locally, the output is plain text -- the substring is found. On the GitHub Actions Windows runner, the output looks like:
+
+```
+\x1b[1m \x1b[0m\x1b[1;36m--keep-under\x1b[0m\x1b[1m  \x1b[0m...
+```
+
+Rich uses ANSI bold + cyan around `--keep-under`, but it also inserts a leading bold-space-reset sequence between the leading whitespace and the option name. That breaks the substring search -- `--keep-under` is not a literal substring of the output because Rich split its rendering of the option line.
+
+Root cause: Rich's auto-detection thinks GitHub Actions' Windows runner has a color-capable terminal even when stdout is being captured by pytest. Locally, the same auto-detection correctly identifies pytest's captured stdout as non-TTY and emits plain text.
+
+**Class B (1 failure, deferred to v1.7.46)** -- Recycle-bin lookup fails on Windows 8.3 short-path username:
+
+  * `tests/integration/test_recycle_bin.py::TestLiveRecycleBin::test_trash_then_find_in_recycle_bin` -- `find_in_recycle_bin returned None for 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\curator_q14_test_aqxtxcv2.txt'`
+
+The GitHub Actions Windows runner has username `runneradmin` whose Windows 8.3 short-path form is `RUNNER~1`. The recycle-bin walker doesn't normalize this when comparing paths. Locally my username is `jmlee` (already <= 8 chars, no short-path translation). Needs source-code investigation in `src/curator/services/` -- likely `pathlib.Path.resolve()` or `win32api.GetLongPathName()` on the lookup path. Deferred to v1.7.46.
+
+### What's new
+
+**`.github/workflows/test.yml` (+10 lines including comment)**
+
+Added `NO_COLOR: "1"` to the pytest step's env block with an inline comment documenting the rationale.
+
+[NO_COLOR](https://no-color.org) is the official environment-variable convention that Rich, Click, and Typer all respect. Setting it to any value disables color output.
+
+### Verification
+
+- **Local re-run with `NO_COLOR=1` set**: 3/3 previously-CI-failing tests pass in 4.59s
+- **Local re-run without the env var**: 3/3 still pass (Rich's local auto-detection correctly emits plain text either way)
+- **CI run #4 (this push)** will validate the fix for Class A. Class B will still fail; that's expected and documented.
+
+### Authoritative-principle catches
+
+**Catch -- environment-driven test flakiness needs environment-driven fixes.** The 3 Class A tests aren't "wrong" -- they correctly verify that the documented options appear in help output. They just assumed plain-text rendering, which is true everywhere except this particular runner configuration. Fixing the tests to be ANSI-aware (e.g., stripping ANSI before assertion) would be a higher-effort, more-fragile fix than just neutralizing the environment.
+
+**Design discipline -- one-class-per-ship.** Tempting to bundle Class A + Class B into a single "fix all CI failures" ship. Resisted: different root causes deserve different commits + release notes so the audit trail is clear. v1.7.45 closes the env issue; v1.7.46 will close the path-normalization issue.
+
+No new lesson codified -- lesson #61 in concrete form, occurrence #3.
+
+### Limitations
+
+- **Recycle-bin path normalization not addressed.** Deferred to v1.7.46. The failure stays in CI as a known-broken test until then.
+- **`NO_COLOR=1` affects ALL of CI, not just the 3 failing tests.** This is intentional -- any other test that incidentally depends on color output would also be affected. The trade-off is: 3 tests are FIXED, 0 tests are broken by this change (verified locally with NO_COLOR=1 set).
+- **Local dev unchanged.** Developers running pytest locally don't need to set NO_COLOR; Rich's local auto-detection already does the right thing. The env var is CI-only because CI is where the misdetection happens.
+
+### Cumulative arc state (after v1.7.45)
+
+- **45 ships**, all tagged
+- **pytest**: 1549 / 9 / 0 unchanged (no local code or test changes; only CI config)
+- **CI-caught bug fixes**: 3 (v1.7.43 dep, v1.7.44 import, v1.7.45 ANSI env)
+- **CI run sequence**: #1 dep gap → #2 import gap → #3 ANSI env + path normalization → #4 expected: ANSI fixed, path normalization remains → #5 (after v1.7.46): expected green
+
 ## [1.7.44] — 2026-05-11 — Relative test import (second CI-caught bug)
 
 **Headline:** v1.7.43's CI run #2 surfaced a second latent local-vs-CI mismatch: `tests/unit/test_migration_autostrip.py` used `from tests.unit.test_migration import ...` (absolute) which worked locally via pytest's namespace-package handling but failed on CI with `ModuleNotFoundError: No module named 'tests'`. The fix is a 1-line switch to a relative import (`from .test_migration import ...`), valid because `tests/unit/__init__.py` exists.

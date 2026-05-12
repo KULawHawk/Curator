@@ -76,5 +76,14 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           PYTHONIOENCODING: utf-8
+          # v1.7.45: NO_COLOR=1 forces Rich/Typer to emit plain-text help output
+          # in CI. Without this, Rich wraps option names like `--apply` in
+          # ANSI escape sequences, breaking substring assertions in
+          # integration tests that check the help output for specific flags.
+          # Locally Rich auto-detects no-TTY and emits plain text, but on
+          # GitHub Actions Windows runners Rich gets a color-capable terminal
+          # context. NO_COLOR is the official environment-variable convention
+          # (https://no-color.org) that Rich, Click, and Typer all respect.
+          NO_COLOR: "1"
         run: |
           pytest tests/ -q --tb=line --timeout=120
