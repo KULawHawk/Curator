@@ -362,6 +362,23 @@ class TestTierServiceScanArchive:
         ))
         assert report.candidate_count == 0
 
+    def test_archive_respects_root_prefix_filter(self):
+        files = [
+            FakeFile("local", "/keep/contract.pdf", 5000, "vital",
+                     last_scanned_at=NOW - timedelta(days=500)),
+            FakeFile("local", "/skip/contract.pdf", 5000, "vital",
+                     last_scanned_at=NOW - timedelta(days=500)),
+        ]
+        service = TierService(StubFileRepository(files))
+        report = service.scan(TierCriteria(
+            recipe=TierRecipe.ARCHIVE,
+            min_age_days=365,
+            root_prefix="/keep",
+            now=NOW,
+        ))
+        assert report.candidate_count == 1
+        assert report.candidates[0].file.source_path == "/keep/contract.pdf"
+
 
 # ===========================================================================
 # Helpers: _matches_root_prefix

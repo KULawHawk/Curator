@@ -249,24 +249,26 @@ class LineageService:
                     if f.curator_id != file.curator_id:
                         candidates[f.curator_id] = f
 
-        # Same parent directory (for VERSION_OF detection)
+        # Same parent directory (for VERSION_OF detection).
+        # `Path(…).parent` always returns a truthy string (at minimum '.'),
+        # so we don't need an `if parent:` guard before constructing the
+        # query. Removing dead defensive code keeps coverage honest.
         parent = str(Path(file.source_path).parent)
-        if parent:
-            query = FileQuery(
-                source_ids=[file.source_id],
-                source_path_starts_with=parent + os.sep,
-                deleted=False,
-                limit=500,  # safety cap; pathological deep dirs
-            )
-            try:
-                for f in self.files.query(query):
-                    if f.curator_id == file.curator_id:
-                        continue
-                    # Direct children only (not nested).
-                    if Path(f.source_path).parent == Path(file.source_path).parent:
-                        candidates[f.curator_id] = f
-            except Exception as e:  # pragma: no cover — defensive
-                logger.warning("parent-dir candidate query failed: {e}", e=e)
+        query = FileQuery(
+            source_ids=[file.source_id],
+            source_path_starts_with=parent + os.sep,
+            deleted=False,
+            limit=500,  # safety cap; pathological deep dirs
+        )
+        try:
+            for f in self.files.query(query):
+                if f.curator_id == file.curator_id:
+                    continue
+                # Direct children only (not nested).
+                if Path(f.source_path).parent == Path(file.source_path).parent:
+                    candidates[f.curator_id] = f
+        except Exception as e:  # pragma: no cover — defensive
+            logger.warning("parent-dir candidate query failed: {e}", e=e)
 
         return list(candidates.values())
 

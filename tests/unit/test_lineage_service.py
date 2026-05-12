@@ -86,7 +86,13 @@ def make_edge(
 
 
 class StubFileRepository:
-    """Minimal FileRepository for LineageService tests."""
+    """Minimal FileRepository for LineageService tests.
+
+    Per Lesson #70: stubs should match real-API behavior, not test convenience.
+    The real FileRepository's `find_by_hash`, `find_candidates_by_size`, and
+    `find_with_fuzzy_hash` filter out deleted files at the SQL level
+    (`WHERE deleted_at IS NULL`). These stubs replicate that filter.
+    """
 
     def __init__(self, files: list[FileEntity] | None = None):
         self._files: dict[UUID, FileEntity] = {f.curator_id: f for f in (files or [])}
@@ -100,25 +106,41 @@ class StubFileRepository:
     def set_query_results(self, files: list[FileEntity]) -> None:
         self._query_results = files
 
-    # Methods called by LineageService._find_candidates
+    # Methods called by LineageService._find_candidates.
+    # All non-`get` finder methods filter deleted files to match the real
+    # repo's SQL-level `deleted_at IS NULL` predicate.
     def find_by_hash(self, xxhash: str) -> list[FileEntity]:
-        return [f for f in self._files.values() if f.xxhash3_128 == xxhash]
+        return [
+            f for f in self._files.values()
+            if f.xxhash3_128 == xxhash and f.deleted_at is None
+        ]
 
     def find_candidates_by_size(
         self, size: int, *, exclude_curator_id: UUID | None = None
     ) -> list[FileEntity]:
         return [
             f for f in self._files.values()
-            if f.size == size and f.curator_id != exclude_curator_id
+            if f.size == size
+            and f.curator_id != exclude_curator_id
+            and f.deleted_at is None
         ]
 
     def find_with_fuzzy_hash(self) -> list[FileEntity]:
-        return [f for f in self._files.values() if f.fuzzy_hash]
+        return [
+            f for f in self._files.values()
+            if f.fuzzy_hash and f.deleted_at is None
+        ]
 
     def query(self, q) -> list[FileEntity]:  # noqa: ARG002
+        # Real repo applies the FileQuery's `deleted=False` filter; the stub
+        # returns whatever was injected via set_query_results() (tests are
+        # responsible for not passing deleted files when simulating a
+        # deleted=False query).
         return self._query_results
 
     def get(self, curator_id: UUID) -> FileEntity | None:
+        # `get` returns deleted files too — the service checks `deleted_at`
+        # explicitly when needed.
         return self._files.get(curator_id)
 
 
@@ -567,6 +589,165 @@ class TestComputeForFile:
         # b should only have been compared once, not twice
         assert call_count["n"] == 1
 
+    def test_fuzzy_index_skips_own_curator_id(self):
+        # If FuzzyIndex returns the input file's own id, the service must
+        # filter it out (otherwise we'd compare a file against itself).
+        a = make_file(fuzzy_hash="3:abcde:fgh", source_path="/a.txt")
+
+        # FuzzyIndex contains `a` itself and returns it on query
+        fuzzy = StubFuzzyIndex({a.curator_id: a.fuzzy_hash})
+        fuzzy.set_query_result([a.curator_id])
+
+        call_count = {"n": 0}
+        def detector(file_a, file_b):
+            call_count["n"] += 1
+            return []
+        pm = StubPluginManager()
+        pm.set_detector(detector)
+
+        svc = LineageService(
+            plugin_manager=pm,
+            file_repo=StubFileRepository([a]),
+            lineage_repo=StubLineageRepository(),
+            fuzzy_index=fuzzy,
+        )
+        result = svc.compute_for_file(a)
+        assert result == []
+        # Detector must not have been called against self
+        assert call_count["n"] == 0
+
+    def test_fuzzy_index_is_sole_discovery_path(self):
+        # Engineer a scenario where FuzzyIndex is the ONLY way `b` is found:
+        # different xxhash, different size, different parent directory.
+        # This exercises the fresh-fetch arm (`f = self.files.get(cid)`
+        # followed by `candidates[cid] = f`).
+        a = make_file(
+            xxhash="hash_a",
+            fuzzy_hash="3:abcde:fgh",
+            size=100,
+            source_path="/dirA/a.txt",
+        )
+        b = make_file(
+            xxhash="hash_b",       # different hash
+            fuzzy_hash="3:abcde:fgi",
+            size=999,              # different size
+            source_path="/dirB/b.txt",  # different parent dir
+        )
+
+        # FuzzyIndex returns b
+        fuzzy = StubFuzzyIndex({b.curator_id: b.fuzzy_hash})
+        fuzzy.set_query_result([b.curator_id])
+
+        pm = StubPluginManager()
+        pm.set_detector(lambda **_: [make_edge(
+            a.curator_id, b.curator_id,
+            kind=LineageKind.NEAR_DUPLICATE, confidence=0.96,
+        )])
+
+        svc = LineageService(
+            plugin_manager=pm,
+            file_repo=StubFileRepository([a, b]),
+            lineage_repo=StubLineageRepository(),
+            fuzzy_index=fuzzy,
+        )
+        result = svc.compute_for_file(a)
+        # b was found via FuzzyIndex only and the edge was emitted
+        assert len(result) == 1
+        assert result[0].to_curator_id == b.curator_id
+
+    def test_parent_dir_query_skips_nested_files(self):
+        # The parent-dir query may return files in nested subdirectories;
+        # the service must filter to direct children only (same parent).
+        # Make sizes unique so the size path doesn't surface b or c
+        # (we want the parent-dir path to be the only discovery channel).
+        a = make_file(source_path="/data/proj/a.txt", size=100)
+        # b is a direct sibling (same parent /data/proj) -> kept
+        b = make_file(source_path="/data/proj/b.txt", size=200)
+        # c is nested (parent /data/proj/sub) -> dropped
+        c = make_file(source_path="/data/proj/sub/c.txt", size=300)
+
+        pm = StubPluginManager()
+        call_pairs = []
+        def detector(file_a, file_b):
+            call_pairs.append((file_a.curator_id, file_b.curator_id))
+            return []
+        pm.set_detector(detector)
+
+        file_repo = StubFileRepository([a, b, c])
+        # query() returns BOTH b and c (the prefix matches both); the
+        # parent-equality check inside the service filters c out.
+        file_repo.set_query_results([a, b, c])
+
+        svc = LineageService(
+            plugin_manager=pm,
+            file_repo=file_repo,
+            lineage_repo=StubLineageRepository(),
+        )
+        svc.compute_for_file(a)
+        # Only b should have been considered a candidate; c filtered out.
+        candidate_ids = {pair[1] for pair in call_pairs}
+        assert b.curator_id in candidate_ids
+        assert c.curator_id not in candidate_ids
+
+    def test_fuzzy_index_returns_missing_file_skipped(self):
+        # If FuzzyIndex returns a cid that the file repo can't resolve
+        # (stale entry: file was deleted from index but still in LSH),
+        # the service must skip it gracefully, not crash.
+        a = make_file(fuzzy_hash="3:abc:def", source_path="/a.txt")
+        stale_cid = uuid4()  # not in file_repo
+
+        fuzzy = StubFuzzyIndex({stale_cid: "3:abc:dgh"})
+        fuzzy.set_query_result([stale_cid])
+
+        pm = StubPluginManager()
+        call_count = {"n": 0}
+        def detector(**_):
+            call_count["n"] += 1
+            return []
+        pm.set_detector(detector)
+
+        svc = LineageService(
+            plugin_manager=pm,
+            file_repo=StubFileRepository([a]),  # stale_cid not present
+            lineage_repo=StubLineageRepository(),
+            fuzzy_index=fuzzy,
+        )
+        result = svc.compute_for_file(a)
+        # Stale cid was skipped; no detector invocation, no result
+        assert result == []
+        assert call_count["n"] == 0
+
+    def test_fuzzy_index_returns_deleted_file_skipped(self):
+        # If FuzzyIndex returns a cid that points to a deleted file
+        # (deleted_at is not None), the service must skip it.
+        a = make_file(fuzzy_hash="3:abc:def", source_path="/a.txt")
+        b_dead = make_file(
+            fuzzy_hash="3:abc:dgh",
+            source_path="/b.txt",
+            deleted_at=NOW,
+        )
+
+        fuzzy = StubFuzzyIndex({b_dead.curator_id: b_dead.fuzzy_hash})
+        fuzzy.set_query_result([b_dead.curator_id])
+
+        pm = StubPluginManager()
+        call_count = {"n": 0}
+        def detector(**_):
+            call_count["n"] += 1
+            return []
+        pm.set_detector(detector)
+
+        svc = LineageService(
+            plugin_manager=pm,
+            file_repo=StubFileRepository([a, b_dead]),
+            lineage_repo=StubLineageRepository(),
+            fuzzy_index=fuzzy,
+        )
+        result = svc.compute_for_file(a)
+        # Deleted file skipped
+        assert result == []
+        assert call_count["n"] == 0
+
 
 # ===========================================================================
 # find_version_stacks() — union-find logic
@@ -763,3 +944,47 @@ class TestFindVersionStacks:
         assert len(stacks) == 1
         assert {f.curator_id for f in stacks[0]} == {b.curator_id, c.curator_id}
         # a is not part of the dup walk, so it's excluded.
+
+    def test_triangle_edges_exercise_already_same_root_branch(self):
+        # Triangle edges A-B, B-C, A-C. The third union finds A and C
+        # already connected (same root via path compression). Exercises
+        # the `if ra != rb:` False branch in the inner `union` function.
+        a = make_file(source_path="/a.txt")
+        b = make_file(source_path="/b.txt")
+        c = make_file(source_path="/c.txt")
+        edges = [
+            make_edge(a.curator_id, b.curator_id, confidence=0.9),
+            make_edge(b.curator_id, c.curator_id, confidence=0.9),
+            make_edge(a.curator_id, c.curator_id, confidence=0.9),
+        ]
+        svc = self._make_svc(
+            [a, b, c],
+            [
+                (LineageKind.NEAR_DUPLICATE, 0.7, edges),
+                (LineageKind.VERSION_OF, 0.7, []),
+            ],
+        )
+        stacks = svc.find_version_stacks()
+        assert len(stacks) == 1
+        assert len(stacks[0]) == 3
+
+    def test_self_loop_edge_produces_singleton_dropped_group(self):
+        # An edge where from_curator_id == to_curator_id is a self-loop;
+        # it puts the node in `parent` but no other connections form.
+        # The resulting group has len(cids) == 1, exercises the
+        # `if len(cids) < 2: continue` branch in find_version_stacks.
+        a = make_file(source_path="/a.txt")
+        # A self-loop edge: from and to are the same id
+        edges = [
+            make_edge(a.curator_id, a.curator_id, confidence=0.9),
+        ]
+        svc = self._make_svc(
+            [a],
+            [
+                (LineageKind.NEAR_DUPLICATE, 0.7, edges),
+                (LineageKind.VERSION_OF, 0.7, []),
+            ],
+        )
+        stacks = svc.find_version_stacks()
+        # Self-loop produces a singleton group, which the service drops.
+        assert stacks == []

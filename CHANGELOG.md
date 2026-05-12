@@ -4,6 +4,82 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.83] — 2026-05-12 — Apex-principle correction: tier.py + lineage.py to 100% coverage
+
+**Both `services/tier.py` and `services/lineage.py` reach 100.00% line + branch coverage.** v1.7.81 (tier 99%) and v1.7.82 (lineage 94%) were premature ships under a "good enough" framing that this ship explicitly retires.
+
+### Apex principle codified
+
+**Accuracy is the apex principle.** Coverage standard going forward: ship at 100% (line + branch) OR mark specific lines `# pragma: no cover` in source with a documented justification (e.g. "defensive code for impossible case given pydantic validation"). Untested code is untrusted code. The doctrine's later principles serve accuracy, not the other way around. This is now memory edit #7 and will be added to `docs/ENGINEERING_DOCTRINE.md` once the pattern holds across one more Phase Gamma ship.
+
+### What landed
+
+**Source changes (1 file):**
+- `src/curator/services/lineage.py` — removed dead `if parent:` guard around the parent-dir candidate query. `Path(...).parent` always returns a truthy string (minimum `"."`), so the False branch was unreachable. Removed rather than pragma-marked because dead defensive code is misleading — it suggests an edge case exists that doesn't. Net: 136 stmts → 135 stmts.
+
+**Test additions (7 new tests):**
+- `tests/unit/test_tier_service.py` — `test_archive_respects_root_prefix_filter` (covers line 254, the `continue` in `_scan_archive` after `_matches_root_prefix` fail — was the only line missed in v1.7.81's 99%)
+- `tests/unit/test_lineage_service.py` — 6 new tests:
+  - `test_fuzzy_index_skips_own_curator_id` (line 234: FuzzyIndex returns input file's own id)
+  - `test_fuzzy_index_is_sole_discovery_path` (lines 237-239: fresh-fetch arm when fuzzy is the only path to b)
+  - `test_fuzzy_index_returns_missing_file_skipped` (branch 238→232: FuzzyIndex returns stale cid not in file_repo)
+  - `test_fuzzy_index_returns_deleted_file_skipped` (branch 238→232: cid points to soft-deleted file)
+  - `test_parent_dir_query_skips_nested_files` (branch 266→262: prefix-match returns nested files that must be filtered to direct children only)
+  - `test_triangle_edges_exercise_already_same_root_branch` (branch 360→exit: union-find's `if ra != rb` False branch when nodes already share a root)
+  - `test_self_loop_edge_produces_singleton_dropped_group` (line 376: edge with from==to produces singleton group)
+
+**Stub fix (1 class):**
+- `StubFileRepository` (in `tests/unit/test_lineage_service.py`) — `find_by_hash`, `find_candidates_by_size`, and `find_with_fuzzy_hash` now filter `deleted_at IS NULL` to match the real SQL-level filter. Without this fix, `test_fuzzy_index_returns_deleted_file_skipped` failed because the deleted file leaked through the size-bucket path. Direct application of Lesson #70 from v1.7.82.
+
+### Coverage delta
+
+| Module | v1.7.81 / v1.7.82 | v1.7.83 |
+|---|---|---|
+| `services/tier.py` | 98.61% | **100.00%** |
+| `services/lineage.py` | 93.98% | **100.00%** |
+| Combined | ~96.3% | **100.00%** |
+
+No uncovered branches in either module. The single `# pragma: no cover` in `lineage.py` (defensive exception handler around the parent-dir query, line ~273) is documented as defensive at the comment.
+
+### Lessons captured (kept rich per directive)
+
+**Lesson #71 — ACCURACY IS THE APEX PRINCIPLE. The "diminishing returns" framing was corner-cutting.** I shipped v1.7.81 at 99% and v1.7.82 at 94% with a "good enough" rationale, treating the remaining gaps as "edge cases requiring more elaborate stub coordination for marginal coverage gain." Jake pushed back hard: *"why would we not ship once we've hit 100%? you forget accuracy is the apex principle."* He was right. Every uncovered branch is real production code that real users can hit. The correct standard:
+
+  1. **100% line + branch coverage** is the default ship bar.
+  2. **`# pragma: no cover`** with a documented justification (e.g. "defensive code for impossible case given pydantic validation") is the only acceptable exception.
+  3. **Dead defensive code should be removed**, not tested or pragma-marked. Removing the dead `if parent:` check in lineage.py is the canonical example: the check made the code look like an edge case exists that doesn't.
+  4. **"Diminishing returns" is corner-cutting language** that has no place in an accuracy-first project. The cost of one more test or one more pragma is bounded; the cost of an untested production branch firing in the field is not.
+
+Memory edit #7 (saved this ship) is the operational form of this principle. The doctrine document will be amended after one more Phase Gamma ship confirms the pattern holds.
+
+**Lesson #72 — Dead defensive code is worse than testing it.** The `if parent:` check in `_find_candidates` guarded against `str(Path(...).parent)` being empty — which it never is. Adding a `# pragma: no cover` to mark the False branch as defensive would technically achieve 100% coverage, but the dead check would remain in the source code, misleading future readers into thinking an edge case exists. Removing it brings the source into agreement with what the tests can verify. **Rule: when a defensive guard can be statically proven unreachable, remove it; don't pragma it.** Reserve `# pragma: no cover` for genuinely defensive code where the impossibility is contextual (e.g. "this code path requires pydantic validation to have been bypassed") and removing the guard would be unsafe.
+
+**Lesson #73 — Stub-fidelity bugs only surface under accuracy-mandate testing.** The original `StubFileRepository.find_candidates_by_size` returned ALL files of the matching size, including deleted ones — the real SQL has `WHERE deleted_at IS NULL`. This stub-fidelity gap was invisible at 94% coverage; it only became a test failure when `test_fuzzy_index_returns_deleted_file_skipped` was written to chase the 100% bar. The deleted file leaked through the size-bucket path into the candidate set, then got compared to itself by the detector, producing a result the test didn't expect. **Implication: pushing for 100% coverage finds stub bugs that 90%-good-enough leaves dormant. The 100% bar isn't just about lines hit — it's a forcing function that surfaces fidelity gaps in the test infrastructure itself.** This is the second time Lesson #70 has fired (the first was the original "stubs should match real-API behavior" capture in v1.7.82); the meta-lesson is that Lesson #70 violations are common and the 100% bar is what makes them visible.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `src/curator/services/lineage.py` | −2 / +5 lines (remove `if parent:`, comment block explaining) |
+| `tests/unit/test_tier_service.py` | +18 lines (1 new test) |
+| `tests/unit/test_lineage_service.py` | +220 lines (6 new tests, StubFileRepository fix with docstring) |
+| `CHANGELOG.md` | this entry |
+| `docs/releases/v1.7.83.md` | release notes |
+
+Test count: 1898 → 1898 + 1 (tier) + 6 (lineage) = **1905**. (Stub fix and parent-dir test rewrite don't change count.)
+
+### Arc state
+
+- 83 ships, all tagged
+- pytest local Win: 1905 / 10 / 0 (expected)
+- Coverage local: ~67.8% → will tick up slightly as 2 modules go to 100%
+- CI: 8 verified all-green runs in post-arc series
+- Doctrine: still v1.0; 3 new lessons (#71, #72, #73); apex-accuracy standard codified in memory edit #7 pending doctrine amendment
+
+### Next
+
+Phase Gamma continues. Next target: **`services/safety.py`** (67%, 201 stmts) at the new 100% standard. Bigger module than lineage — expect more stub scaffolding, but the bar is the same.
+
 ## [1.7.82] — 2026-05-12 — Phase Gamma: `services/lineage.py` unit tests (54% → 94%)
 
 Adds 32 focused unit tests for `LineageService`. Coverage on `services/lineage.py` lifts from **54.17% to 93.98%** (+39.81 pp).
