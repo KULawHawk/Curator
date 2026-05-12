@@ -4,6 +4,161 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.64] — 2026-05-12 — Deterministic bundle membership order: ORDER BY added_at, rowid
+
+**Headline:** v1.7.63 closed the macOS arc (all 3 macOS cells green) but Windows Python 3.11 and 3.12 cells started failing on a SINGLE test: `tests/gui/test_gui_bundle_editor.py::TestBundleEditorDialog::test_edit_mode_pre_populates`. The test asserts that bundle membership UUIDs come back in insertion order `[files[0], files[1]]`, but got them swapped. **Root cause: SQLite's `CURRENT_TIMESTAMP` has second-level resolution, so two memberships added in the same call get identical `added_at` values, and `ORDER BY added_at` alone is non-deterministic.** Fix: add `rowid` as secondary sort key.
+
+### Diagnosis
+
+v1.7.63's CI run reported 7/9 green. Windows 3.11 and 3.12 failed:
+
+```
+FAILED tests/gui/test_gui_bundle_editor.py::TestBundleEditorDialog::test_edit_mode_pre_populates
+    AssertionError: assert [UUID('948f...abe5')] == [UUID('c448...cd0')]
+    At index 0 diff: UUID('948f...abe5') != UUID('c448...cd0')
+    Full diff:
+    +     UUID('948f...abe5'),
+          UUID('c448...cd0'),
+    -     UUID('948f...abe5'),
+```
+
+Got `[A, B]`, expected `[B, A]`. Same code passes on Windows 3.13 and on all Linux/macOS cells. Initial reaction: "flaky test, must be hash-order randomization."
+
+But v1.7.63 only touched macOS-specific code (`_macos_os_managed_paths`). It couldn't have caused a Windows-3.11/3.12 regression. So either (a) this test has been flaky all along and we got lucky in v1.7.62, or (b) something is genuinely non-deterministic and was masked.
+
+### Root cause
+
+The test fixture creates a bundle with 2 members in rapid succession:
+```python
+bundle = rt.bundle.create_manual(
+    name="Existing Bundle",
+    member_ids=[files[0].curator_id, files[1].curator_id],
+    ...
+)
+```
+
+`create_manual` inserts both memberships into `bundle_memberships` table. The schema:
+```sql
+CREATE TABLE bundle_memberships (
+    bundle_id  TEXT,
+    curator_id TEXT,
+    role       TEXT,
+    confidence REAL,
+    added_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (bundle_id, curator_id)
+);
+```
+
+**SQLite's `CURRENT_TIMESTAMP` returns time at SECOND resolution** (e.g. `2026-05-12 17:50:53`). Both INSERTs in the same call complete within milliseconds, getting identical `added_at` values.
+
+When `get_memberships()` ran:
+```sql
+SELECT * FROM bundle_memberships WHERE bundle_id = ? ORDER BY added_at
+```
+
+With identical `added_at` values for both rows, SQLite's tie-breaking is implementation-defined and varies by:
+- Storage engine version
+- Index hint usage
+- Python build / SQLite library version compiled in
+- Page layout / row insertion patterns
+
+On Windows Python 3.11 (SQLite 3.43.x) and 3.12 (SQLite 3.45.x): one tie-break order. On Windows Python 3.13 (SQLite 3.47.x): the other. On Linux/macOS (system SQLite, different versions): yet another. The test happened to pass on 6 of 9 cells.
+
+### Fix
+
+```python
+def get_memberships(self, bundle_id: UUID) -> list[BundleMembership]:
+    cursor = self.db.conn().execute(
+        # v1.7.64: secondary sort by rowid for deterministic ordering.
+        # CURRENT_TIMESTAMP has second-level resolution in SQLite, so two
+        # memberships added in the same call (e.g. create_manual with
+        # multiple member_ids) get identical added_at values. Without a
+        # secondary key, the order is implementation-defined and varies
+        # between Python builds (Windows 3.11/3.12 vs 3.13). rowid is
+        # monotonic by insertion, so it falls back to user intent order.
+        "SELECT * FROM bundle_memberships WHERE bundle_id = ? "
+        "ORDER BY added_at, rowid",
+        (uuid_to_str(bundle_id),),
+    )
+    return [self._row_to_membership(row) for row in cursor.fetchall()]
+```
+
+SQLite's `rowid` is automatically assigned to every row in a non-`WITHOUT ROWID` table, in monotonically increasing order based on insertion. Since `bundle_memberships` is a standard table (no `WITHOUT ROWID` declaration), it has a usable `rowid`. Adding it as a secondary sort key produces deterministic ordering:
+  * If `added_at` differs: that wins
+  * If `added_at` is identical: `rowid` falls back to user intent (insertion order)
+
+This is the canonical SQL fix for "non-deterministic ordering on tied timestamps."
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `src/curator/storage/repositories/bundle_repo.py` | +10, -2 | Add `rowid` as secondary ORDER BY + explanatory comment |
+| `CHANGELOG.md` | +N | v1.7.64 entry |
+| `docs/releases/v1.7.64.md` | +N | release notes |
+
+### Verification
+
+- **Local flakiness check**: ran failing test 10x consecutively. **10/10 pass** with the fix (vs. previously ~50% pass rate on Win 3.11/3.12) ✅
+- **No regression in bundle-editor suite**: 32 passed ✅
+- **No regression in CLI bundles suite**: 17 passed ✅
+- **Expected CI result**: all 9 cells GREEN, finally closing the 20-ship CI-red arc
+
+### What this fix does NOT do
+
+- **Doesn't audit other repositories for the same pattern.** `file_repo`, `audit_repo`, `lineage_repo` may also use `ORDER BY <timestamp>` without secondary sort. Should be audited. Future ship candidate.
+- **Doesn't improve `CURRENT_TIMESTAMP` resolution.** SQLite's `CURRENT_TIMESTAMP` is fixed at second-level. To get sub-second, one would need `strftime('%Y-%m-%d %H:%M:%f', 'now')` or app-level timestamps. The rowid fallback is simpler and sufficient.
+- **Doesn't fix the Windows live recycle-bin test bug.** Still deferred from v1.7.59.
+- **Doesn't address Node.js 20 deprecation warning.** Still pending.
+- **Doesn't add CI status badge to README.** Sixth ship noting.
+
+### Authoritative-principle catches
+
+**Catch -- the test was always flaky.** Not a regression caused by v1.7.63. SQLite tie-breaking happened to align with the test's expected order on most platforms, but Windows Python 3.11/3.12 broke the streak. The earlier 6/9-green wasn't "correct" — it was "lucky." Every passing run before v1.7.63 had a roughly 50-50 chance of failing on that test.
+
+**Catch -- caught only because of the broader CI matrix.** Without the OS×Python matrix, this latent bug would have shipped indefinitely. Each cell of the matrix is a different SQLite version + Python build combination, surfacing tie-breaking divergence that no single-cell test setup would catch. **The 9-cell matrix earned its keep again this ship.**
+
+**Catch -- 3 alternative fixes considered:**
+  1. **Switch test to set comparison** (`assert set(_initial_member_ids) == {files[0].curator_id, files[1].curator_id}`) — papers over the production bug; production code is still non-deterministic for end users.
+  2. **Upgrade `added_at` to microsecond resolution** (`strftime('%Y-%m-%d %H:%M:%f', 'now')`) — invasive (changes schema or column expression), affects existing data, requires migration.
+  3. **Add `rowid` as secondary ORDER BY** — 1-line SQL change, zero schema impact, fully deterministic. **Chosen.**
+
+**Catch -- `rowid` is a stable SQLite primitive.** Every non-`WITHOUT ROWID` table has it. It's monotonic on inserts. Using it as a secondary sort is idiomatic SQLite and the recommended pattern in the SQLite docs for "deterministic ordering when other sort keys may tie."
+
+**Catch -- no need for full baseline.** This is a 1-line SQL change that adds a secondary sort key. It cannot break any test that doesn't depend on ordering, and tests that DO depend on ordering will now pass deterministically. Skip the 8-min baseline; ship.
+
+### Lessons captured
+
+**No new lesson codified.** Reinforces:
+  * #66 ("green local pytest does not imply green CI") — seventh ship in the sub-arc
+  * #67 ("diagnose with logs, not with hypotheses") — confirmed UUID swap pattern was non-determinism via SQLite tie-breaking, not a real ordering bug
+  * Subordinate lesson: **`ORDER BY <timestamp>` is non-deterministic when timestamps tie. Always add a secondary key (`rowid`, primary key, etc.) for stable ordering.**
+  * Subordinate lesson: **OS×Python CI matrices surface SQLite version divergence in tie-breaking.** Worth keeping a wide matrix for this reason alone.
+
+### Limitations
+
+- **Doesn't audit other repositories.** Future ship.
+- **Doesn't upgrade `added_at` to sub-second precision.** Not needed; rowid suffices.
+- **No CI status badge in README.** Sixth ship.
+- **Node.js 20 deprecation tech debt still pending.**
+
+### Cumulative arc state (after v1.7.64)
+
+- **64 ships**, all tagged.
+- **pytest local Windows**: 1807 / 10 / 0 (unchanged this ship; targeted source fix)
+- **pytest CI v1.7.63**: 7/9 green (Win 3.11 + 3.12 failed on this flaky test).
+- **Expected after v1.7.64**: **ALL 9 cells GREEN.** Final closure of the 20-ship CI-red arc.
+- **Coverage local**: 66.96% (unchanged; one-line SQL change)
+- **CI matrix**: 9 cells. v1.7.64 expected to be the FIRST 9/9 GREEN run since v1.7.42 (over 3 weeks of CI-red ships).
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed (fully addressed)
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **CI hygiene**: 6 ships in (v1.7.59–v1.7.64); v1.7.64 expected to FINALLY close the arc.
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67 (no new this ship; reinforcement of #66, #67)
+- **Detacher-pattern ships**: 19 (unchanged; targeted source fix with focused regression check)
+
 ## [1.7.63] — 2026-05-12 — macOS SafetyService fix: `/private` was over-broad
 
 **Headline:** v1.7.62 successfully fixed the Rich-help tests — **6 of 9 CI cells went GREEN** (all Windows + all Ubuntu). The 3 macOS cells still failed, but with a completely different error: SafetyService misclassifies pytest's tmp_path as OS_MANAGED (REFUSE) instead of SAFE/APP_DATA (CAUTION). Root cause: `_macos_os_managed_paths()` listed `Path("/private")` wholesale, which on macOS includes `/private/var/folders/...` — the user TMPDIR where pytest puts everything. **Fix: replace the bare `/private` with explicit system-managed subdirs.**

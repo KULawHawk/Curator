@@ -133,7 +133,15 @@ class BundleRepository:
     def get_memberships(self, bundle_id: UUID) -> list[BundleMembership]:
         """All members of a bundle."""
         cursor = self.db.conn().execute(
-            "SELECT * FROM bundle_memberships WHERE bundle_id = ? ORDER BY added_at",
+            # v1.7.64: secondary sort by rowid for deterministic ordering.
+            # CURRENT_TIMESTAMP has second-level resolution in SQLite, so two
+            # memberships added in the same call (e.g. create_manual with
+            # multiple member_ids) get identical added_at values. Without a
+            # secondary key, the order is implementation-defined and varies
+            # between Python builds (Windows 3.11/3.12 vs 3.13). rowid is
+            # monotonic by insertion, so it falls back to user intent order.
+            "SELECT * FROM bundle_memberships WHERE bundle_id = ? "
+            "ORDER BY added_at, rowid",
             (uuid_to_str(bundle_id),),
         )
         return [self._row_to_membership(row) for row in cursor.fetchall()]
