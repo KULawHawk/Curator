@@ -4,6 +4,169 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.70] — 2026-05-12 — Pre-push CI verification hook: lesson #67 mitigation #3 codified
+
+**Headline:** Lesson #67 ("diagnose with logs, not with hypotheses") had three mitigations identified during the v1.7.42–v1.7.64 CI-red arc. v1.7.65 codified #1 (PAT-enabled diagnostics) as `scripts/ci_diag.ps1`. #2 ("persist the PAT to skip re-pasting") was implicit in #1's design. **This ship codifies #3: a pre-push git hook that warns when origin's latest CI run is red, preventing the 20-ship-silent-red-arc failure mode where no one noticed the dashboard was on fire.**
+
+### What the hook does
+
+Fires on `git push`. Queries GitHub Actions API for the latest workflow run on the repo. Decision logic:
+
+| State | Action |
+|---|---|
+| `completed / success` | Silent pass |
+| `completed / failure` | Loud warning with run details + URL + bypass instructions |
+| `in_progress` / `queued` | Informational note: "previous run still in_progress" |
+| Other | Silent pass |
+
+**Never blocks the push.** Just warns. Lesson #67's bug was about not *noticing* the red state, not about pushing while red. A visible warning sufficient.
+
+**Always skippable** via `git push --no-verify` for cases where the developer explicitly knows this push fixes CI.
+
+### Token discovery (same priority as ci_diag.ps1)
+
+  1. `$GH_TOKEN` env var
+  2. `$GITHUB_TOKEN` env var
+  3. `~/.curator/github_pat` file (single-line, 0600-style)
+  4. No token → skip silently (no token = no blocking; doesn't impede contributors without PATs)
+
+### Sample output (warning state)
+
+```
+==================================================================
+  pre-push: LATEST CI RUN IS RED
+==================================================================
+  Run:    v1.7.63: macOS SafetyService fix...
+  Status: completed / failure
+  URL:    https://github.com/KULawHawk/Curator/actions/runs/...
+
+  This push will trigger a new CI run, but the most recent run
+  on origin is in a failing state. Consider:
+    1. Verify this commit fixes (not compounds) the failure
+    2. Run scripts/ci_diag.ps1 summary to see what failed
+    3. Bypass this check with: git push --no-verify
+==================================================================
+```
+
+### Sample output (in_progress, observed in v1.7.70 testing)
+
+```
+pre-push: CI status: previous run still in_progress (https://...)
+```
+
+### Implementation choices
+
+  * **POSIX shell, not PowerShell.** Git hooks run under `sh.exe` (Git for Windows) on Windows; standardizing on POSIX `sh` makes the hook portable to mac/Linux without modification. The companion `ci_diag.ps1` is PowerShell because it's invoked interactively; the hook is invoked by git.
+  * **curl preferred, wget fallback.** Both are universally available. Hook silently skips if neither is found (rather than blocking work).
+  * **jq preferred, Python fallback.** jq is canonical for shell JSON parsing. Python fallback ensures the hook works on systems without jq installed (most pytest dev environments already have Python).
+  * **No token = silent skip.** A contributor without a PAT shouldn't be blocked from pushing. The hook is a *signal*, not a *gate*.
+  * **Never block on transient failures** (HTTP non-200, network errors, parsing failures). Lesson #67 was about visibility, not about gatekeeping.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `.githooks/pre-push` | +180 | New POSIX shell hook with token discovery, API query, JSON parse, decision logic |
+| `CHANGELOG.md` | +N | v1.7.70 entry |
+| `docs/releases/v1.7.70.md` | +N | release notes |
+
+No source, test, or workflow changes.
+
+### Verification
+
+- **Live test against v1.7.69 CI run (in_progress at test time)**:
+  ```
+  pre-push: CI status: previous run still in_progress (https://github.com/KULawHawk/Curator/actions/runs/25759394919)
+  Exit code: 0
+  ```
+  Hook correctly detected in_progress state, printed informational note, didn't block. ✅
+
+- **Token discovery test**: GH_TOKEN env var path verified ✅
+- **`core.hooksPath` already set to `.githooks`** (configured at v1.7.34 alongside pre-commit hook) so the new pre-push hook activates immediately for anyone with the existing configuration ✅
+- **Expected CI result**: 9/9 GREEN (hook adds NO source/test changes)
+
+### What this fix does NOT do
+
+- **Doesn't block pushes.** Warning only. If a developer is intentionally pushing a fix for a known-red CI, they don't need to add `--no-verify`. The warning is informational. This is intentional: blocking pushes when CI is red creates chicken-and-egg problems for hotfix workflows.
+- **Doesn't run any local tests.** The hook checks remote CI status; it doesn't approximate a 9-cell matrix locally (impossible in shell).
+- **Doesn't notify other developers.** If multiple devs are pushing concurrently, each sees CI status at their push time only. The hook doesn't coordinate.
+- **Doesn't write logs.** Output goes to stderr; no persistent record. Combined with `ci_diag.ps1 summary`, the loop is: get warned by hook, run summary to see what's failing, fix, push again.
+- **Doesn't auto-install the hook for new clones.** Activation requires `git config core.hooksPath .githooks` (per-clone setup, same as pre-commit hook).
+- **Doesn't add a Windows-native PowerShell variant.** POSIX `sh` is portable; rewriting in PowerShell would create two files to maintain.
+- **Doesn't update the README** with hook activation instructions. The pre-commit hook's activation steps would benefit from being documented; this is a future doc ship.
+
+### Authoritative-principle catches
+
+**Catch -- mitigation #3 closes the third leg of lesson #67's response.** The lesson was identified during v1.7.62's diagnosis arc with three concrete mitigations. v1.7.65 codified #1 (diagnostic tooling). v1.7.70 codifies #3 (pre-push warning). #2 ("persist the PAT") was always implicit in the file-fallback path of #1's design — ci_diag.ps1 reads from `~/.curator/github_pat`, eliminating re-paste.
+
+**Catch -- warning, not blocking.** A blocking hook would create:
+  * Chicken-and-egg: "CI is red, but I'm pushing a fix" → dev must add `--no-verify`
+  * Friction during hotfix workflows
+  * False positives when CI is intermittently flaky
+A visible warning preserves the developer's autonomy while solving lesson #67's actual problem (invisibility of failure).
+
+**Catch -- silent skip when no token.** Contributors who haven't set up a PAT (typical for first-time PR submitters) shouldn't be blocked. The hook adds value for the maintainer, doesn't impede outsiders.
+
+**Catch -- POSIX shell, not PowerShell.** Reasoning explained in the implementation choices section. Cross-platform portability with zero per-OS variants.
+
+**Catch -- curl + jq with fallbacks.** Defensive layering. curl is on every modern Unix; wget works on stripped-down installs. jq is canonical; Python falls back for systems without jq. Layered fallbacks ensure the hook works in the widest range of environments without forcing dependencies on contributors.
+
+**Catch -- the hook's silent failure paths protect work.** If the API request fails, the token is missing, the JSON can't be parsed, or anything else goes wrong: the hook exits 0 and the push proceeds. The hook is a *signal*, not a *gate*. Bugs in the hook can't block developers from working.
+
+**Catch -- not blocking is the lesson #67 fix.** The 20-ship silent arc wasn't caused by pushing while CI was red. It was caused by NOT NOTICING the dashboard was on fire. Warning solves the visibility problem. Blocking would solve a different (non-existent) problem.
+
+### Lesson #67's three mitigations now status
+
+| Mitigation | Description | Status |
+|---|---|---|
+| #1 | One-command CI log access via `ci_diag.ps1` | v1.7.65 ✅ |
+| #2 | Persist PAT to avoid re-pasting | v1.7.65 (via `~/.curator/github_pat` file path) ✅ |
+| #3 | Pre-push warning when CI is red | **v1.7.70** ✅ |
+
+**Lesson #67 fully mitigated.**
+
+### Lessons captured
+
+**No new lesson codified.** Reinforces:
+  * **Warnings are sometimes more useful than gates.** Lesson #67 was about visibility, not gatekeeping. Pre-push hooks can warn-only.
+  * **Hooks should never block work on transient infrastructure failures.** API hiccups, missing tokens, network issues should result in silent skip, not refused push.
+  * **Diagnostic tooling pairs with corrective tooling.** ci_diag.ps1 (v1.7.65) tells you what failed; pre-push hook (v1.7.70) tells you THAT something failed before you compound it.
+
+### Limitations
+
+- **Hook requires per-clone activation** (`git config core.hooksPath .githooks`). New contributors won't get the hook automatically.
+- **No CI dashboard integration** (e.g. Slack notification on red status). Pre-push fires only on push, not continuously.
+- **No README documentation** for hook activation (future doc ship)
+- **No auto-install script** that sets up hooksPath, PAT file, and ci_diag.ps1 in one go
+- **Doesn't surface the warning in commit messages or PR descriptions**
+- **Tech debt remaining**: dependabot config, OIDC migration, pre-commit ORDER BY lint, pre-commit inline ANSI lint
+
+### Cumulative arc state (after v1.7.70)
+
+- **70 ships**, all tagged.
+- **pytest local Windows**: 1807 / 10 / 0 (unchanged this ship; pure infrastructure addition)
+- **pytest CI v1.7.69**: in_progress at v1.7.70 ship time; v1.7.70 expected 9/9 GREEN.
+- **Coverage local**: 66.96% (unchanged)
+- **CI matrix**: 9 cells, running on Node.js 24 since v1.7.67. 9/9 GREEN since v1.7.64.
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed (fully addressed)
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **CI hygiene + post-arc hardening + modernization + refactor + audit + hook**: 12 ships (v1.7.59–v1.7.70)
+  * v1.7.59–64: arc closure (red → green)
+  * v1.7.65: diagnostic tooling codified (lesson #67 mitigation #1)
+  * v1.7.66: bug-class sweep (ORDER BY rowid hardening)
+  * v1.7.67: Node.js 24 modernization
+  * v1.7.68: DRY refactor (strip_ansi fixture)
+  * v1.7.69: Linux `/var` audit (mirrors v1.7.63)
+  * v1.7.70: pre-push CI verification hook (lesson #67 mitigation #3 — lesson fully mitigated)
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67 (no new this ship; #67's mitigations now fully codified)
+- **Detacher-pattern ships**: 19 (unchanged)
+- **Tooling scripts**: `run_pytest_detached.ps1` (v1.7.39), `ci_diag.ps1` (v1.7.65)
+- **Git hooks**: `.githooks/pre-commit` (v1.7.34, lesson #50 glyph lint), `.githooks/pre-push` (v1.7.70, lesson #67 CI warning)
+- **Shared test helpers**: `strip_ansi` fixture (v1.7.68)
+
 ## [1.7.69] — 2026-05-12 — Linux `/var` audit: defensive subdivision mirroring v1.7.63 macOS fix
 
 **Headline:** v1.7.63 surgically subdivided macOS's bare `Path("/private")` into specific system-managed subdirs after a real CI failure (macOS pytest's TMPDIR lives under `/private/var/folders`). The Linux OS-managed paths had the same architectural problem: bare `Path("/var")`. Under FHS 3.0, `/var/tmp` is officially user-writable, and some CI configurations set `TMPDIR=/var/tmp`. **This ship surgically subdivides Linux's `/var` into specific system-managed subdirs**, mirroring the v1.7.63 macOS fix — purely proactive (no current Linux test fails) but defensive against latent flakiness.

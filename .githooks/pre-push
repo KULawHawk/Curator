@@ -1,0 +1,196 @@
+#!/bin/sh
+# Curator pre-push hook (v1.7.70)
+#
+# Lesson #67 mitigation #3: warn the developer before pushing if the
+# latest CI run on origin/main is currently RED. This doesn't prevent
+# all "green local, red CI" surprises (which require the matrix to
+# actually run), but it does prevent the specific failure mode that
+# caused the v1.7.42-v1.7.63 silent-red-arc: pushing 20 commits without
+# noticing the dashboard was on fire.
+#
+# What this hook does:
+#   1. Reads the GitHub token from $GH_TOKEN, $GITHUB_TOKEN, or
+#      ~/.curator/github_pat (same token-discovery path as ci_diag.ps1).
+#   2. Queries the GitHub Actions REST API for the latest workflow run.
+#   3. If status=completed AND conclusion=success: pass silently.
+#   4. If status=completed AND conclusion=failure: print warning + tally.
+#   5. If status=in_progress: print a note; let the push proceed.
+#   6. If no token available: skip the check silently (no token = no
+#      action). Doesn't block work for contributors without a PAT.
+#
+# Activation (one-time, per clone):
+#     git config core.hooksPath .githooks
+#
+# Bypass (when intentional, e.g. you KNOW this push fixes CI):
+#     git push --no-verify
+#
+# Why pre-push, not pre-commit:
+#   * CI runs on push to origin, so the relevant signal is "will this
+#     push compound a red baseline?" not "will this commit break CI?"
+#   * Pre-commit hooks fire on every commit (often during rebase/amend
+#     workflows); pre-push fires only on the upload action.
+#   * A red CI run doesn't make every commit wrong; it makes the next
+#     PUSH risky.
+#
+# Cost: one HTTPS GET to api.github.com, ~200ms typical. Negligible.
+#
+# Compatibility:
+#   * POSIX shell (works under Git for Windows' bundled sh.exe, mac, linux)
+#   * Requires curl (default on macOS/Linux; included with Git for Windows)
+#   * Requires jq for JSON parsing, OR a Python interpreter to fall back to
+#
+# Lesson #67 mitigation #3 implementation status: this hook is the
+# third concrete mitigation alongside:
+#   * #1 (v1.7.65): scripts/ci_diag.ps1 for one-command CI log access
+#   * #2 (implicit): PAT-enabled diagnostics in chat workflow
+#   * #3 (v1.7.70, this hook): pre-push warning when CI is red
+
+set -e
+
+# ---------------------------------------------------------------------------
+# Token discovery (same priority as ci_diag.ps1)
+# ---------------------------------------------------------------------------
+
+TOKEN=""
+if [ -n "$GH_TOKEN" ]; then
+    TOKEN="$GH_TOKEN"
+elif [ -n "$GITHUB_TOKEN" ]; then
+    TOKEN="$GITHUB_TOKEN"
+elif [ -f "$HOME/.curator/github_pat" ]; then
+    TOKEN=$(cat "$HOME/.curator/github_pat" | tr -d '\n\r ')
+fi
+
+# No token = skip the check silently. Don't block work for contributors
+# who haven't set up a PAT.
+if [ -z "$TOKEN" ]; then
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Query latest workflow run
+# ---------------------------------------------------------------------------
+
+REPO="KULawHawk/Curator"
+API="https://api.github.com/repos/$REPO/actions/runs?per_page=1"
+
+# Try curl; fall back to wget if needed
+if command -v curl >/dev/null 2>&1; then
+    HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+        -H "Accept: application/vnd.github+json" \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        -H "User-Agent: Curator-PrePush/v1.7.70" \
+        "$API" 2>/dev/null) || {
+            # curl failed (network, timeout, etc.) -- don't block the push
+            echo "pre-push: CI status check skipped (curl failed)" >&2
+            exit 0
+        }
+elif command -v wget >/dev/null 2>&1; then
+    HTTP_RESPONSE=$(wget -qO- \
+        --header="Accept: application/vnd.github+json" \
+        --header="Authorization: Bearer $TOKEN" \
+        --header="X-GitHub-Api-Version: 2022-11-28" \
+        --header="User-Agent: Curator-PrePush/v1.7.70" \
+        "$API" 2>/dev/null)$'\n200' || {
+            echo "pre-push: CI status check skipped (wget failed)" >&2
+            exit 0
+        }
+else
+    echo "pre-push: CI status check skipped (no curl or wget available)" >&2
+    exit 0
+fi
+
+# Extract HTTP status code (last line) and JSON body (everything else)
+HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tail -n1)
+JSON_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+
+if [ "$HTTP_STATUS" != "200" ]; then
+    echo "pre-push: CI status check returned HTTP $HTTP_STATUS (skipping check)" >&2
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Parse JSON: prefer jq, fall back to Python, then bail silently
+# ---------------------------------------------------------------------------
+
+if command -v jq >/dev/null 2>&1; then
+    STATUS=$(echo "$JSON_BODY" | jq -r '.workflow_runs[0].status // "unknown"')
+    CONCLUSION=$(echo "$JSON_BODY" | jq -r '.workflow_runs[0].conclusion // "null"')
+    TITLE=$(echo "$JSON_BODY" | jq -r '.workflow_runs[0].display_title // ""')
+    URL=$(echo "$JSON_BODY" | jq -r '.workflow_runs[0].html_url // ""')
+elif command -v python >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1; then
+    PYTHON=$(command -v python || command -v python3)
+    PARSED=$(echo "$JSON_BODY" | "$PYTHON" -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    r = d.get("workflow_runs", [{}])[0]
+    print(r.get("status", "unknown"))
+    print(r.get("conclusion") or "null")
+    print(r.get("display_title", ""))
+    print(r.get("html_url", ""))
+except Exception:
+    print("unknown")
+    print("null")
+    print("")
+    print("")
+')
+    STATUS=$(echo "$PARSED" | sed -n '1p')
+    CONCLUSION=$(echo "$PARSED" | sed -n '2p')
+    TITLE=$(echo "$PARSED" | sed -n '3p')
+    URL=$(echo "$PARSED" | sed -n '4p')
+else
+    echo "pre-push: CI status check skipped (no jq or python available for JSON parsing)" >&2
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Decision logic
+# ---------------------------------------------------------------------------
+
+case "$STATUS" in
+    "completed")
+        case "$CONCLUSION" in
+            "success")
+                # Silent pass -- CI is green, push freely
+                exit 0
+                ;;
+            "failure"|"cancelled"|"timed_out")
+                echo "" >&2
+                echo "==================================================================" >&2
+                echo "  pre-push: LATEST CI RUN IS RED" >&2
+                echo "==================================================================" >&2
+                echo "  Run:    $TITLE" >&2
+                echo "  Status: $STATUS / $CONCLUSION" >&2
+                echo "  URL:    $URL" >&2
+                echo "" >&2
+                echo "  This push will trigger a new CI run, but the most recent run" >&2
+                echo "  on origin is in a failing state. Consider:" >&2
+                echo "    1. Verify this commit fixes (not compounds) the failure" >&2
+                echo "    2. Run scripts/ci_diag.ps1 summary to see what failed" >&2
+                echo "    3. Bypass this check with: git push --no-verify" >&2
+                echo "==================================================================" >&2
+                echo "" >&2
+                # Don't block; warn loudly. Lesson #67's bug was about NOT
+                # NOTICING the red state, not about pushing while red. A
+                # visible warning is sufficient mitigation.
+                exit 0
+                ;;
+            *)
+                # Other conclusions: skipped, action_required, neutral, stale.
+                # Don't warn; just pass.
+                exit 0
+                ;;
+        esac
+        ;;
+    "in_progress"|"queued"|"pending"|"waiting")
+        # Inform the developer that a previous run is still in flight.
+        # This is informational, not a warning.
+        echo "pre-push: CI status: previous run still $STATUS ($URL)" >&2
+        exit 0
+        ;;
+    *)
+        # Unknown status -- don't block
+        exit 0
+        ;;
+esac
