@@ -313,7 +313,24 @@ def _linux_os_managed_paths() -> list[Path]:
         Path("/dev"),
         Path("/etc"),
         Path("/usr"),
-        Path("/var"),
+        # v1.7.69: replaced Path("/var") with specific subdirs.
+        # The bare "/var" was over-broad: while /var/log, /var/lib, /var/cache,
+        # /var/spool, /var/run, /var/mail, /var/db are system-managed,
+        # /var/tmp is officially designated as a user-writable persistent
+        # temp area (FHS 3.0 §5.15), and some CI/sysadmin configurations set
+        # TMPDIR=/var/tmp. Tests writing there would be misclassified as
+        # OS_MANAGED (REFUSE) instead of SAFE/APP_DATA. /var/local is also
+        # intended for site-local additions and is typically user-writable.
+        # List only the system-managed /var subdirs explicitly. This mirrors
+        # the v1.7.63 macOS /private surgical fix.
+        Path("/var/log"),
+        Path("/var/lib"),
+        Path("/var/cache"),
+        Path("/var/spool"),
+        Path("/var/run"),
+        Path("/var/mail"),
+        Path("/var/db"),
+        Path("/var/empty"),
         Path("/sbin"),
         Path("/bin"),
         Path("/lib"),

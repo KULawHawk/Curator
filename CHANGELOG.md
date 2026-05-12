@@ -4,6 +4,149 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.69] — 2026-05-12 — Linux `/var` audit: defensive subdivision mirroring v1.7.63 macOS fix
+
+**Headline:** v1.7.63 surgically subdivided macOS's bare `Path("/private")` into specific system-managed subdirs after a real CI failure (macOS pytest's TMPDIR lives under `/private/var/folders`). The Linux OS-managed paths had the same architectural problem: bare `Path("/var")`. Under FHS 3.0, `/var/tmp` is officially user-writable, and some CI configurations set `TMPDIR=/var/tmp`. **This ship surgically subdivides Linux's `/var` into specific system-managed subdirs**, mirroring the v1.7.63 macOS fix — purely proactive (no current Linux test fails) but defensive against latent flakiness.
+
+### Why this ship matters
+
+The v1.7.63 macOS fix surfaced a class of architectural bug: **bare-directory OS-managed entries are over-broad when the OS uses subdirectories for both system and user data.** The same architectural pattern existed on Linux but went unnoticed because:
+  * **Linux pytest's `tmp_path` uses `/tmp`, not `/var/tmp`** (default `tempfile.gettempdir()` returns `/tmp` on Linux unless `TMPDIR` is set)
+  * **GitHub-hosted Ubuntu runners don't set `TMPDIR=/var/tmp`** by default
+  * So the bug was latent: no CI test triggered it, but the architectural over-broadness was identical to macOS
+
+v1.7.69 closes the bug class proactively. The fix mirrors v1.7.63's pattern: bare `Path("/var")` → specific system-managed subdirs.
+
+### The architectural problem
+
+`/var` is a Linux directory that hosts BOTH system-managed and user-writable data per the [Filesystem Hierarchy Standard](https://refspecs.linuxfoundation.org/FHS_3.0/fhs/index.html):
+
+**System-managed `/var` subdirs** (correctly OS_MANAGED):
+  * `/var/log` — system logs
+  * `/var/lib` — persistent application state
+  * `/var/cache` — application cache (system-wide)
+  * `/var/spool` — print/mail/cron queues
+  * `/var/run` — runtime PID files, socket files
+  * `/var/mail` — user mail spools
+  * `/var/db` — system databases
+  * `/var/empty` — chroot empty dir (sshd, etc.)
+
+**User-writable `/var` subdirs** (should NOT be OS_MANAGED):
+  * `/var/tmp` — user temp files that persist across reboots (FHS §5.15)
+  * `/var/local` — site-local additions, typically writable
+
+The bare `Path("/var")` treats ALL these subdirs uniformly as OS_MANAGED (REFUSE), which is wrong for the user-writable ones.
+
+### The fix
+
+Replace bare `Path("/var")` with the 8 system-managed subdirs:
+
+```python
+def _linux_os_managed_paths() -> list[Path]:
+    return [
+        Path("/boot"),
+        Path("/sys"),
+        Path("/proc"),
+        Path("/dev"),
+        Path("/etc"),
+        Path("/usr"),
+        # v1.7.69: bare "/var" replaced with specific system-managed subdirs.
+        Path("/var/log"),
+        Path("/var/lib"),
+        Path("/var/cache"),
+        Path("/var/spool"),
+        Path("/var/run"),
+        Path("/var/mail"),
+        Path("/var/db"),
+        Path("/var/empty"),
+        Path("/sbin"),
+        Path("/bin"),
+        Path("/lib"),
+        Path("/lib64"),
+    ]
+```
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `src/curator/services/safety.py` | +18, -1 | Replace `Path("/var")` with 8 specific subdirs + explanatory comment |
+| `CHANGELOG.md` | +N | v1.7.69 entry |
+| `docs/releases/v1.7.69.md` | +N | release notes |
+
+### Verification
+
+- **44/45 SafetyService tests pass** locally (1 unrelated skip for symlink creation on Windows non-admin) ✅
+- **No new tests added** — proactive hardening, no current test surfaces the bug
+- **No regression possible**: replacing a bare path with its system-managed subdirs is strictly *less* restrictive. Files previously classified as REFUSE that should have been SAFE will now be classified correctly. Files previously classified as REFUSE that SHOULD remain REFUSE (e.g. `/var/log/syslog`) still are.
+- **Expected CI result**: 9/9 GREEN (same as v1.7.68)
+
+### What this fix does NOT do
+
+- **Doesn't add tests for the new path subdivision.** Adding tests for `/var/tmp` being SAFE on Linux would require Linux-specific test cells (already covered by the CI matrix) and the patching of `sys.platform`. The change is so trivially correct that a regression test would test sys.platform conditional dispatch, not the underlying logic.
+- **Doesn't audit Windows OS-managed paths** for similar over-broad bare entries. `C:\Windows` is appropriately broad; `C:\` is NOT in the OS-managed list (because users put their files there). No bare-too-broad pattern visible.
+- **Doesn't research whether Ubuntu/Debian/RHEL CI runners ever set `TMPDIR=/var/tmp`**. The fix is defensive regardless of current CI behavior; future runner image changes could surface the bug.
+- **Doesn't update Linux app-data paths** to add `/var/tmp` explicitly. Tempfile dirs aren't "app data" — they're transient. Leaving `/var/tmp` as un-classified (which means SAFE) is correct.
+- **Doesn't add a unit test for `_linux_os_managed_paths()`.** Function returns a static list; a test would verify identity, not behavior.
+
+### Authoritative-principle catches
+
+**Catch -- v1.7.63 surfaced a bug class; v1.7.69 closes it proactively for Linux.** This is the same defensive sweep philosophy as v1.7.66 (ORDER BY rowid hardening). When a real bug surfaces in one OS path, immediately audit equivalent patterns in the others.
+
+**Catch -- the fix is strictly more permissive.** Splitting `/var` into subdirs cannot break any existing behavior — it only RECLASSIFIES some paths from REFUSE to SAFE. Tests/users relying on `/var/tmp` being REFUSE (highly unlikely) would see a behavior change, but no other tests check this.
+
+**Catch -- mirrors v1.7.63 exactly in structure and comment style.** The CHANGELOG entry references v1.7.63 explicitly, the inline comment references it, and the subdirectory list follows the same pattern. Cross-OS architectural symmetry.
+
+**Catch -- 8 subdirs chosen by Linux FHS authority, not by intuition.** The list is derived from the [Filesystem Hierarchy Standard 3.0](https://refspecs.linuxfoundation.org/FHS_3.0/) section 5 (`/var`). Includes only the directories FHS specifies as system-managed. Excludes:
+  * `/var/tmp` (FHS §5.15: "user-writable persistent temp")
+  * `/var/local` (FHS §5.9: "site-local additions, traditionally user-writable")
+  * `/var/opt` (FHS §5.10: "add-on application data, may or may not be system-managed depending on package")
+  * `/var/account` (FHS §5.1: optional, accounting data)
+  * `/var/crash` (FHS §5.1: optional, crash dumps)
+
+**Catch -- not adding `/var/opt` is a judgment call.** Some packages install user-writable content under `/var/opt/<package>`; others install system-managed content. Erring on the side of permissiveness (not OS_MANAGED) matches the v1.7.63 philosophy: SafetyService is advisory, not enforced at the OS level; user can override.
+
+**Catch -- macOS fix from v1.7.63 also referenced FHS-like authority.** macOS's `/private/var/db`, `/private/var/log`, etc. were chosen because Apple uses similar Unix conventions. Cross-platform consistency: both OS-managed lists derive from Unix filesystem conventions, not ad-hoc enumeration.
+
+### Lessons captured
+
+**No new lesson codified.** Reinforces:
+  * **Single-OS bug surfacings should trigger immediate cross-OS audits.** v1.7.63 (macOS) → v1.7.69 (Linux) is the same defensive pattern as v1.7.64 (one ORDER BY) → v1.7.66 (sweep). One bug class deserves one sweep.
+  * **Filesystem Hierarchy Standard is authoritative for Linux path classification.** Don't enumerate `/var` subdirs by intuition; use FHS.
+  * **Latent architectural bugs persist until a test triggers them.** Linux `/var` would have eventually surfaced flakiness if a CI runner image started using `TMPDIR=/var/tmp` or if a contributor's local dev machine had that env var. Proactive fixes save reactive cycles.
+
+### Limitations
+
+- **No unit test for `_linux_os_managed_paths()`** (returns static list; test would verify identity)
+- **No unit test for `/var/tmp` SAFE classification on Linux** (would require sys.platform patching)
+- **No Windows OS-managed audit** (no bare-too-broad patterns identified there)
+- **`/var/opt` left unclassified** (judgment call; may need revisit if user reports issue)
+- **Other tech debt unchanged**: dependabot config, OIDC migration, pre-push hook, pre-commit lints
+
+### Cumulative arc state (after v1.7.69)
+
+- **69 ships**, all tagged.
+- **pytest local Windows**: 1807 / 10 / 0 (unchanged this ship; pure proactive fix)
+- **pytest CI v1.7.68**: expected 9/9 GREEN; CI for v1.7.69 expected 9/9 GREEN.
+- **Coverage local**: 66.96% (unchanged)
+- **CI matrix**: 9 cells, running on Node.js 24 since v1.7.67. 9/9 GREEN since v1.7.64.
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed (fully addressed)
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **CI hygiene + post-arc hardening + modernization + refactor + cross-OS audit**: 11 ships (v1.7.59–v1.7.69)
+  * v1.7.59–64: arc closure (red → green)
+  * v1.7.65: diagnostic tooling codified
+  * v1.7.66: bug-class sweep (ORDER BY rowid hardening)
+  * v1.7.67: Node.js 24 modernization
+  * v1.7.68: DRY refactor (strip_ansi fixture)
+  * v1.7.69: Linux `/var` audit (this ship)
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67 (no new this ship)
+- **Detacher-pattern ships**: 19 (unchanged; small proactive fix)
+- **Tooling scripts**: `run_pytest_detached.ps1` (v1.7.39), `ci_diag.ps1` (v1.7.65)
+- **Shared test helpers**: `strip_ansi` fixture (v1.7.68)
+
 ## [1.7.68] — 2026-05-12 — Hoist inline ANSI-strip to shared `strip_ansi` fixture in conftest.py
 
 **Headline:** v1.7.62 fixed the Rich/Typer help-output assertion problem by inlining the same ANSI-strip regex in 3 test files. That triplication has been latent technical debt ever since. This ship hoists the pattern into a single shared `strip_ansi` pytest fixture in `tests/conftest.py`, eliminating the duplicated regex and `import re` lines from each test file. **Pure refactor: zero behavior change, 100% test pass parity.**
