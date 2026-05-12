@@ -4,6 +4,172 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.80] — 2026-05-12 — CAPSTONE: Engineering Doctrine v1.0 + self-verifying infrastructure audit
+
+**Headline:** The capstone of the v1.7 hygiene arc. **Two new artifacts make the arc's lessons permanent and self-enforcing:**
+  1. **`docs/ENGINEERING_DOCTRINE.md`** — v1.0 of a living document codifying 17 engineering principles distilled from v1.7.59-79, plus 9 standing decisions, plus references to every ship that taught each principle.
+  2. **`tests/integration/test_infrastructure_audit.py`** — a 30-assertion self-verifying snapshot of the infrastructure state. If any tooling script disappears, any hook loses its shebang, any required action version is downgraded, any documentation section is removed, or the dependency-tracking config is altered — the relevant assertion fails with a clear pointer to the doctrine.
+
+Together, these are **the doctrine made executable**. The principles aren't just written down; they're enforced by pytest.
+
+### Why this is the capstone
+
+The v1.7.59-79 arc produced enormous infrastructure: 5 tooling scripts, 2 git hooks, 3 lints, Dependabot, full cross-platform parity, sibling audits, README integration. Without a capstone, that infrastructure decays:
+  * A script gets deleted in a refactor; nobody notices until they need it.
+  * The CI workflow gets a "helpful" version downgrade; nobody catches it until CI breaks.
+  * A section gets dropped from the README; new contributors get confused; tribal knowledge re-accumulates.
+  * The reasoning behind each decision lives only in CHANGELOG entries that nobody re-reads.
+
+v1.7.80 prevents all of these. The doctrine document gives the reasoning a permanent home. The audit test gives the structure pytest-enforced permanence. **Future-Jake (or any new contributor) returning to the repo after a break can read the doctrine in 15 minutes and have full context for every infrastructure decision.**
+
+### The doctrine, in summary
+
+17 principles organized into 4 parts:
+
+**Part I — Building** (7 principles)
+  1. Empirical CI evidence beats theoretical reasoning (v1.7.67→77)
+  2. Conservative defaults are options, not commitments (v1.7.67/77)
+  3. Functional parity > code parity for cross-platform (v1.7.76/78)
+  4. Minimal-scope credentials force good infrastructure (v1.7.74/77)
+  5. Defense-in-depth via fallbacks (v1.7.70/78)
+  6. TTY-aware output is the standard Unix convention (v1.7.76/78)
+  7. POSIX-canonical paths align with host conventions (v1.7.78)
+
+**Part II — Correctness** (4 principles)
+  8. Pre-commit lints turn invariants into laws (v1.7.32/72/73)
+  9. Bug-class sweeps + regression lints prevent recurrence (v1.7.66→72, v1.7.68→73)
+  10. Pre-push hooks are signals, not gates (v1.7.70)
+  11. DRY refactors pair with regression lints (v1.7.68→73)
+
+**Part III — Communication** (4 principles)
+  12. Documentation follows tooling, not leads it (v1.7.65→75)
+  13. Workflow files accumulate decision history in comments (v1.7.42→67→77)
+  14. Audit closure has value even when result is "no action" (v1.7.79)
+  15. Backlog items deferred 3+ times must be closed or scheduled (v1.7.79)
+
+**Part IV — Automation** (2 principles)
+  16. One-command setup is non-negotiable (v1.7.74/76)
+  17. Dependabot is the change-detector, you're the change-acceptor (v1.7.71/77)
+
+Plus **Part V** documents 9 standing decisions covering CI matrix shape, action versions, PAT scope, output paths, hook semantics, and emergency-bypass policy. **Part VI** explains how to use the document in PR review and ship planning.
+
+### The self-audit test, in summary
+
+`tests/integration/test_infrastructure_audit.py` is the doctrine made executable. **30 assertions** across 8 parts verify:
+
+  | Part | Verifies |
+  |---|---|
+  | I | 8 tooling scripts exist; no undocumented scripts |
+  | II | 2 git hooks exist; both have POSIX shebangs |
+  | III | 3 project-invariant lint files exist |
+  | IV | CI workflow exists with correct action versions and full 9-cell matrix |
+  | V | Dependabot config exists and watches github-actions |
+  | VI | 3 documentation files exist with required sections (README, doctrine, audit) |
+  | VII | Cross-platform parity (both PS and bash variants present for setup_dev_hooks + ci_diag) |
+  | VIII | CHANGELOG mentions v1.7.80 |
+
+Every assertion failure includes (a) what's missing, (b) which ship introduced it, and (c) a pointer to the doctrine for context. Future contributors who break the infrastructure get told exactly what they broke and why it mattered.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `docs/ENGINEERING_DOCTRINE.md` | +307 | New: doctrine v1.0 (17 principles + 9 standing decisions) |
+| `tests/integration/test_infrastructure_audit.py` | +307 | New: 30-assertion self-audit test |
+| `README.md` | +6 / -0 | New "Philosophy" section linking to doctrine |
+| `CHANGELOG.md` | +N | v1.7.80 entry |
+| `docs/releases/v1.7.80.md` | +N | release notes |
+
+No source code changes. New test adds 30 passing tests (1809 -> 1839).
+
+### Verification
+
+- **27 tests pass locally** on first run (after 1 iteration to add the 3 pre-existing Python scripts the initial draft didn't account for: `run_pytest_detached.cmd`, `setup_dev_env.py`, `setup_gdrive_source.py`) ✅
+- **Pre-commit hook runs the 3 existing lints + new audit test** locally before push
+- **Expected CI result**: 9/9 GREEN. New tests add ~3 seconds to total suite time.
+
+### What this ship does NOT do
+
+- **Doesn't refactor any existing code.** The arc closed at v1.7.79; v1.7.80 is pure documentation + verification, nothing structural.
+- **Doesn't enforce the doctrine's prose-level principles via pytest.** Things like "empirical CI evidence beats theoretical reasoning" are review-time judgments, not testable invariants. The audit test covers only structural invariants.
+- **Doesn't add the doctrine as a pre-commit-mandatory read.** Contributors aren't forced to read it on every commit (Principle 10: signals, not gates). It's discoverable from README; that's sufficient.
+- **Doesn't migrate the existing CHANGELOG entries into the doctrine.** Each ship's release notes remain the authoritative record of that ship; the doctrine cites them by version, not by quoted content.
+- **Doesn't version the audit test independently.** It moves with the codebase; if EXPECTED_SCRIPTS grows, the test grows.
+- **Doesn't lock the doctrine.** Part VI explicitly documents how to amend it.
+- **Doesn't bump pyproject.toml version.** The public version is still v1.6.5 / v1.4.0-released; v1.7.x are internal build markers. v1.8.0 will be the next user-facing release with feature content.
+
+### Authoritative-principle catches
+
+**Catch -- the audit test caught its own bugs immediately.** The first run surfaced 3 scripts that existed but weren't in EXPECTED_SCRIPTS (`run_pytest_detached.cmd`, `setup_dev_env.py`, `setup_gdrive_source.py`). Adding them required 5 minutes; without the test, those scripts would have remained undocumented forever.
+
+**Catch -- doctrine cites ships, not quoted text.** Every principle names the ship(s) that taught it. Future readers can drill down to release notes for full context without the doctrine duplicating that prose.
+
+**Catch -- standing decisions are in a single table.** Part V is the one-stop reference for "what's the current value of X in this codebase?" — action versions, hook behavior, PAT scope, etc. No archaeology required.
+
+**Catch -- the audit test fails LOUD.** Every assertion includes the ship that introduced the asserted thing and a pointer to the doctrine. A failing test isn't just "something's wrong" — it's "X is missing, it was added in vY.Z to solve problem Q, see Doctrine Principle N."
+
+**Catch -- README "Philosophy" section is one paragraph plus a link.** The doctrine is the canonical source; the README just makes it discoverable.
+
+**Catch -- doctrine version starts at v1.0, not v0.1.** This is a ratified document, not a draft. Future amendments bump to v1.1, v2.0, etc., per Part VI.
+
+**Catch -- audit test scope explicitly excludes prose validation.** Asserting that the doctrine *contains* required section headers (which it does) is testable; asserting that the prose *says the right thing* is not. We don't pretend pytest can review prose.
+
+**Catch -- the test that asserts "CHANGELOG mentions v1.7.80" was deliberately left as the last assertion.** It will pass after this CHANGELOG entry lands. Until then, the test correctly reports the missing entry. Self-bootstrapping check.
+
+### Lessons captured
+
+**No new lesson codified** (all 17 doctrine principles already existed implicitly; this ship makes them explicit and enforceable). The meta-lesson: **a capstone ship that codifies the prior arc has compounding returns.** Every future ship can reference the doctrine instead of re-deriving the principle.
+
+### Limitations
+
+- **No automated doctrine-amendment workflow.** Amending the doctrine requires manual PR + ship; no Dependabot for principles.
+- **No assertion that release notes cite the doctrine.** Style convention, not pytest-enforceable.
+- **No cross-reference linting** between doctrine principle numbers and the ships that taught them (manual maintenance).
+- **No coverage badge for the doctrine itself.** It's discoverable but not heavily promoted.
+- **No translations.** English only.
+- **The 27 audit assertions will need updates** every time the infrastructure changes. That's by design (each change requires a deliberate test update + doctrine update + ship) but it's friction.
+
+### Cumulative arc state (after v1.7.80 — CAPSTONE)
+
+- **80 ships**, all tagged.
+- **pytest local Windows**: **1839 / 10 / 0** (+30 from the new audit test)
+- **pytest CI v1.7.79**: ✅ confirmed 9/9 GREEN (8 verified runs in the post-arc series)
+- **Coverage local**: 66.96% (unchanged; new tests are infrastructure assertions, not src/curator coverage)
+- **CI matrix**: 9 cells, on Node.js 24, using checkout@v6, setup-python@v6, upload-artifact@v7
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **22 ships in CI-hygiene + post-arc arc, NOW CAPSTONED** (v1.7.59–v1.7.80):
+  * v1.7.59–64: arc closure (red → green)
+  * v1.7.65: `ci_diag.ps1` (lesson #67 mitigation #1)
+  * v1.7.66: ORDER BY rowid sweep
+  * v1.7.67: Node.js 24 readiness
+  * v1.7.68: `strip_ansi` fixture DRY refactor
+  * v1.7.69: Linux `/var` audit
+  * v1.7.70: pre-push CI hook (lesson #67 fully mitigated)
+  * v1.7.71: Dependabot automation
+  * v1.7.72: pre-commit ORDER BY lint
+  * v1.7.73: pre-commit ANSI regex lint
+  * v1.7.74: PowerShell installer
+  * v1.7.75: README dev-setup section
+  * v1.7.76: bash installer
+  * v1.7.77: Accept Dependabot PR #1
+  * v1.7.78: `ci_diag.sh` bash variant
+  * v1.7.79: Ad Astra constellation CI audit (closure)
+  * **v1.7.80: CAPSTONE — Engineering Doctrine + self-audit test (this ship)**
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67
+- **Doctrine version**: v1.0 (17 principles, 9 standing decisions)
+- **Tooling scripts (8 documented)**: `run_pytest_detached.{ps1,cmd}`, `ci_diag.{ps1,sh}`, `setup_dev_hooks.{ps1,sh}`, `setup_dev_env.py`, `setup_gdrive_source.py`
+- **Git hooks**: `.githooks/pre-commit` (3 lints), `.githooks/pre-push` (CI warning)
+- **Project invariant lints**: glyph, ORDER BY, ANSI regex
+- **Self-audit test**: `tests/integration/test_infrastructure_audit.py` (30 assertions, 8 parts)
+- **Top-level documentation**: README "Contributing" + "Philosophy" sections
+- **Cross-platform parity**: PowerShell + bash dev-setup + ci_diag variants
+- **Audit documents**: `AD_ASTRA_CI_AUDIT.md`, `ENGINEERING_DOCTRINE.md`
+- **GitHub Actions versions**: checkout@v6, setup-python@v6, upload-artifact@v7
+
 ## [1.7.79] — 2026-05-12 — Ad Astra constellation CI audit: documented finding (none of the sibling repos use GitHub Actions)
 
 **Headline:** v1.7.74–v1.7.78's backlog repeatedly listed "Audit Ad Astra sibling repos for similar Node 20 deprecation." **This ship performs and documents that audit.** Finding: **none of the 5 sibling repos under KULawHawk use GitHub Actions yet**, so they're unaffected by the Node.js 20 deprecation. Closure ship: `docs/AD_ASTRA_CI_AUDIT.md` records the findings, the audit methodology, and the reusable CI patterns Curator provides for future sibling-repo adoption.

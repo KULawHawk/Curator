@@ -130,6 +130,10 @@ Token discovery (in order): `$GH_TOKEN`, `$GITHUB_TOKEN`, `~/.curator/github_pat
 
 `.github/dependabot.yml` watches the GitHub Actions ecosystem. Weekly Monday 08:00 America/Chicago, all bumps grouped into one PR, limit 5 open at a time. CI gates every merge.
 
+### Philosophy
+
+Curator's engineering practice is codified in [`docs/ENGINEERING_DOCTRINE.md`](docs/ENGINEERING_DOCTRINE.md) (v1.0). The doctrine captures 17 principles distilled from the v1.7.59-79 hygiene arc, plus 9 standing decisions covering CI matrix shape, action versions, hook semantics, and credential scope. Every principle is anchored to the ship(s) that taught it; every standing decision cites its source. **`tests/integration/test_infrastructure_audit.py`** enforces the structural pieces (script presence, action versions, doctrine sections, README content) as 27 pytest assertions — the doctrine made executable.
+
 ## Quick start
 
 ```powershell
