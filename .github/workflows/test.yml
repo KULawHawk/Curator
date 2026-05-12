@@ -1,24 +1,26 @@
 # =============================================================================
-# .github/workflows/test.yml   (v1.7.67)
+# .github/workflows/test.yml   (v1.7.77)
 #
 # Continuous integration: run the full pytest baseline on every push to main
 # and every pull request targeting main. Catches regressions before they
 # land, so "green baseline" stops being a claim and becomes a fact.
 #
-# v1.7.67: bumped all actions/* to versions that run on Node.js 24.
-# GitHub deprecated Node.js 20 on 2025-09-19 and will force Node.js 24 on
-# 2026-06-02 (3 weeks away). Node.js 20 will be removed from the runner
-# on 2026-09-16. The v1.7.42-v1.7.66 CI runs emitted a deprecation warning
-# on every job; this ship eliminates it and locks the workflow in for
-# the foreseeable future.
+# v1.7.77: accepted Dependabot PR #1's grouped bump after CI verified all
+# 9 cells GREEN on the proposed versions.
+#   - actions/checkout: v5 -> v6 (released Oct 2025; Node 24 native)
+#   - actions/upload-artifact: v6 -> v7 (released Apr 2026; Node 24 native)
+# The v1.7.67 conservative choice to use checkout@v5 was based on
+# theoretical credential-persistence breaking changes in v6; Curator's
+# CI does not use credentials post-checkout (no submodules, no push, no
+# auth-using actions in subsequent steps), so the change is safe. PR #1's
+# 9/9 GREEN run on fa16240 confirmed this empirically.
+#
+# v1.7.67 (history): bumped all actions/* from Node-20-era versions:
 #   - actions/checkout: v4 -> v5 (Node 24, released Aug 2025)
-# - actions/setup-python: v5 -> v6 (Node 24, released Sept 2025)
-# - actions/upload-artifact: v4 -> v6 (Node 24, released Dec 2025).
-#       NOTE: v5 had only "preliminary" Node 24 support and still defaulted
-#       to Node 20. v6 is the first version that runs on Node 24 by default.
-# Minimum runner version v2.327.1; already available on GitHub-hosted
-# runners. Self-hosted runners (which Curator does not currently use)
-# would need to be updated.
+#   - actions/setup-python: v5 -> v6 (Node 24, released Sept 2025)
+#   - actions/upload-artifact: v4 -> v6 (Node 24, released Dec 2025)
+# GitHub deprecated Node.js 20 on 2025-09-19 and forced Node.js 24 on
+# 2026-06-02. Node.js 20 will be removed entirely on 2026-09-16.
 #
 # Design choices
 # --------------
@@ -104,8 +106,11 @@ jobs:
 
     steps:
       - name: Checkout
-        # v1.7.67: bumped from @v4 (Node 20, deprecated) to @v5 (Node 24).
-        uses: actions/checkout@v5
+        # v1.7.77: bumped from @v5 to @v6 (Dependabot PR #1 grouped bump).
+        # CI verified 9/9 GREEN on fa16240 before merge. v6 separates
+        # credential persistence to a separate file by default; Curator
+        # does not use credentials post-checkout, so the change is safe.
+        uses: actions/checkout@v6
 
       - name: Set up Python ${{ matrix.python-version }}
         # v1.7.67: bumped from @v5 (Node 20, deprecated) to @v6 (Node 24).
@@ -154,10 +159,9 @@ jobs:
       # coverage signal.
       - name: Upload coverage report
         if: always()  # upload even when tests fail -- coverage diagnoses
-        # v1.7.67: bumped from @v4 (Node 20, deprecated) to @v6 (Node 24).
-        # @v5 had only preliminary Node 24 support; @v6 is the first version
-        # that runs on Node 24 by default.
-        uses: actions/upload-artifact@v6
+        # v1.7.77: bumped from @v6 to @v7 (Dependabot PR #1 grouped bump).
+        # CI verified 9/9 GREEN on fa16240 before merge.
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.os }}-py${{ matrix.python-version }}
           path: coverage.xml

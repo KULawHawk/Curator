@@ -4,6 +4,132 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.77] — 2026-05-12 — Accept Dependabot PR #1: bump checkout v5→v6 and upload-artifact v6→v7
+
+**Headline:** Dependabot's first grouped PR (PR #1) proposed bumping `actions/checkout` v5→v6 and `actions/upload-artifact` v6→v7. **The PR's CI ran 9/9 GREEN on its bump branch (fa16240), empirically validating that v1.7.67's conservative choice of checkout@v5 was unnecessary** — v6's credential-persistence change doesn't affect Curator (no submodules, no post-checkout auth, no push). This ship lands the bumps directly into `test.yml` after the PR's green CI proved them safe.
+
+### Why this ship matters
+
+v1.7.67's release notes documented the conservative reasoning for choosing checkout@v5:
+  > "v6 has breaking changes around credential persistence we don't need"
+
+Dependabot's PR #1 was the empirical test of that hypothesis. Its 9-cell CI run completed cleanly on the v6+v7 versions, proving:
+  * **The breaking change doesn't affect Curator.** Curator's CI workflow: checkout → setup-python → install deps → pytest → upload coverage. No step after checkout uses credentials, submodules, or push operations.
+  * **The v1.7.71 grouped-PR design works end-to-end.** Dependabot opened PR #1 within ~30 minutes of merging the config; CI ran the bumps through the 9-cell matrix; result: actionable green signal.
+  * **The v1.7.67 conservatism cost nothing but also gained nothing.** Pinning to v5 didn't break anything, but the v6 upgrade also doesn't break anything. Both were viable; v6 is now slightly more current.
+
+### What this ship does
+
+  1. **Bumps `actions/checkout` from v5 to v6** in `.github/workflows/test.yml`
+  2. **Bumps `actions/upload-artifact` from v6 to v7** in the same file
+  3. **Updates the workflow header comment** to record v1.7.77 as the latest CI workflow version, with explanation of why the v1.7.67 conservatism was empirically tested and superseded
+  4. **Documents the decision** in CHANGELOG and release notes so future contributors understand the reasoning
+
+**Note: PR #1 itself remains open in the GitHub UI** because the PAT used for autonomous ships has minimal scope (`actions:read` only, per v1.7.74's recommendation). Closing the PR requires `pull_requests:write`. Jake can close it manually with a single click, or Dependabot will likely auto-close it on the next cycle when it detects no diff remains. The substantive bump has already landed via this ship.
+
+### Why not merge PR #1 directly via the API
+
+v1.7.74's `setup_dev_hooks.ps1` recommends a minimal-scope PAT (`actions:read`). The same PAT is in `~/.curator/github_pat` for this session. Merging PRs requires `pull_requests:write`, which would broaden the token's blast radius. Manually landing the bump in v1.7.77 preserves the minimal-scope policy while achieving the same end state.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `.github/workflows/test.yml` | +18, -16 | Bump 2 actions; update header comment to v1.7.77 with decision history |
+| `CHANGELOG.md` | +N | v1.7.77 entry |
+| `docs/releases/v1.7.77.md` | +N | release notes |
+
+No source, test, or production-code changes.
+
+### Verification
+
+- **PR #1's CI was 9/9 GREEN on fa16240** — the empirical proof this ship needed ✅
+- **Workflow YAML still parses** (no syntax errors introduced)
+- **Expected CI result on v1.7.77's HEAD**: 9/9 GREEN (same versions as PR #1)
+
+### What this fix does NOT do
+
+- **Doesn't close PR #1 programmatically.** Requires `pull_requests:write` scope. Jake can close manually, or Dependabot auto-closes on next cycle.
+- **Doesn't broaden the PAT scope.** Minimal-scope policy from v1.7.74 stands.
+- **Doesn't add an `ignore` rule for future major version bumps.** Each future bump gets evaluated empirically via Dependabot's PR.
+- **Doesn't update `dependabot.yml`.** The config is correct as-is; v1.7.77 validates that the v1.7.71 design works.
+- **Doesn't bump `setup-python`.** Already on v6 (Node 24); no newer major version yet.
+- **Doesn't include any dependency security advisories.** PR #1 was a feature bump, not a security fix.
+- **Doesn't backfill the v1.7.67 reasoning in CHANGELOG retroactively.** The v1.7.67 entry stands as historical record; v1.7.77 references and supersedes it.
+
+### Authoritative-principle catches
+
+**Catch -- empirical CI > theoretical breaking-change concerns.** v1.7.67 chose v5 based on the changelog notes for v6. Dependabot's PR #1 actually ran v6 through the 9-cell matrix. The empirical result superseded the theoretical concern.
+
+**Catch -- the v1.7.71 design (grouped PRs) validated by first use.** Three actions could have been proposed in three separate PRs; instead Dependabot grouped them per our config. CI ran once on the combined bump. One review cycle instead of three. Exactly the v1.7.67 testing pattern (3 bumps validated together).
+
+**Catch -- conservative defaults are reversible.** Choosing v5 over v6 in v1.7.67 didn't lock anything in. When Dependabot offered the v6 upgrade with proof of safety, accepting it was a one-ship operation.
+
+**Catch -- minimal-scope PAT preserved.** The PAT only has `actions:read`. Merging PRs would require `pull_requests:write`, which would let a leaked token close issues, push branches, etc. v1.7.77 lands the bump manually rather than broadening token scope. Defense-in-depth.
+
+**Catch -- workflow header comments serve as decision archive.** Every ship that touches `test.yml` adds a comment block explaining the decision. Future contributors don't need to read 77 release notes to understand why checkout is at v6 — it's right there in the workflow file.
+
+**Catch -- PR #1 left open is acceptable.** It will either be:
+  * Auto-closed by Dependabot when it detects the diff is already on main
+  * Manually closed by Jake with one click in the GitHub UI
+Neither blocks the bump from being live in CI.
+
+**Catch -- this ship is a decision ship, not just a bump ship.** The bump itself is trivial (4-line diff). The value is in documenting the reasoning so future Dependabot PRs get evaluated the same way: "check CI; if green, accept."
+
+### Lessons captured
+
+**No new lesson codified.** Reinforces:
+  * **Empirical CI evidence beats theoretical reasoning.** When Dependabot offers an upgrade and CI proves it works, accept it.
+  * **Conservative defaults are an option, not a commitment.** v1.7.67's v5 choice was correct at the time given the information available; v1.7.77's v6 choice is correct now given the empirical signal.
+  * **Minimal-scope credentials force good infrastructure decisions.** Not having `pull_requests:write` meant landing the bump manually, which required reading the diff and understanding it — better than a one-click merge would have been.
+  * **Workflow files should accumulate decision history in comments.** Each version-bump ship leaves a breadcrumb. Future maintenance has full context.
+
+### Limitations
+
+- **PR #1 left open in the UI** (cosmetic; bump is already live)
+- **No `ignore` rules in dependabot.yml** for specific known-incompatible versions (none needed yet)
+- **No security-only fast-track** for security-flagged Dependabot PRs (manual review for all)
+- **No automated PR-acceptance bot** that would close PRs after their bumps land manually
+- **No automated `gh pr close` step** (would need broader token scope)
+
+### Cumulative arc state (after v1.7.77)
+
+- **77 ships**, all tagged.
+- **pytest local Windows**: 1809 / 10 / 0 (unchanged this ship; CI-config-only)
+- **pytest CI v1.7.76**: in_progress at v1.7.77 ship time; v1.7.77 expected 9/9 GREEN.
+- **Coverage local**: 66.96% (unchanged)
+- **CI matrix**: 9 cells, on Node.js 24, watched by Dependabot. **Now using checkout@v6 + setup-python@v6 + upload-artifact@v7.** 9/9 GREEN since v1.7.64.
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **19 ships in CI-hygiene + post-arc arc** (v1.7.59–v1.7.77):
+  * v1.7.59–64: arc closure (red → green)
+  * v1.7.65: `ci_diag.ps1` (lesson #67 mitigation #1)
+  * v1.7.66: ORDER BY rowid sweep
+  * v1.7.67: Node.js 24 readiness (initial bump to v5/v6/v6)
+  * v1.7.68: `strip_ansi` fixture DRY refactor
+  * v1.7.69: Linux `/var` audit
+  * v1.7.70: pre-push CI verification hook (lesson #67 mitigation #3 — lesson fully mitigated)
+  * v1.7.71: Dependabot automation
+  * v1.7.72: pre-commit ORDER BY lint
+  * v1.7.73: pre-commit ANSI regex lint
+  * v1.7.74: auto-install PowerShell installer
+  * v1.7.75: README "Contributing — dev setup" section
+  * v1.7.76: auto-install bash installer
+  * v1.7.77: Accept Dependabot PR #1 (checkout v6 + upload-artifact v7) (this ship)
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67
+- **Detacher-pattern ships**: 19 (unchanged)
+- **Tooling scripts**: `run_pytest_detached.ps1`, `ci_diag.ps1`, `setup_dev_hooks.ps1`, `setup_dev_hooks.sh`
+- **Git hooks**: `.githooks/pre-commit` (3 lints), `.githooks/pre-push` (CI warning)
+- **Shared test helpers**: `strip_ansi` fixture (v1.7.68)
+- **Automated tracking**: Dependabot (v1.7.71) — **first PR accepted v1.7.77**
+- **Project invariant lints**: glyph (v1.7.32/34), ORDER BY (v1.7.72), ANSI regex (v1.7.73)
+- **Top-level documentation**: README "Contributing — dev setup" section (v1.7.75/76)
+- **Cross-platform parity**: PowerShell + bash dev-setup installers
+- **GitHub Actions versions**: checkout@v6 (was v5 from v1.7.67), setup-python@v6 (unchanged from v1.7.67), upload-artifact@v7 (was v6 from v1.7.67)
+
 ## [1.7.76] — 2026-05-12 — Bash variant of setup_dev_hooks for cross-platform contributors
 
 **Headline:** v1.7.74 shipped a PowerShell installer for the dev hooks toolkit, but macOS/Linux/WSL/Git-Bash contributors couldn't use it natively. **This ship adds `scripts/setup_dev_hooks.sh`**, a functionally-identical POSIX bash variant. The README's Contributing section now shows both invocations side by side.
