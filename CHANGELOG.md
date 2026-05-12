@@ -4,6 +4,121 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.62] — 2026-05-12 — Strip ANSI + use result.output in 3 Rich-help tests
+
+**Headline:** v1.7.61's `COLUMNS=200` env var didn't actually fix the 3 failing tests (same `1808 passed, 3 failed` on Ubuntu/3.12). With GitHub PAT-enabled log access, the failure was traceable to Rich writing help output via a Console that goes to a stream `CliRunner.result.stdout` doesn't capture on POSIX (likely stderr or a separate FD). **Fix: edit the 3 tests to use `result.output` (combined stdout+stderr) and strip ANSI codes via `re.sub(r"\x1b\[[0-9;]*m", "", ...)` before substring matching.** This is the more robust fix v1.7.61's CHANGELOG already flagged as a future improvement.
+
+### How we got here
+
+v1.7.61 set `COLUMNS=200` env var hoping Rich would render wide help with option names intact. The CI re-ran and produced **identical** failure output: `1808 passed, 3 failed` on Ubuntu/3.12, same 3 test files, same error pattern (`assert '--apply' in result.stdout` where stdout shows `\x1b[1m  <whitespace>  ...\x1b[0m\n\n`). The `--apply` literal genuinely doesn't appear in `result.stdout` on POSIX.
+
+Grep confirmed: searching the ENTIRE 115KB CI log for the substring `apply` returns only matches in the AssertionError messages, never in any captured stdout content. The option list is being rendered somewhere else entirely.
+
+### Root cause
+
+Click's `CliRunner` historically captured stdout AND stderr in a single buffer (`result.output`). In modern versions with `mix_stderr=True` (default), `result.stdout` and `result.output` are the same. With `mix_stderr=False`, `result.stdout` only contains stdout.
+
+The project doesn't explicitly set `mix_stderr` in `CliRunner()`. Default behavior depends on click version + how Rich integrates. On Windows, the help happens to end up in stdout. On POSIX, Rich's Console with default settings writes to stderr (or to its own file descriptor that bypasses click's stdout capture).
+
+`result.output` is always the combined output. Using it is more robust.
+
+### The fix
+
+In each of the 3 failing tests, replace:
+```python
+assert "--apply" in result.stdout
+```
+with:
+```python
+import re
+output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+assert "--apply" in output
+```
+
+Two changes per assertion site:
+1. **`result.stdout` → `result.output`**: includes whatever stream Rich wrote to
+2. **Strip ANSI codes**: defensive against future Rich versions that might re-introduce them; also makes the test invariant to terminal-width or NO_COLOR changes
+
+Files edited:
+  * `tests/integration/test_cli_migrate.py::test_migrate_help_shows_phase_1_note`
+  * `tests/integration/test_cli_cleanup_duplicates.py::TestCleanupDuplicatesHelp::test_duplicates_help_lists_strategies`
+  * `tests/integration/test_organize_mb_enrichment.py::TestEnrichMbCliValidation::test_help_lists_enrich_mb`
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `tests/integration/test_cli_migrate.py` | +7, -3 | ANSI-strip + result.output |
+| `tests/integration/test_cli_cleanup_duplicates.py` | +5, -2 | ANSI-strip + result.output |
+| `tests/integration/test_organize_mb_enrichment.py` | +5, -2 | ANSI-strip + result.output |
+| `CHANGELOG.md` | +N | v1.7.62 entry |
+| `docs/releases/v1.7.62.md` | +N | release notes |
+
+### Verification
+
+- **Local Windows pytest of the 3 affected tests**: `3 passed in 4.51s` ✅
+- **Local tests still use the correct option names** (Phase 1, --apply, --ext, shortest_path, longest_path, oldest, newest, --keep-under, --enrich-mb, MusicBrainz) ✅
+- **No source code or workflow changes**: pure test-level fix ✅
+- **Expected CI result**: 1811 passed (1808 + the 3 fixed), 0 failed across all 9 cells
+
+### What this fix does NOT do
+
+- **Doesn't revert v1.7.61's `COLUMNS=200`.** That env var is now redundant for these 3 tests but it's harmless and may help other Rich-output situations in the future. Leaving it in.
+- **Doesn't refactor the ANSI-strip helper.** Each test inlines `re.sub(r"\x1b\[[0-9;]*m", "", result.output)`. A future ship could extract this to `tests/conftest.py` as a fixture or helper function. For 3 sites it's fine inline.
+- **Doesn't address the underlying Rich+CliRunner stream-routing issue.** A future ship could pin click/typer versions or investigate the Rich Console configuration. For now, the test-level fix is sufficient.
+- **Doesn't fix the Windows live recycle-bin test bug.** Still deferred from v1.7.59.
+- **Doesn't address the Node.js 20 deprecation warning.** Still pending.
+- **Doesn't add a CI status badge to README.** Fourth ship noting this.
+
+### Authoritative-principle catches
+
+**Catch -- v1.7.61's speculative fix was wrong.** I assumed `COLUMNS=200` would solve the wrap. The PAT-enabled log analysis showed the underlying issue was different: not wrap-on-width, but stream routing. The COLUMNS change was a guess based on symptoms; the actual fix required reading the actual stdout content (which was empty of option names). **Lesson: diagnose with logs, not with hypotheses.**
+
+**Catch -- The robust fix was already documented as a "future improvement".** v1.7.61's CHANGELOG explicitly said: "A more robust fix would strip ANSI codes before substring matching... But that's 3 test files to edit, vs 1 line in CI. The COLUMNS approach is minimal." The minimal approach failed. The 3-file edit was the right call from the start. **Lesson: when the minimal infrastructure fix has uncertain semantics, the more thorough test-level fix is often safer.**
+
+**Catch -- ANSI-strip + `result.output` is the canonical fix.** The standard pattern for testing CLI help output in click+rich+typer projects:
+  1. Use `result.output` (combined), not `result.stdout`
+  2. Strip ANSI codes for substring assertions on flag names
+  3. Force `NO_COLOR=1` and/or `COLUMNS=...` in CI for the table layout
+
+  v1.7.45 did (3), v1.7.61 did (3) more aggressively, v1.7.62 does (1) and (2). The combination is robust.
+
+**Catch -- in-line `import re` is acceptable.** Two of the 3 tests didn't have `import re` at the top. Adding it conditionally at the top would have been more idiomatic but inlining keeps the diff smaller and the fix more localized. Future refactor candidate.
+
+### Lessons captured
+
+**Lesson #67 (new):** **Diagnose with logs, not with hypotheses.** v1.7.61's `COLUMNS=200` fix was based on the *appearance* of the assertion error (which showed ANSI codes + spaces + truncation). It was a reasonable guess but wrong. With the GitHub PAT for log access, v1.7.62's fix took <10 minutes once we re-ran the diagnosis with actual log content rather than annotation summaries. The PAT-enabled diagnostic loop should be the FIRST move when CI is red, not the third. Mitigations:
+  * Set up the PAT once and persist it (e.g. in `.curator/config.toml` with a clear scope notice)
+  * Add a `scripts/ci_diag.ps1` helper that downloads the latest failed run's logs in one command
+  * Resist the urge to ship speculative fixes when log access is available
+
+Also reinforces:
+  * #66 ("green local pytest does not imply green CI") — fifth ship in the sub-arc
+  * Subordinate lesson: **`result.output` over `result.stdout` is the cross-platform default for click CLI tests.** Especially for tests that exercise Rich rendering.
+
+### Limitations
+
+- **Doesn't extract the ANSI-strip helper to conftest.py.** Inlined 3 times; minor duplication.
+- **Doesn't investigate why `result.stdout` is empty of option content on POSIX.** Treating it as a black box. Future investigation could pin click version or examine Rich Console initialization.
+- **No CI status badge in README.**
+- **Node.js 20 deprecation tech debt still pending.**
+
+### Cumulative arc state (after v1.7.62)
+
+- **62 ships**, all tagged.
+- **pytest local**: 1807 / 10 / 0 (unchanged; test-level fix doesn't change count)
+- **pytest CI** (Ubuntu/3.12 v1.7.61): 1808 passed, 3 failed. **Expected after v1.7.62: 1811 passed, 0 failed, ALL 9 cells GREEN.**
+- **Coverage local**: 66.96% (unchanged)
+- **CI matrix**: 9 cells. v1.7.62 expected to be the FIRST all-green run in the 18-ship arc since v1.7.42 introduced CI.
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed (fully addressed)
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **CI hygiene**: 4 ships in (v1.7.59, v1.7.60, v1.7.61, v1.7.62); v1.7.62 expected to FINALLY close the arc.
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67 (added #67 this ship)
+- **Detacher-pattern ships**: 19 (unchanged; CI-debugging ships skip local pytest)
+
 ## [1.7.61] — 2026-05-12 — COLUMNS=200 in CI: fixes Rich help wrapping on POSIX (3 tests)
 
 **Headline:** v1.7.60 unblocked the macOS+Linux install step; tests finally ran on POSIX for the first time in the project's history. **Result: 1808 passed, 3 failed** on Ubuntu/3.12 (matching pattern on macOS). The 3 failures are all in `test_cli_*.py::test_*_help_*` style tests that assert option names like `'--apply' in result.stdout`. Rich/Typer's help table wraps option names across line boundaries with embedded ANSI codes when the terminal width differs from Windows defaults. Fix: add `COLUMNS=200` env var to the CI workflow's pytest step, forcing a wide terminal so Rich doesn't wrap.

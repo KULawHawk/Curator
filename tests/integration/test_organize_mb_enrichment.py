@@ -272,8 +272,13 @@ class TestEnrichMbCliValidation:
             app, ["--db", str(tmp_path / "x.db"), "organize", "--help"],
         )
         assert result.exit_code == 0
-        assert "--enrich-mb" in result.stdout
-        assert "MusicBrainz" in result.stdout
+        # v1.7.62: Rich/Typer help output may go to stderr or contain ANSI
+        # codes that break substring matching on POSIX CI. Use combined
+        # output with ANSI stripped.
+        import re
+        output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "--enrich-mb" in output
+        assert "MusicBrainz" in output
 
     def test_enrich_mb_requires_mb_contact(self, tmp_path):
         from typer.testing import CliRunner

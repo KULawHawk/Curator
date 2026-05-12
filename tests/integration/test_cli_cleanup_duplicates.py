@@ -53,10 +53,15 @@ class TestCleanupDuplicatesHelp:
             app, ["--db", str(db_path), "cleanup", "duplicates", "--help"],
         )
         assert result.exit_code == 0
+        # v1.7.62: Rich/Typer help output may go to stderr or contain ANSI
+        # codes that break substring matching on POSIX CI. Use combined
+        # output with ANSI stripped.
+        import re
+        output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
         for s in ("shortest_path", "longest_path", "oldest", "newest"):
-            assert s in result.stdout
-        assert "--keep-under" in result.stdout
-        assert "--apply" in result.stdout
+            assert s in output
+        assert "--keep-under" in output
+        assert "--apply" in output
 
 
 # ---------------------------------------------------------------------------
