@@ -102,7 +102,10 @@ organize = [
 
 windows = [
     # Windows-specific (Phase Gamma)
-    "pywin32>=306",
+    # v1.7.60: pywin32 is Windows-only; mark with PEP 508 sys_platform
+    # so [all] -> [windows] doesn't crash pip install on macOS/Linux CI.
+    # pystray and APScheduler are cross-platform; safe to install everywhere.
+    "pywin32>=306 ; sys_platform == 'win32'",
     "pystray>=0.19",
     "APScheduler>=3.10",
 ]

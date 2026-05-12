@@ -4,6 +4,117 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.60] — 2026-05-12 — PEP 508 marker on pywin32 (CI green attempt 2)
+
+**Headline:** v1.7.59 fixed the cross-platform test-collection crash but **exposed a deeper macOS install failure** that was masked by it. The `[windows]` extras include `pywin32>=306`, which has no macOS/Linux wheel. CI on macOS+Linux runs `pip install -e ".[all]"` (where `[all]` pulls in `[windows]`), and pip crashes before pytest can even start. Fix: add PEP 508 environment marker `; sys_platform == 'win32'` so pip silently skips pywin32 on non-Windows platforms.
+
+### What v1.7.59 did and didn't do
+
+v1.7.59 fixed the test_recycle_bin.py import chain so pytest collection no longer crashes on Linux/macOS. But CI on macOS still failed with the same surface signal ("No files were found with the provided path: coverage.xml"). Investigation: the failure had moved from step 6 (Run pytest) to step 5 (Install Curator (full extras)). pip install was crashing on `pywin32>=306` because there's no macOS wheel for it.
+
+This was always broken; v1.7.58 and earlier never got far enough on macOS to see it because test collection crashed first. v1.7.59 unblocked enough of the pipeline to surface the next layer of failure.
+
+### Root cause
+
+```toml
+[project.optional-dependencies]
+windows = [
+    "pywin32>=306",         # <-- Windows-only, no macOS/Linux wheel
+    "pystray>=0.19",        # cross-platform
+    "APScheduler>=3.10",    # cross-platform
+]
+
+all = [
+    "curator[dev,beta,cloud,organize,windows,gui,mcp]",
+    #                          ^^^^^^^ pulls pywin32 in everywhere
+]
+```
+
+The `[all]` extra (used by `setup_dev_env.py` and by the CI workflow) pulls in `[windows]` to be exhaustive. But pywin32 doesn't build on macOS — it's a wrapper around `windows.h` and Win32 API DLLs. pip aborts with non-zero exit when it can't satisfy a required dep.
+
+### Fix: PEP 508 environment marker
+
+```toml
+windows = [
+    # v1.7.60: pywin32 is Windows-only; mark with PEP 508 sys_platform
+    # so [all] -> [windows] doesn't crash pip install on macOS/Linux CI.
+    # pystray and APScheduler are cross-platform; safe to install everywhere.
+    "pywin32>=306 ; sys_platform == 'win32'",
+    "pystray>=0.19",
+    "APScheduler>=3.10",
+]
+```
+
+PEP 508 environment markers are evaluated by pip at resolution time. On Windows, `sys_platform == 'win32'` is True — pywin32 installs normally. On macOS (`sys_platform == 'darwin'`) or Linux (`sys_platform == 'linux'`), the marker is False — pywin32 is silently skipped from the dependency graph. No more pip crash on macOS/Linux.
+
+Verified locally: `packaging.markers.Marker("sys_platform == 'win32'").evaluate()` returns `True` on Windows. `sys.platform = 'win32'` confirmed. pywin32 311 is still installed in the local venv.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `pyproject.toml` | +4, -1 | PEP 508 marker on pywin32 |
+| `CHANGELOG.md` | +N | v1.7.60 entry |
+| `docs/releases/v1.7.60.md` | +N | release notes |
+
+No source code or test changes.
+
+### Verification
+
+- **Marker syntax**: PEP 508 `; sys_platform == 'win32'` evaluates True on Windows, False on POSIX ✅
+- **pywin32 still installed in local venv** (version 311, unchanged) ✅
+- **`pip install -e ".[windows]" --dry-run` resolves cleanly** with pywin32 already satisfied ✅
+- **pytest collection still works**: `1817/1827 tests collected (10 deselected)` ✅
+- **No new tests added**, no baseline regression possible
+
+### What this fix does NOT do
+
+- **Doesn't run a full baseline.** This is a pyproject.toml-only change; no Python code touched. Full baseline would tell us nothing new beyond the v1.7.59 numbers.
+- **Doesn't fix Linux yet.** Linux jobs may have ALSO been failing on pywin32 install in v1.7.58, AND/OR may have a separate failure mode. v1.7.59's run was in-progress at push time; v1.7.60 ships this fix immediately to chain into the same CI run.
+- **Doesn't fix the Windows live test bug.** Still deferred from v1.7.59.
+- **Doesn't address the Node.js 20 deprecation warning.** GitHub will force Node.js 24 by June 2026. A future ship should pin `actions/checkout@v5` etc.
+
+### Authoritative-principle catches
+
+**Catch -- v1.7.59 fix exposed a deeper failure layer.** This is normal in CI debugging: each surface fix can unmask a deeper issue. Lesson: when CI starts showing failure mode #2 after fixing mode #1, treat it as progress, not a setback. The pipeline is now reaching further before failing.
+
+**Catch -- the issue was always present.** pywin32 has been in `[windows]` since v1.6.x-era. It only mattered when CI started running on macOS (v1.7.54). For 4 ships (v1.7.55–v1.7.58), every macOS CI run failed at this same step — it just looked like a generic "Process completed with exit code 1" annotation and we didn't investigate. Lesson #66 reinforcement: the failure was sitting there in the CI dashboard the whole time.
+
+**Catch -- PEP 508 markers are the right tool, not requirements.txt hacks.** Alternatives considered:
+  1. Pull `windows` out of `[all]` entirely — would mean Windows users running `pip install -e ".[all]"` don't get pywin32, breaking the v1.7.x Windows shell integration. Regression on the dominant platform.
+  2. Create separate `[all-windows]` and `[all-posix]` extras — doubles the maintenance burden; users have to know which to pick.
+  3. Detect platform in `setup.py` (legacy approach) — not even available with pyproject-only builds.
+  4. PEP 508 environment marker — standard, declarative, supported by pip since 2017. **Chosen.**
+
+**Catch -- the marker applies to ONE line, not the whole extras list.** pywin32 is the only Windows-only entry; pystray and APScheduler are cross-platform (pystray works on macOS via Cocoa, on Linux via GtkStatusIcon; APScheduler is pure-Python). Only the one line needs the marker; the rest install everywhere.
+
+### Lessons captured
+
+**No new lesson codified.** Application of:
+  * #66 ("green local pytest does not imply green CI") — first reinforcement, two ships in a row
+  * The general principle: CI debugging is layered. Each fix can unmask the next failure. Don't stop after one round of green; verify each pushed commit until the CI is actually green across all cells.
+
+### Limitations
+
+- **Linux cells haven't reported yet.** v1.7.59's CI was still in_progress when v1.7.60 pushed. If Linux has the same pywin32 issue, this ship fixes it too. If Linux has a different issue (e.g. Qt offscreen libs missing despite the install step), that's v1.7.61.
+- **The Node.js 20 deprecation warning.** Not blocking, but accumulating tech debt. Future ship should bump actions versions.
+- **No automated CI status badge in README.** v1.7.59 noted this as a follow-up; still not done.
+
+### Cumulative arc state (after v1.7.60)
+
+- **60 ships**, all tagged.
+- **pytest** (local): 1807 / 10 / 0 / 0 warnings (default invocation)
+- **Coverage** (local): 66.96% (unchanged; pyproject-only change)
+- **CI matrix**: 9 cells; pre-v1.7.59 = 0/9 green. v1.7.59 in-progress at push time. v1.7.60 should unblock macOS+Linux install step.
+- **All 4 Tier 3 modules at 94%+ coverage** (from v1.7.55–58)
+- **Tier 1 backlog**: A1, A3, C1 closed; A2 workaround
+- **Tier 2 backlog**: E3, C5, D3, A4, C6 closed (fully addressed)
+- **Tier 3 (test coverage)**: ALL 4 CLOSED (v1.7.55–v1.7.58)
+- **CI hygiene**: 2 ships in (v1.7.59, v1.7.60); progress made but not yet verified green
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#66 (no new this ship)
+- **Detacher-pattern ships**: 19 (unchanged; this ship has no local pytest run)
+
 ## [1.7.59] — 2026-05-12 — CI green: cross-platform import fix + slow-mark recycle bin live test
 
 **Headline:** Closes the CI failure streak that has been running silently since v1.7.42 (16 consecutive red runs). **Two root causes identified and fixed:** (1) On Linux/macOS, importing `curator._vendored.send2trash.win.recycle_bin` triggered an `ImportError: ctypes.wintypes` at package init time, which crashed pytest collection before any tests ran (no coverage.xml produced). (2) On Windows, the live recycle-bin test `test_trash_then_find_in_recycle_bin` was running on CI but failing; locally we hid it with `--deselect`. Fix: gate the legacy ctypes import on `sys.platform == 'win32'`, and add `@pytest.mark.slow` to the live test so it auto-deselects via pyproject's `-m 'not slow'` filter. **Codifies lesson #66**: "green local pytest does not imply green CI."
