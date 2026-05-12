@@ -1,5 +1,5 @@
 # =============================================================================
-# .github/workflows/test.yml   (v1.7.42)
+# .github/workflows/test.yml   (v1.7.50)
 #
 # Continuous integration: run the full pytest baseline on every push to main
 # and every pull request targeting main. Catches regressions before they
@@ -12,8 +12,13 @@
 #   (ubuntu-latest, macos-latest) is a future ship -- adds ~3x runner-minutes
 #   for marginal coverage gain when the project's deployment is Windows.
 #
-# * Single Python version for v1: 3.13 to match dev. pyproject claims
-#   >=3.11; an explicit matrix [3.11, 3.12, 3.13] is a future ship.
+# * Python version matrix [3.11, 3.12, 3.13] (v1.7.50): pyproject.toml
+#   claims requires-python = ">=3.11", but we'd only been testing on 3.13.
+#   The matrix runs three parallel jobs -- one per Python version -- so
+#   any 3.11- or 3.12-specific breakage surfaces immediately in CI, not
+#   after a user files an issue. ``fail-fast: false`` is critical: if
+#   3.11 breaks, we still want to know whether 3.12 also breaks
+#   (might be the same issue, might be different).
 #
 # * Full extras profile [all]: matches what setup_dev_env.py defaults to,
 #   so CI exercises the same install path a real contributor uses.
@@ -23,17 +28,21 @@
 #   pytest uses.
 #
 # * --timeout=120 per-test: catches hangs without killing the whole run
-#   on a single slow test. The flake `test_abort_during_run_marks_cancelled`
-#   may still trip occasionally; CI re-run is the workaround until A1
-#   ships the fix.
+#   on a single slow test.
 #
-# * 15-minute job timeout: the baseline runs in ~3 min locally; CI runs
+# * 15-minute job timeout: the baseline runs in ~3-4 min locally; CI runs
 #   are usually a bit slower (cold pip cache first time, cold Qt startup).
-#   15 min has 5x headroom.
+#   15 min has 5x headroom. With the matrix, each Python version runs in
+#   parallel so wall-clock stays under 15 min even with 3 versions.
 #
 # * Pip cache via setup-python: speeds up repeat runs by re-using the
-#   downloaded wheels from the previous run. Cache key is automatically
-#   keyed on pyproject.toml + lock files.
+#   downloaded wheels from the previous run. ``actions/setup-python``
+#   automatically keys the cache by Python version, so each matrix entry
+#   gets its own cache without manual key construction.
+#
+# * NO_COLOR=1 (v1.7.45): forces Rich/Typer to emit plain-text help
+#   output in CI. Without this, Rich wraps option names like ``--apply``
+#   in ANSI escape sequences, breaking substring assertions in tests.
 # =============================================================================
 
 name: tests
@@ -45,25 +54,35 @@ on:
     branches: [main]
 
 # Cancel any in-progress run for the same branch when a new push arrives.
-# Saves CI minutes when developers push fix-ups rapidly.
+# Saves CI minutes when developers push fix-ups rapidly. The matrix entries
+# share this group, so a new push cancels ALL in-progress Python-version
+# jobs together (correct: they're all stale once a new commit lands).
 concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   test:
-    name: pytest (Windows / Python 3.13)
+    name: pytest (Windows / Python ${{ matrix.python-version }})
     runs-on: windows-latest
     timeout-minutes: 15
+
+    # v1.7.50: matrix on Python version. fail-fast: false lets all three
+    # versions complete even if one fails -- critical for diagnosing
+    # whether a failure is version-specific or universal.
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.13
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
           cache: "pip"
           cache-dependency-path: pyproject.toml
 
@@ -76,14 +95,6 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           PYTHONIOENCODING: utf-8
-          # v1.7.45: NO_COLOR=1 forces Rich/Typer to emit plain-text help output
-          # in CI. Without this, Rich wraps option names like `--apply` in
-          # ANSI escape sequences, breaking substring assertions in
-          # integration tests that check the help output for specific flags.
-          # Locally Rich auto-detects no-TTY and emits plain text, but on
-          # GitHub Actions Windows runners Rich gets a color-capable terminal
-          # context. NO_COLOR is the official environment-variable convention
-          # (https://no-color.org) that Rich, Click, and Typer all respect.
           NO_COLOR: "1"
         run: |
           pytest tests/ -q --tb=line --timeout=120

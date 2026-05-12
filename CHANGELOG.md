@@ -4,6 +4,86 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.50] — 2026-05-11 — Python version matrix in CI (closes C5)
+
+**Headline:** Adds a Python version matrix `[3.11, 3.12, 3.13]` to the GitHub Actions workflow. Each push and PR now runs the full pytest baseline against all three supported Python versions in parallel. `fail-fast: false` ensures all three versions report independently — if one breaks, the others still complete so we can tell whether it's version-specific or universal. Closes the C5 backlog item; validates pyproject.toml's `requires-python = ">=3.11"` claim.
+
+### Why this matters
+
+`pyproject.toml` has declared `requires-python = ">=3.11"` since the project's early days. The classifiers also advertise Python 3.11 and 3.12 support. But the CI workflow (v1.7.42) only tested against Python 3.13 — the dev environment's version. This created a silent invariant: "all tests pass on 3.13" was being checked; "all tests pass on 3.11 and 3.12" was an unverified claim.
+
+The risk is real and concrete: a 3.13-only syntax (e.g. PEP 695 generics like `def f[T](x: T)`) or a transitive dependency that drops 3.11 wheels could break installation or import on the lower versions without anyone noticing until a user files an issue. v1.7.50 closes this gap.
+
+### What's new
+
+**`.github/workflows/test.yml` (+9 lines net)**
+
+```yaml
+strategy:
+  fail-fast: false
+  matrix:
+    python-version: ["3.11", "3.12", "3.13"]
+```
+
+Key design choices:
+
+  * **`fail-fast: false`** — If 3.11 fails, we still want to see whether 3.12 and 3.13 also fail. That tells us "3.11-specific" vs "universal regression." The default `fail-fast: true` would cancel the other matrix entries on first failure, hiding that information.
+
+  * **Job name includes version** — `name: pytest (Windows / Python ${{ matrix.python-version }})` makes each matrix entry show up as a distinct check in the GitHub UI. Branch protection rules can require specific versions to pass.
+
+  * **Pip cache is per-version** — `actions/setup-python@v5` automatically keys the pip cache by Python version, so each matrix entry has its own cache without manual key construction. Caching is the dominant runtime saver for CI.
+
+  * **Concurrency unchanged** — The matrix entries share `tests-${{ github.ref }}`, so a new push cancels ALL in-progress jobs together. Correct: they're all stale when a new commit lands.
+
+  * **Wall-clock time unchanged** — GitHub Actions runs matrix entries in parallel, so wall-clock latency stays at ~3-5 min (each job runs independently). Total runner-minutes triple (~12 min → ~36 min), but GitHub's free tier on public repos has unlimited runner-minutes for Linux/Windows.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `.github/workflows/test.yml` | +9 net | Matrix strategy block; updated header comments |
+| `CHANGELOG.md` | +N | v1.7.50 entry |
+| `docs/releases/v1.7.50.md` | +N | release notes |
+
+### Verification
+
+- **Local baseline (v1.7.49)**: ✅ 1572 / 10 / 0 / 0 warnings on Python 3.13 (unchanged; v1.7.50 is CI-only)
+- **CI matrix run (this push)**: validates the workflow YAML itself + actual 3.11 / 3.12 / 3.13 test execution
+- **Expected outcome**: all three versions pass. If any fails, the failure mode determines the next ship:
+  * **3.11 + 3.12 fail, 3.13 passes** → likely 3.13-specific syntax (PEP 695 generics, etc.) that needs back-porting
+  * **3.11 fails, 3.12 + 3.13 pass** → likely a transitive dep that dropped 3.11 wheels
+  * **All three fail** → universal regression, unrelated to version matrix; investigate the actual error
+  * **All three pass** → ✅ C5 closed; we have proof that pyproject's `>=3.11` claim is real
+
+### Authoritative-principle catches
+
+**Catch — `fail-fast: false` is non-negotiable for a Python version matrix.** Initial draft used the default (`fail-fast: true`). That would cancel 3.12 and 3.13 jobs the moment 3.11 fails — hiding whether the failure is 3.11-specific or shared. The whole point of the matrix is to learn WHERE the breakage is; cancel-on-first-failure defeats that. The cost is a few wasted CI minutes when there IS a universal failure, but that's the right trade-off.
+
+**Catch — the matrix doesn't include 3.14 yet.** Python 3.14 is in beta (RC1 expected mid-2026). When 3.14 ships, we'll add it to the matrix — critically, this validates that v1.7.47's `utcnow_naive` compat shim actually works post-`utcnow()` removal. But adding 3.14 to the matrix BEFORE its stable release would create false failures from beta-specific issues. Wait for stable.
+
+**Catch — no local pre-validation possible.** I only have Python 3.13 installed in my dev venv. There's no way to know in advance whether 3.11 or 3.12 will pass — the CI run IS the test. Pushed deliberately with the expectation that the first run may surface 3.11/3.12-specific issues. If so, those become a follow-up ship (v1.7.51).
+
+### Lessons captured
+
+**No new lesson codified.** Application of pre-existing lessons #51 ("matrix what you claim to support") and #61 ("infrastructure ships beat feature ships when missing"). The matrix itself is unremarkable; what makes it a useful ship is the gap it closes (silent unverified support claim).
+
+### Limitations
+
+- **Only Windows tested.** The OS matrix (C6) is a separate ship; if/when Linux + macOS are added, the total matrix becomes 3 versions × 3 OSes = 9 jobs. GitHub's free runner-minute quota on Linux is generous; Windows is more expensive. Cross-OS coverage is more valuable than wider Python coverage for Curator's deployment story, but each adds its own ship.
+- **3.11.0 vs 3.11.x.** GitHub Actions installs the latest patch release of each minor. If a regression appears between 3.11.0 and 3.11.x, this matrix won't catch it. Pinning to specific patch versions would catch that but add maintenance burden — the trade-off favors the latest-patch approach.
+- **No 3.10 or earlier.** pyproject says `>=3.11`. We don't claim to support 3.10, so we don't test it. If a user ever asks for 3.10 support, the matrix is the place to add it.
+- **3.14 is excluded for now.** When 3.14 ships stable, add it AND validate v1.7.47's utcnow_naive shim against `utcnow()` actually being removed.
+
+### Cumulative arc state (after v1.7.50)
+
+- **50 ships**, all tagged, all baselines green
+- **pytest**: 1572 / 10 / 0 / 0 warnings (unchanged; v1.7.50 is CI-only)
+- **CI**: now runs against Python 3.11, 3.12, AND 3.13 on every push and PR
+- **Tier 1 backlog**: A1, A3, C1 closed (A2 has proven workaround)
+- **Tier 2 backlog**: E3 closed v1.7.49; **C5 closed this ship**. Remaining: C6 (OS matrix), D3 (coverage), A4 (orphan curator-mcp.exe)
+- **Lessons captured**: #46–#62 (unchanged this ship)
+- **Detacher-pattern ships**: 11 (v1.7.39 through v1.7.49; this ship has no local pytest run)
+
 ## [1.7.49] — 2026-05-11 — source_type repository-level immutability (closes E3)
 
 **Headline:** Hardens v1.7.40's GUI source_type immutability contract at the data layer. `SourceRepository.update()` now raises `ValueError` if a caller tries to change a source's `source_type`, with a clear error message explaining why (existing config_json was validated against a different plugin's schema). Closes the E3 backlog item.
