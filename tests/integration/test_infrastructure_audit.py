@@ -222,7 +222,8 @@ def test_ci_workflow_exists() -> None:
     assert workflow.is_file(), (
         ".github/workflows/test.yml is the canonical CI workflow. "
         "If it's missing, CI doesn't run and the project's quality story is "
-        "broken. See Part V of the doctrine for the 9-cell matrix decision."
+        "broken. See Part V of the doctrine for the Windows-only matrix decision "
+        "(was 9-cell pre-v1.7.84; narrowed scope, see docs/PLATFORM_SCOPE.md)."
     )
 
 
@@ -244,20 +245,39 @@ def test_ci_workflow_uses_expected_action_versions() -> None:
         )
 
 
-def test_ci_workflow_has_full_matrix() -> None:
-    """The 9-cell matrix is a Part V standing decision (v1.7.54)."""
+def test_ci_workflow_is_windows_only() -> None:
+    """Windows-only scope is a Part V standing decision (v1.7.84).
+
+    Curator scope narrowed from the 9-cell matrix ({windows, ubuntu, macos} x
+    {3.11, 3.12, 3.13}) to 3 cells (windows x 3 Python versions) in v1.7.84.
+    See docs/PLATFORM_SCOPE.md for the full set-aside register and resume
+    path. If/when macOS or Linux support resumes, rename this test back to
+    test_ci_workflow_has_full_matrix and restore the 9-cell assertion.
+    """
     workflow = REPO_ROOT / ".github" / "workflows" / "test.yml"
     content = workflow.read_text(encoding="utf-8")
-    for os_name in ("windows-latest", "ubuntu-latest", "macos-latest"):
-        assert os_name in content, (
-            f"Expected OS {os_name!r} in CI matrix. The 9-cell matrix "
-            f"({{windows, ubuntu, macos}} x {{3.11, 3.12, 3.13}}) is "
-            f"ratified in doctrine Part V."
+    # Windows must be present.
+    assert "windows-latest" in content, (
+        "Expected 'windows-latest' in CI matrix. Windows is the only\n"
+        "supported platform per v1.7.84 scope narrowing."
+    )
+    # Non-Windows OSes must NOT be in the matrix block.
+    # (They may appear in comments referencing the previous 9-cell state.)
+    # Check inside the strategy block specifically:
+    matrix_block_start = content.find("strategy:")
+    matrix_block_end = content.find("steps:", matrix_block_start)
+    matrix_block = content[matrix_block_start:matrix_block_end]
+    for forbidden in ("ubuntu-latest", "macos-latest"):
+        assert forbidden not in matrix_block, (
+            f"Found {forbidden!r} in the CI matrix strategy block. "
+            f"v1.7.84 narrowed scope to Windows-only. "
+            f"See docs/PLATFORM_SCOPE.md."
         )
+    # All 3 Python versions must be present.
     for py_version in ('"3.11"', '"3.12"', '"3.13"'):
         assert py_version in content, (
-            f"Expected Python {py_version} in CI matrix. The 9-cell matrix "
-            f"is ratified in doctrine Part V."
+            f"Expected Python {py_version} in CI matrix. The Windows x "
+            f"3-Python-version matrix is ratified in doctrine Part V."
         )
 
 

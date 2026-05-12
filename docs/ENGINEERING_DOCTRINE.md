@@ -55,6 +55,12 @@ reverse it when new evidence justifies the reversal.
 
 ### Principle 3: Functional parity > code parity (cross-platform)
 
+**STATUS: SUSPENDED as of v1.7.84.** Scope narrowed to Windows-only; see
+`docs/PLATFORM_SCOPE.md` for the resume path. The principle text below remains
+as-written because the bash variants of tooling are preserved on disk; the
+principle will reactivate if/when macOS / Linux support resumes. Until then,
+new tooling does not need a POSIX sibling.
+
 **Learned from:** v1.7.76 (`setup_dev_hooks.sh`), v1.7.78 (`ci_diag.sh`)
 
 The PowerShell and bash variants of `setup_dev_hooks` and `ci_diag` are functionally
@@ -261,9 +267,10 @@ The following choices apply to all future Curator ships unless explicitly overri
 
 | Decision | Source | Rationale |
 |---|---|---|
-| CI matrix is 9 cells: `{windows, ubuntu, macos} × {3.11, 3.12, 3.13}` | v1.7.54 | Matches `requires-python` in pyproject.toml; covers all supported platforms |
+| CI matrix is 3 cells: `windows-latest × {3.11, 3.12, 3.13}` | v1.7.84 | Scope narrowed from 9-cell to Windows-only; see `docs/PLATFORM_SCOPE.md` for the set-aside register and step-by-step resume path |
 | GitHub Actions: `checkout@v6`, `setup-python@v6`, `upload-artifact@v7` | v1.7.77 | Node.js 24 native; CI-verified safe |
 | Dependabot watches `github-actions` ecosystem only (for now) | v1.7.71 | Pip ecosystem added when 25+ consecutive green ships verify the github-actions cadence |
+| **Coverage standard: 100% line + branch on Windows scope, or documented `# pragma: no cover`** | v1.7.84 | Accuracy is the apex principle; "diminishing returns" framing is corner-cutting. Pragma exceptions require an inline comment naming the reason (e.g. "set aside v1.7.84", "defensive code for impossible case") |
 | Three pre-commit lints: glyph, ORDER BY, inline ANSI regex | v1.7.32/72/73 | One ship per regression bug class |
 | Pre-push hook warns on red CI, never blocks | v1.7.70 | Signals, not gates (Principle 10) |
 | PAT scope: `actions:read` only | v1.7.74 | Minimal-scope credentials (Principle 4) |

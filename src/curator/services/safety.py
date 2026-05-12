@@ -249,7 +249,7 @@ def _windows_os_managed_paths() -> list[Path]:
     return out
 
 
-def _macos_app_data_paths() -> list[Path]:
+def _macos_app_data_paths() -> list[Path]:  # pragma: no cover — set aside v1.7.84 (see docs/PLATFORM_SCOPE.md)
     home = Path.home()
     return [
         home / "Library" / "Application Support",
@@ -262,7 +262,7 @@ def _macos_app_data_paths() -> list[Path]:
     ]
 
 
-def _macos_os_managed_paths() -> list[Path]:
+def _macos_os_managed_paths() -> list[Path]:  # pragma: no cover — set aside v1.7.84 (see docs/PLATFORM_SCOPE.md)
     return [
         Path("/System"),
         # v1.7.63: replaced Path("/private") with specific subdirs.
@@ -283,7 +283,7 @@ def _macos_os_managed_paths() -> list[Path]:
     ]
 
 
-def _linux_app_data_paths() -> list[Path]:
+def _linux_app_data_paths() -> list[Path]:  # pragma: no cover — set aside v1.7.84 (see docs/PLATFORM_SCOPE.md)
     import os
 
     home = Path.home()
@@ -305,7 +305,7 @@ def _linux_app_data_paths() -> list[Path]:
     return out
 
 
-def _linux_os_managed_paths() -> list[Path]:
+def _linux_os_managed_paths() -> list[Path]:  # pragma: no cover — set aside v1.7.84 (see docs/PLATFORM_SCOPE.md)
     return [
         Path("/boot"),
         Path("/sys"),
@@ -342,18 +342,18 @@ def get_default_app_data_paths() -> list[Path]:
     """Platform-aware default app-data paths."""
     if sys.platform == "win32":
         return _windows_app_data_paths()
-    if sys.platform == "darwin":
+    if sys.platform == "darwin":  # pragma: no cover — set aside v1.7.84 (see docs/PLATFORM_SCOPE.md)
         return _macos_app_data_paths()
-    return _linux_app_data_paths()
+    return _linux_app_data_paths()  # pragma: no cover — set aside v1.7.84 (see docs/PLATFORM_SCOPE.md)
 
 
 def get_default_os_managed_paths() -> list[Path]:
     """Platform-aware default OS-managed paths (hard refusal)."""
     if sys.platform == "win32":
         return _windows_os_managed_paths()
-    if sys.platform == "darwin":
+    if sys.platform == "darwin":  # pragma: no cover — set aside v1.7.84 (see docs/PLATFORM_SCOPE.md)
         return _macos_os_managed_paths()
-    return _linux_os_managed_paths()
+    return _linux_os_managed_paths()  # pragma: no cover — set aside v1.7.84 (see docs/PLATFORM_SCOPE.md)
 
 
 def _is_under(path: Path, root: Path) -> bool:
@@ -365,7 +365,7 @@ def _is_under(path: Path, root: Path) -> bool:
         return False
     if sys.platform == "win32":
         return str(path_r).lower().startswith(str(root_r).lower())
-    return str(path_r).startswith(str(root_r))
+    return str(path_r).startswith(str(root_r))  # pragma: no cover — set aside v1.7.84 (see docs/PLATFORM_SCOPE.md)
 
 
 # ---------------------------------------------------------------------------

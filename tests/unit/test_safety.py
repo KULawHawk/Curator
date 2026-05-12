@@ -28,6 +28,8 @@ from curator.services.safety import (
     SafetyService,
     _is_under,
     _psutil_available,
+    _windows_app_data_paths,
+    _windows_os_managed_paths,
     find_handle_holders,
     find_project_root,
     get_default_app_data_paths,
@@ -475,3 +477,414 @@ class TestServiceHelpers:
         svc = SafetyService(app_data_paths=[], os_managed_paths=[root])
         assert svc.is_os_managed(child) is True
         assert svc.is_os_managed(tmp_path / "outside.txt") is False
+
+
+# ===========================================================================
+# v1.7.84 — Windows-coverage additions: defensive error paths,
+# psutil-mocked find_handle_holders, symlink + check_handles branches.
+# Target: 100% line + branch coverage on Windows-relevant safety.py code.
+# Non-Windows code is pragma'd; see docs/PLATFORM_SCOPE.md.
+# ===========================================================================
+
+
+class TestDefensiveErrorPaths:
+    """Coverage for OSError / RuntimeError defensive branches."""
+
+    def test_find_project_root_resolve_raises_oserror(self, monkeypatch, tmp_path):
+        target = tmp_path / "x.txt"
+        target.write_text("")
+
+        def boom(self, *args, **kwargs):
+            raise OSError("simulated resolve failure")
+
+        monkeypatch.setattr(Path, "resolve", boom)
+        assert find_project_root(target) is None
+
+    def test_find_project_root_resolve_raises_runtimeerror(self, monkeypatch, tmp_path):
+        target = tmp_path / "x.txt"
+        target.write_text("")
+
+        def boom(self, *args, **kwargs):
+            raise RuntimeError("simulated symlink cycle")
+
+        monkeypatch.setattr(Path, "resolve", boom)
+        assert find_project_root(target) is None
+
+    def test_find_project_root_inner_oserror_during_marker_check(
+        self, monkeypatch, tmp_path
+    ):
+        # If Path.exists() raises OSError during the marker loop, the
+        # function must return None gracefully (defensive path 205-206).
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        target = proj / "file.txt"
+        target.write_text("")
+
+        orig_exists = Path.exists
+        call_count = {"n": 0}
+
+        def selective_exists(self):
+            call_count["n"] += 1
+            # Let the initial currency check pass (calls 1-2), then raise.
+            if call_count["n"] >= 3:
+                raise OSError("simulated stat failure")
+            return orig_exists(self)
+
+        monkeypatch.setattr(Path, "exists", selective_exists)
+        assert find_project_root(target) is None
+
+    def test_is_under_resolve_oserror(self, monkeypatch, tmp_path):
+        target = tmp_path / "x.txt"
+        target.write_text("")
+
+        def boom(self, *args, **kwargs):
+            raise OSError("simulated resolve failure")
+
+        monkeypatch.setattr(Path, "resolve", boom)
+        # Defensive return False (lines 364-365)
+        assert _is_under(target, tmp_path) is False
+
+    def test_is_under_resolve_runtimeerror(self, monkeypatch, tmp_path):
+        target = tmp_path / "x.txt"
+        target.write_text("")
+
+        def boom(self, *args, **kwargs):
+            raise RuntimeError("simulated symlink cycle")
+
+        monkeypatch.setattr(Path, "resolve", boom)
+        assert _is_under(target, tmp_path) is False
+
+
+# ===========================================================================
+# _psutil_available ImportError path (lines 379-380)
+# ===========================================================================
+
+
+class TestPsutilAvailableFalsePath:
+    def test_returns_false_when_import_fails(self, monkeypatch):
+        import builtins
+
+        orig_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "psutil":
+                raise ImportError("simulated unavailability")
+            return orig_import(name, *args, **kwargs)
+
+        # Ensure cached import doesn't hide the error
+        monkeypatch.delitem(sys.modules, "psutil", raising=False)
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        assert _psutil_available() is False
+
+
+# ===========================================================================
+# find_handle_holders body (lines 402-429) — psutil mocked
+# ===========================================================================
+
+
+class _FakeOpenFile:
+    """Mimics psutil's Process.open_files() entries (.path attribute)."""
+
+    def __init__(self, path):
+        self.path = path
+
+
+class _FakeProc:
+    """Mimics psutil.Process for find_handle_holders testing.
+
+    Attributes the service uses:
+      * proc.info — dict-like with 'name' and 'pid' keys
+      * proc.open_files() — returns list of objects with .path
+    """
+
+    def __init__(
+        self,
+        name,
+        pid,
+        files=None,
+        raise_on_open_files=None,
+        info_name_is_none=False,
+    ):
+        if info_name_is_none:
+            self.info = {"name": None, "pid": pid}
+        else:
+            self.info = {"name": name, "pid": pid}
+        self._files = files or []
+        self._raise = raise_on_open_files
+
+    def open_files(self):
+        if self._raise is not None:
+            raise self._raise
+        return self._files
+
+
+class TestFindHandleHoldersBody:
+    """Comprehensive coverage for find_handle_holders by mocking psutil.process_iter."""
+
+    def _install_fake_iter(self, monkeypatch, procs):
+        """Replace psutil.process_iter to yield the given fake processes."""
+        if not _psutil_available():
+            pytest.skip("psutil not installed; cannot mock")
+        import psutil
+
+        def fake_iter(attrs=None):
+            for p in procs:
+                yield p
+
+        monkeypatch.setattr(psutil, "process_iter", fake_iter)
+
+    def test_target_resolve_oserror_returns_empty(self, monkeypatch, tmp_path):
+        # If path.resolve() raises OSError, function returns [] before iter.
+        target = tmp_path / "x.txt"
+        target.write_text("")
+
+        orig_resolve = Path.resolve
+        call_count = {"n": 0}
+
+        def selective_resolve(self, *args, **kwargs):
+            call_count["n"] += 1
+            # path.exists() must succeed first; resolve() is called after.
+            # Raise on the FIRST resolve call (which is on `path` itself).
+            if call_count["n"] == 1:
+                raise OSError("simulated")
+            return orig_resolve(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", selective_resolve)
+        assert find_handle_holders(target) == []
+
+    def test_detects_holder_when_path_matches(self, monkeypatch, tmp_path):
+        target = tmp_path / "held.bin"
+        target.write_text("x")
+        # A fake process that has the target file open
+        proc = _FakeProc(
+            "myapp.exe",
+            1234,
+            files=[_FakeOpenFile(str(target))],
+        )
+        self._install_fake_iter(monkeypatch, [proc])
+        result = find_handle_holders(target)
+        assert "myapp.exe" in result
+
+    def test_fallback_to_pid_when_info_name_is_none(self, monkeypatch, tmp_path):
+        target = tmp_path / "held.bin"
+        target.write_text("x")
+        proc = _FakeProc(
+            None, 7777,
+            files=[_FakeOpenFile(str(target))],
+            info_name_is_none=True,
+        )
+        self._install_fake_iter(monkeypatch, [proc])
+        result = find_handle_holders(target)
+        assert "pid 7777" in result
+
+    def test_skips_process_with_unrelated_file(self, monkeypatch, tmp_path):
+        target = tmp_path / "held.bin"
+        target.write_text("x")
+        unrelated = tmp_path / "other.bin"
+        unrelated.write_text("y")
+        proc = _FakeProc(
+            "unrelated.exe", 9999,
+            files=[_FakeOpenFile(str(unrelated))],
+        )
+        self._install_fake_iter(monkeypatch, [proc])
+        result = find_handle_holders(target)
+        assert "unrelated.exe" not in result
+
+    def test_open_file_path_resolve_oserror_skips_inner(self, monkeypatch, tmp_path):
+        # If Path(f.path).resolve() raises OSError, the inner loop continues
+        # (lines 419-420). The outer loop must not crash.
+        target = tmp_path / "held.bin"
+        target.write_text("x")
+
+        # File path that will fail to resolve
+        bad_file = _FakeOpenFile("\\\\?\\GLOBALROOT\\bad")
+        good_file = _FakeOpenFile(str(target))
+
+        proc = _FakeProc(
+            "some.exe", 5555,
+            files=[bad_file, good_file],
+        )
+
+        if not _psutil_available():
+            pytest.skip("psutil not installed")
+        import psutil
+
+        def fake_iter(attrs=None):
+            yield proc
+
+        monkeypatch.setattr(psutil, "process_iter", fake_iter)
+
+        # Monkeypatch Path.resolve to fail on the bad path only
+        orig_resolve = Path.resolve
+
+        def selective_resolve(self, *args, **kwargs):
+            if "GLOBALROOT" in str(self):
+                raise OSError("unresolvable")
+            return orig_resolve(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", selective_resolve)
+        result = find_handle_holders(target)
+        # The good_file was still matched after skipping the bad one
+        assert "some.exe" in result
+
+    def test_access_denied_exception_skips_process(self, monkeypatch, tmp_path):
+        target = tmp_path / "held.bin"
+        target.write_text("x")
+        if not _psutil_available():
+            pytest.skip("psutil not installed")
+        import psutil
+
+        proc_denied = _FakeProc(
+            "protected.exe", 1,
+            raise_on_open_files=psutil.AccessDenied(),
+        )
+        proc_good = _FakeProc(
+            "normal.exe", 2,
+            files=[_FakeOpenFile(str(target))],
+        )
+        self._install_fake_iter(monkeypatch, [proc_denied, proc_good])
+        result = find_handle_holders(target)
+        # protected.exe was skipped, normal.exe still recorded
+        assert "protected.exe" not in result
+        assert "normal.exe" in result
+
+    def test_no_such_process_exception_skips(self, monkeypatch, tmp_path):
+        target = tmp_path / "held.bin"
+        target.write_text("x")
+        import psutil
+
+        proc = _FakeProc(
+            "gone.exe", 99,
+            raise_on_open_files=psutil.NoSuchProcess(pid=99),
+        )
+        self._install_fake_iter(monkeypatch, [proc])
+        # Should not raise, just return []
+        assert find_handle_holders(target) == []
+
+    def test_zombie_process_exception_skips(self, monkeypatch, tmp_path):
+        target = tmp_path / "held.bin"
+        target.write_text("x")
+        import psutil
+
+        proc = _FakeProc(
+            "zombie.exe", 42,
+            raise_on_open_files=psutil.ZombieProcess(pid=42),
+        )
+        self._install_fake_iter(monkeypatch, [proc])
+        assert find_handle_holders(target) == []
+
+    def test_deduplicates_same_process_name(self, monkeypatch, tmp_path):
+        # If the same process holds two file entries (unusual but possible),
+        # the holder list should NOT contain duplicates.
+        target = tmp_path / "held.bin"
+        target.write_text("x")
+        proc = _FakeProc(
+            "same.exe", 1,
+            files=[_FakeOpenFile(str(target)), _FakeOpenFile(str(target))],
+        )
+        self._install_fake_iter(monkeypatch, [proc])
+        # Inside the for-f loop, after the first match we `break`, so
+        # this would normally produce one entry. But verify the dedup
+        # also handles the case of multiple matching procs with same name.
+        proc2 = _FakeProc(
+            "same.exe", 2,
+            files=[_FakeOpenFile(str(target))],
+        )
+        self._install_fake_iter(monkeypatch, [proc, proc2])
+        result = find_handle_holders(target)
+        # Only one "same.exe" entry despite two procs holding the file
+        assert result.count("same.exe") == 1
+
+
+# ===========================================================================
+# check_path symlink + lstat OSError branches (lines 517-524)
+# ===========================================================================
+
+
+class TestCheckPathSymlinkBranch:
+    def test_symlink_detected_via_monkeypatched_is_symlink(
+        self, monkeypatch, tmp_path
+    ):
+        # On Windows, creating real symlinks needs admin/dev mode. Mock
+        # is_symlink() to True to exercise the SYMLINK concern branch.
+        target = tmp_path / "fake_link.txt"
+        target.write_text("")
+
+        def always_true(self):
+            return True
+
+        monkeypatch.setattr(Path, "is_symlink", always_true)
+        svc = SafetyService(app_data_paths=[], os_managed_paths=[])
+        report = svc.check_path(target)
+        assert report.level == SafetyLevel.CAUTION
+        assert any(c[0] == SafetyConcern.SYMLINK for c in report.concerns)
+
+    def test_is_symlink_raising_oserror_is_swallowed(self, monkeypatch, tmp_path):
+        # If is_symlink() raises OSError, the report should still complete
+        # (the except branch at 521-524 swallows it without recording a concern).
+        target = tmp_path / "weird.txt"
+        target.write_text("")
+
+        def boom(self):
+            raise OSError("simulated lstat failure")
+
+        monkeypatch.setattr(Path, "is_symlink", boom)
+        svc = SafetyService(app_data_paths=[], os_managed_paths=[])
+        # Should not raise; report still constructed with no SYMLINK concern.
+        report = svc.check_path(target)
+        assert all(c[0] != SafetyConcern.SYMLINK for c in report.concerns)
+
+
+# ===========================================================================
+# check_path with check_handles=True (lines 537-543)
+# ===========================================================================
+
+
+class TestCheckPathHandlesBranch:
+    def test_check_handles_records_holders(self, monkeypatch, tmp_path):
+        target = tmp_path / "held.bin"
+        target.write_text("")
+        monkeypatch.setattr(
+            "curator.services.safety.find_handle_holders",
+            lambda p: ["app.exe", "another.exe"],
+        )
+        svc = SafetyService(app_data_paths=[], os_managed_paths=[])
+        report = svc.check_path(target, check_handles=True)
+        assert report.holders == ["app.exe", "another.exe"]
+        assert report.level == SafetyLevel.CAUTION
+        # Detail message includes the holder names (joined with comma)
+        detail = next(d for c, d in report.concerns if c == SafetyConcern.OPEN_HANDLE)
+        assert "app.exe" in detail and "another.exe" in detail
+
+    def test_check_handles_more_than_five_truncates_pretty(
+        self, monkeypatch, tmp_path
+    ):
+        # When more than 5 holders exist, the detail string truncates to the
+        # first 5 and appends "(+N more)" — covers line 542.
+        target = tmp_path / "held.bin"
+        target.write_text("")
+        many_holders = [f"proc{i}.exe" for i in range(7)]
+        monkeypatch.setattr(
+            "curator.services.safety.find_handle_holders",
+            lambda p: many_holders,
+        )
+        svc = SafetyService(app_data_paths=[], os_managed_paths=[])
+        report = svc.check_path(target, check_handles=True)
+        detail = next(d for c, d in report.concerns if c == SafetyConcern.OPEN_HANDLE)
+        assert "(+2 more)" in detail
+        # First 5 holders are in the detail; last 2 are summarized
+        for i in range(5):
+            assert f"proc{i}.exe" in detail
+
+    def test_check_handles_no_holders_no_concern(self, monkeypatch, tmp_path):
+        target = tmp_path / "unheld.bin"
+        target.write_text("")
+        monkeypatch.setattr(
+            "curator.services.safety.find_handle_holders",
+            lambda p: [],
+        )
+        svc = SafetyService(app_data_paths=[], os_managed_paths=[])
+        report = svc.check_path(target, check_handles=True)
+        # No OPEN_HANDLE concern when holders list is empty
+        assert all(c[0] != SafetyConcern.OPEN_HANDLE for c in report.concerns)
+        assert report.holders == []

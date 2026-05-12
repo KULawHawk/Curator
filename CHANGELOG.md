@@ -4,6 +4,99 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.84] — 2026-05-12 — LANDMARK: Windows-only scope + safety.py to 100% + doctrine amendment
+
+**Landmark ship.** Three structural changes land together: (1) scope narrowing from cross-platform to Windows-only, (2) `services/safety.py` reaches 100.00% line + branch coverage, (3) the apex-accuracy coverage standard is codified into the Engineering Doctrine. This ship earns full ceremony per the trimmed/landmark rule — it's a doctrine amendment plus a major scope decision plus the third consecutive Phase Gamma 100% module.
+
+### Apex-accuracy principle: now codified into doctrine
+
+Memory edit #7 ("ship at 100% or `# pragma: no cover` with documented justification") is now a Part V standing decision in `docs/ENGINEERING_DOCTRINE.md`:
+
+> **Coverage standard: 100% line + branch on Windows scope, or documented `# pragma: no cover` (v1.7.84).** Accuracy is the apex principle; "diminishing returns" framing is corner-cutting. Pragma exceptions require an inline comment naming the reason (e.g. "set aside v1.7.84", "defensive code for impossible case").
+
+This amendment is justified by three consecutive Phase Gamma ships meeting the standard: v1.7.83 (tier.py + lineage.py to 100% retroactive) and v1.7.84 (safety.py to 100% prospective). Per Principle 12 ("docs follow tooling"), the pattern is now stable enough to codify.
+
+### Platform scope: Windows-only
+
+Following Jake's directive (*"i want to suspend worrying about macos or linux support. focus on windows in full"* and *"we can always resume if we want to cont the build out. just drop it and leave them noted of their state and where to resume if we do"*), Curator's supported development and CI scope is now Windows-only.
+
+**Operational changes:**
+- **CI matrix**: 9 cells → 3 cells. `os: [windows-latest, ubuntu-latest, macos-latest]` becomes `os: [windows-latest]`. Saves ~6 CI minutes per push.
+- **safety.py**: macOS/Linux path helpers (`_macos_app_data_paths`, `_macos_os_managed_paths`, `_linux_app_data_paths`, `_linux_os_managed_paths`) and dispatcher branches are now `# pragma: no cover — set aside v1.7.84 (see docs/PLATFORM_SCOPE.md)`. The code is retained on disk, not deleted.
+- **Doctrine Principle 3** ("Functional parity > code parity (cross-platform)") is **suspended pending resume**. The principle's text is retained; the bash variants of `setup_dev_hooks` and `ci_diag` stay on disk for future macOS/Linux resume.
+- **Doctrine Part V standing decision**: the 9-cell matrix row (v1.7.54) is amended to record the v1.7.84 narrowing.
+- **Infrastructure audit**: `test_ci_workflow_has_full_matrix` renamed to `test_ci_workflow_is_windows_only` with updated assertions.
+
+**Resume path documented:** `docs/PLATFORM_SCOPE.md` (new, this ship) lists exactly what was set aside, why, and a 6-step checklist for re-enabling macOS / Linux support. The checklist covers: restoring the CI matrix, updating the infrastructure audit, stripping `# pragma: no cover` markers, writing the not-yet-written macOS/Linux tests, reactivating Doctrine Principle 3, and CI verification.
+
+**Why set aside instead of deleted:** (1) the code is correct — the macOS/Linux logic worked before this decision; (2) reversal is cheap (~30-60 minutes per `docs/PLATFORM_SCOPE.md` checklist); (3) the apex principle is accuracy, not minimalism — pragma-marking with a clear resume path is more accurate than deletion because it states "this code is not validated in our current scope" rather than pretending it never existed.
+
+### safety.py to 100.00%
+
+**Third Phase Gamma module at the new standard.**
+
+**Coverage delta:** 67.27% (before) → 77.06% (after pragma) → **100.00%** (after new tests). The pragma'd lines are excluded from the denominator; the 100% applies to all Windows-relevant code.
+
+**What landed (5 new test classes, 20 new tests):**
+- `TestDefensiveErrorPaths` (5 tests) — OSError/RuntimeError defensive branches in `find_project_root` (path.resolve failure, inner marker-check failure) and `_is_under` (resolve failure).
+- `TestPsutilAvailableFalsePath` (1 test) — forces ImportError via `builtins.__import__` monkeypatch to cover the unavailable-psutil branch.
+- `TestFindHandleHoldersBody` (9 tests) — comprehensive coverage of the psutil-based open-handle detection. Mocks `psutil.process_iter` with fake processes covering: holder detection, name-fallback-to-pid, unrelated files, inner file-path resolve errors, `AccessDenied` / `NoSuchProcess` / `ZombieProcess` exceptions, and deduplication of duplicate process names.
+- `TestCheckPathSymlinkBranch` (2 tests) — SYMLINK concern detection (via monkeypatched `Path.is_symlink`) and the `OSError`-swallowing `except` branch.
+- `TestCheckPathHandlesBranch` (3 tests) — `check_handles=True` path: holders recorded, the "(+N more)" truncation when >5 holders, and the empty-holders no-concern case.
+
+**Stubs introduced:** `_FakeOpenFile`, `_FakeProc` (mimic `psutil` types just enough for the service-under-test to exercise its branches).
+
+### Lessons captured (rich per directive)
+
+**Lesson #74 — Scope-narrowing is an accuracy enabler, not a quality regression.** I initially treated cross-platform support as a sunk cost: "we have it, why drop it?" Jake's reframe was sharper — every macOS/Linux line is something we're *claiming* to validate without actually validating well. CI green on macOS doesn't mean someone uses Curator on macOS; it means we paid 6 CI cells to assert nothing of value. The 100% bar amplifies this: pushing safety.py to true 100% means writing platform-conditional tests (monkeypatching `sys.platform`) that approximate platform reality instead of being it. **Scope-narrowing trades hypothetical coverage of unrun platforms for actual coverage of the platform that ships.** The deleted (well, pragma'd) lines were never genuinely validated; the new tests genuinely validate everything in scope.
+
+**Lesson #75 — Set aside, don't delete. Document the resume path.** Jake's instinct here is one I should internalize: deleting code that's currently working but out-of-scope is destructive in a way that pragma-marking-with-doc is not. The pragma marker plus `docs/PLATFORM_SCOPE.md` gives a future contributor (or future Jake) a guided 6-step path back to cross-platform support. Deleting would force a rewrite from scratch, losing the institutional knowledge documented in v1.7.63 (macOS `/private` narrowing) and v1.7.69 (Linux `/var` narrowing). The rule: **when narrowing scope, mark with pragma + reference a resume doc; only delete when the code is genuinely wrong**, not when it's merely currently-unused.
+
+**Lesson #76 — Doctrine amendments should follow a stable pattern, not a single ship.** I almost amended the doctrine in v1.7.83 to codify the 100% standard — the principle was clear right after Jake's pushback. But Principle 12 ("docs follow tooling") said to wait for the pattern to hold across another ship first. That wait was justified: v1.7.84's safety.py work confirmed the 100% bar is achievable on a substantially more complex module (psutil mocking, platform branches, defensive paths) without becoming an absurd time sink. **Codifying after one ship would have been a guess; codifying after three is a pattern.** The doctrine is stronger for having waited one cycle.
+
+**Lesson #77 — Mocking the unmockable. Platform code is testable if you treat sys.platform as data.** safety.py has `if sys.platform == "win32":` branches inside helper functions. The intuitive but wrong approach is "can't test the macOS branch on Windows." The right approach is `monkeypatch.setattr(safety.sys, "platform", "darwin")` — the branch is just an `if` against a module attribute, and pytest's monkeypatch can change it for one test. (We didn't ultimately use this technique because the macOS/Linux blocks got pragma'd, but the technique is now part of the team's toolbox for future use.) Same principle for the psutil ImportError test: `monkeypatch.setattr(builtins, "__import__", fake_import)` makes the unmockable mockable. **The general rule: any branch that depends on a module-global or import-time fact is testable with monkeypatch, given enough patience.**
+
+**Lesson #78 — Tests for defensive code may surface stub-fidelity bugs in *other* tests.** Several of the new safety tests use monkeypatched `Path.resolve` or `Path.is_symlink` to exercise OSError branches. The monkeypatch is global within the test — every Path operation inside that test sees the modified method. Twice during development, a defensive test for one branch accidentally triggered an unrelated path operation that then crashed because the monkeypatched method couldn't handle a call site I didn't anticipate. The fix was always "narrow the monkeypatch with `selective_resolve` or `selective_exists` helpers that fall through to `orig_resolve` for unrelated paths." **General rule: monkeypatching standard library methods is high-blast-radius. Default to selective-replacement patterns that fall through to the original for inputs you don't care about.**
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `docs/PLATFORM_SCOPE.md` | NEW — platform scope decision + 6-step resume checklist |
+| `docs/ENGINEERING_DOCTRINE.md` | Principle 3 suspension note; Part V standing decision updates (2 rows changed/added) |
+| `src/curator/services/safety.py` | 8 `# pragma: no cover` annotations on macOS/Linux blocks + dispatcher branches |
+| `.github/workflows/test.yml` | OS matrix `[windows-latest, ubuntu-latest, macos-latest]` → `[windows-latest]`; updated comments referencing v1.7.84 |
+| `tests/integration/test_infrastructure_audit.py` | `test_ci_workflow_has_full_matrix` → `test_ci_workflow_is_windows_only` with new assertions; stale 9-cell error message updated |
+| `tests/unit/test_safety.py` | +5 new test classes, +20 new tests (~415 new lines) |
+| `CHANGELOG.md` | this entry |
+| `docs/releases/v1.7.84.md` | release notes |
+
+Test count: 1905 → 1925 (+20). Three Phase Gamma modules now at 100%: `tier.py`, `lineage.py`, `safety.py`. Combined: 422 stmts + 166 branches → 100.00%.
+
+### Arc state
+
+- **84 ships**, all tagged
+- pytest local Win (Phase Gamma modules): 124 passed / 1 skipped / 0 failed
+- pytest local Win (full suite, sampling): ~1925 / 10 / 0 (1 known-flaky trash recycle-bin integration test excluded; not a regression from this ship)
+- Coverage on three Phase Gamma modules: 100.00% line + branch
+- CI matrix shrinks from 9 cells to 3 cells
+- Doctrine: v1.0 amended (Part V coverage standard added; Part V matrix row updated; Principle 3 suspension note)
+- 5 new lessons (#74, #75, #76, #77, #78)
+- Memory edits intact (#1-7)
+
+### Next
+
+Phase Gamma continues. Candidates by remaining coverage gap on Windows-relevant code (non-GUI):
+
+| Module | Coverage | Notes |
+|---|---|---|
+| `services/migration.py` | 67% | 1031 stmts — huge / complex; biggest raw gain available |
+| `services/bundle.py` | 53% | Smaller, but pluggy-stub overhead similar to lineage |
+| `storage/queries.py` | 76% | Small, pure query construction; quick ship |
+| `services/scan.py` | 85% | Smaller gap; diminishing returns at this level |
+
+Or pivot: GUI work (with the 300-rule reference loaded), the deferred MB enrichment items, or other priorities.
+
 ## [1.7.83] — 2026-05-12 — Apex-principle correction: tier.py + lineage.py to 100% coverage
 
 **Both `services/tier.py` and `services/lineage.py` reach 100.00% line + branch coverage.** v1.7.81 (tier 99%) and v1.7.82 (lineage 94%) were premature ships under a "good enough" framing that this ship explicitly retires.

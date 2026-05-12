@@ -24,24 +24,24 @@
 #
 # Design choices
 # --------------
-# * **OS matrix [windows-latest, ubuntu-latest, macos-latest] (v1.7.54)**:
-#   Curator was Windows-first but pyproject.toml has always implied cross-
-#   platform support (e.g. ``send2trash`` plugin selects backend per OS;
-#   path handling uses pathlib; etc.). v1.7.42 only validated Windows;
-#   v1.7.54 closes that gap by running the full pytest baseline on all
-#   three major desktop OSes. This is C6 from the bulletproof-live backlog
-#   and the **last open Tier 2 item**.
+# * **OS matrix [windows-latest] (v1.7.84 — narrowed)**:
+#   Curator was originally Windows-first; v1.7.54 expanded to the full
+#   3 OS x 3 Python = 9-cell matrix to validate cross-platform code paths.
+#   v1.7.84 narrowed scope back to Windows-only per Jake's directive
+#   ("suspend worrying about macos or linux support"). The cross-platform
+#   code in services/safety.py is preserved on disk but pragma-marked;
+#   see docs/PLATFORM_SCOPE.md for the full set-aside register and the
+#   step-by-step resume path. The shrunk matrix saves ~6 CI minutes per
+#   push and reduces matrix-cell debugging surface from 9 to 3.
 #
 # * Python version matrix [3.11, 3.12, 3.13] (v1.7.50): pyproject.toml
 #   claims requires-python = ">=3.11". The matrix runs in parallel; any
 #   version-specific breakage surfaces immediately.
 #
-# * **Combined matrix is 3 OS x 3 Python = 9 jobs**. ``fail-fast: false``
-#   is critical for both dimensions: if one cell fails, the others still
-#   complete so we can diagnose whether it's version-specific, OS-specific,
-#   or universal. Wall-clock stays parallel; runner-minutes triple again
-#   (~36 -> ~108 min), still well under GitHub's free-tier quota for
-#   public repos.
+# * **Combined matrix is 1 OS x 3 Python = 3 jobs (v1.7.84)**. ``fail-fast: false``
+#   is still useful: if one Python version fails, the others still complete
+#   so we can diagnose whether it's version-specific or universal. Previously
+#   this was 9 cells (3 OS x 3 Python).
 #
 # * Full extras profile [all]: matches what setup_dev_env.py defaults to,
 #   so CI exercises the same install path a real contributor uses.
@@ -94,14 +94,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
 
-    # v1.7.54: full OS x Python matrix. fail-fast: false ensures every
-    # cell completes independently -- diagnosing OS-specific vs
-    # version-specific vs universal failure modes requires seeing all
-    # nine results, not just the first failure.
+    # v1.7.84: scope narrowed to Windows-only (was 3 OS x 3 Python = 9 cells).
+    # Non-Windows code is preserved on disk and pragma-marked in safety.py;
+    # see docs/PLATFORM_SCOPE.md for the resume path. fail-fast still false
+    # so we see all 3 Python versions independently.
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: [windows-latest]
         python-version: ["3.11", "3.12", "3.13"]
 
     steps:
