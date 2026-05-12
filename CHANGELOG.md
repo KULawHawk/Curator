@@ -4,6 +4,145 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.71] — 2026-05-12 — Dependabot config: automated GitHub Actions version tracking
+
+**Headline:** v1.7.67 manually bumped 3 GitHub Actions to Node.js 24 versions — a process that required research (which v5/v6 actually runs Node 24?), web searches, and 3 weeks of buffer before GitHub's forcing date. **This ship configures Dependabot to watch our GitHub Actions versions automatically**, opening a grouped weekly PR whenever any action publishes a new version. Future deprecation cycles get detected within days, not 8 months.
+
+### Why this ship matters
+
+The v1.7.67 manual bump revealed a tracking gap: Node.js 20 was deprecated on 2025-09-19 with a 9-month grace period, but Curator's CI didn't notice the deprecation warning until 2026-05-12 (3 weeks before forcing). Manual tracking failed for 8 months. Dependabot would have surfaced this within ~1 week of the v5 releases (Aug-Dec 2025).
+
+### Config design
+
+```yaml
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: America/Chicago
+    groups:
+      github-actions-all:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+      include: scope
+    labels: [dependencies, github-actions]
+```
+
+  * **Weekly schedule** — daily would create PR noise without value; actions release every few months at most
+  * **Monday 08:00 America/Chicago** — matches the project's primary timezone (Jake's local time)
+  * **Group all GitHub Actions** into ONE PR per week — the matrix exercises multiple bumps simultaneously, exactly matching how v1.7.67 was tested manually (3 bumps in one ship)
+  * **`open-pull-requests-limit: 5`** — prevents queue buildup if maintainer reviews are delayed
+  * **`commit-message.prefix: "deps"`** — matches conventional-commit style for filtering in `git log`
+
+### Why grouped, not separate PRs
+
+v1.7.67 ship was the right test cycle: bump all three actions, push, watch CI's 9-cell matrix verify. Three separate PRs would:
+  * Require 3 separate CI runs (3x runner-minutes)
+  * Require 3 separate maintainer reviews
+  * Introduce no incremental validation value (no action update is risky in isolation)
+
+Grouping all GitHub Actions into one PR replicates v1.7.67's successful test pattern.
+
+### Why NOT including pip ecosystem
+
+Python dependencies (`pyproject.toml [all]` extras) are deliberately not auto-tracked because:
+  * **Plugin ecosystem deps are version-pinned by design** — e.g. send2trash backends per OS, gdrive plugin's PyDrive2, MCP server's protobuf version
+  * **Compatibility surface is large** — Curator integrates with Qt6 (PySide6), pluggy, loguru, SQLite, MusicBrainz API. Ad-hoc pip upgrades have historically caused regressions.
+  * **CI signal must stabilize first** — the v1.7.42-v1.7.64 CI-red arc only just closed; adding dependabot PR churn now risks re-introducing instability we just resolved
+
+Future ship: add `pip` ecosystem watching when CI signal has been consistently 9/9 GREEN for 25+ consecutive ships.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `.github/dependabot.yml` | +53 | New config (with detailed comment header explaining design choices) |
+| `CHANGELOG.md` | +N | v1.7.71 entry |
+| `docs/releases/v1.7.71.md` | +N | release notes |
+
+No source, test, or workflow changes.
+
+### Verification
+
+- **YAML syntax validation**: Python `yaml.safe_load()` parses correctly. Version=2, 1 update entry ✅
+- **GitHub will activate it within 24 hours** of merge to main (standard dependabot startup time)
+- **First PR expected**: Monday morning following merge. If no actions have new versions, no PR; otherwise grouped PR with all bumps.
+- **Expected CI result**: 9/9 GREEN (config file only)
+
+### What this fix does NOT do
+
+- **Doesn't auto-merge dependabot PRs.** All bumps go through normal review + 9-cell CI gating. Auto-merge would defeat the v1.7.70 pre-push hook's value (which only fires on local pushes).
+- **Doesn't watch Python dependencies.** Scope intentional; see "Why NOT including pip" section.
+- **Doesn't watch Docker images** (no Dockerfile in repo).
+- **Doesn't enable security-only updates separately.** The single config handles both feature and security updates uniformly. Could be split if a security CVE landing on Monday creates a >24-hour delay before patch.
+- **Doesn't notify external systems** when PRs land. GitHub's standard PR notifications suffice.
+- **Doesn't backfill PRs for the bumps we already did** in v1.7.67. checkout@v5 / setup-python@v6 / upload-artifact@v6 are the current state; Dependabot opens PRs only for FUTURE updates.
+
+### Authoritative-principle catches
+
+**Catch -- weekly, not daily.** Daily would create noise. Most GitHub Actions release every 1-3 months. Weekly is the right cadence.
+
+**Catch -- group all actions, not separate PRs.** Mirrors v1.7.67's successful test pattern (3 bumps in one ship, validated by 9-cell matrix). Separate PRs would create churn without value.
+
+**Catch -- explicit timezone in schedule.** Implicit UTC could land PRs at inconvenient times. America/Chicago matches Jake's local timezone and the project's effective primary timezone.
+
+**Catch -- pip ecosystem deferred, not skipped.** This isn't "we don't believe in auto-updates for Python deps," it's "now isn't the right time to add them." Documented reasoning in config header so a future contributor doesn't think to add pip watching without considering the CI-stability prerequisite.
+
+**Catch -- `open-pull-requests-limit: 5`, not unlimited.** If maintainer reviews are delayed (vacation, holidays), Dependabot won't pile up 30+ PRs. Cap at 5 keeps the queue manageable.
+
+**Catch -- conventional-commit-style prefix.** `deps(github-actions): ...` matches the existing CHANGELOG format and makes filtering in `git log --grep "^deps"` straightforward.
+
+**Catch -- labels for triage.** `dependencies` and `github-actions` labels let maintainers filter PRs in the GitHub UI. Future automation (e.g. auto-assigning reviewers) can key off these.
+
+### Lessons captured
+
+**No new lesson codified.** Tech debt resolution:
+  * **Automated trackers prevent manual-tracking gaps.** v1.7.67 took 8 months to surface; Dependabot would surface in ~1 week. Eliminate the human-tracking failure mode where possible.
+  * **Group automated changes by test cycle, not by individual change.** Dependabot's grouping mirrors how humans validate changes (run the matrix, see all 3 bumps validated together).
+
+### Limitations
+
+- **First PR may take 24h to appear** after merge (Dependabot startup time)
+- **Pip dependencies not auto-tracked** (intentional, future ship)
+- **No automatic security-only escalation** (manual triage on security label only)
+- **Cap of 5 open PRs may need adjustment** if Dependabot becomes more active across multiple ecosystems
+- **No auto-merge** (intentional; CI gate plus human review)
+- **No README documentation** for the dependabot config (future doc ship)
+
+### Cumulative arc state (after v1.7.71)
+
+- **71 ships**, all tagged.
+- **pytest local Windows**: 1807 / 10 / 0 (unchanged this ship; config-only)
+- **pytest CI v1.7.70**: in_progress at v1.7.71 ship time; v1.7.71 expected 9/9 GREEN.
+- **Coverage local**: 66.96% (unchanged)
+- **CI matrix**: 9 cells, on Node.js 24 since v1.7.67, watched by Dependabot since v1.7.71. 9/9 GREEN since v1.7.64.
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed (fully addressed)
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **CI hygiene + post-arc hardening + modernization + refactor + audit + hook + automation**: 13 ships (v1.7.59–v1.7.71)
+  * v1.7.59–64: arc closure (red → green)
+  * v1.7.65: diagnostic tooling codified (lesson #67 mitigation #1)
+  * v1.7.66: bug-class sweep (ORDER BY rowid hardening)
+  * v1.7.67: Node.js 24 modernization
+  * v1.7.68: DRY refactor (strip_ansi fixture)
+  * v1.7.69: Linux `/var` audit (mirrors v1.7.63)
+  * v1.7.70: pre-push CI verification hook (lesson #67 mitigation #3 — lesson fully mitigated)
+  * v1.7.71: Dependabot automation (this ship)
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67 (no new this ship)
+- **Detacher-pattern ships**: 19 (unchanged)
+- **Tooling scripts**: `run_pytest_detached.ps1` (v1.7.39), `ci_diag.ps1` (v1.7.65)
+- **Git hooks**: `.githooks/pre-commit` (v1.7.34, lesson #50 glyph lint), `.githooks/pre-push` (v1.7.70, lesson #67 CI warning)
+- **Shared test helpers**: `strip_ansi` fixture (v1.7.68)
+- **Automated tracking**: Dependabot watching GitHub Actions ecosystem (v1.7.71)
+
 ## [1.7.70] — 2026-05-12 — Pre-push CI verification hook: lesson #67 mitigation #3 codified
 
 **Headline:** Lesson #67 ("diagnose with logs, not with hypotheses") had three mitigations identified during the v1.7.42–v1.7.64 CI-red arc. v1.7.65 codified #1 (PAT-enabled diagnostics) as `scripts/ci_diag.ps1`. #2 ("persist the PAT to skip re-pasting") was implicit in #1's design. **This ship codifies #3: a pre-push git hook that warns when origin's latest CI run is red, preventing the 20-ship-silent-red-arc failure mode where no one noticed the dashboard was on fire.**

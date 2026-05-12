@@ -1,0 +1,67 @@
+# =============================================================================
+# .github/dependabot.yml   (v1.7.71)
+#
+# Automated dependency updates for GitHub Actions used in CI workflows.
+#
+# Background
+# ----------
+# v1.7.67 manually bumped actions/checkout (v4 -> v5), actions/setup-python
+# (v5 -> v6), and actions/upload-artifact (v4 -> v6) to versions running
+# on Node.js 24. GitHub had deprecated Node.js 20 on 2025-09-19, with
+# forcing date 2026-06-02 and removal date 2026-09-16. The manual bump
+# came 8 months after deprecation and 3 weeks before forcing.
+#
+# Dependabot eliminates that manual-tracking gap. It opens a PR whenever
+# any action in our workflows has a new version available. Specifically
+# for Node.js runtime bumps, this means we'd see a PR within days of any
+# action publishing a new major version, not 8 months later.
+#
+# Scope
+# -----
+# This config watches the GitHub Actions ecosystem only. Python deps
+# (pyproject.toml [all] extras) are not currently auto-updated because:
+#   * Plugin ecosystem dependencies are version-pinned by design (e.g.
+#     send2trash backends, gdrive plugin's PyDrive2, etc.)
+#   * Curator's own version compatibility surface is large; ad-hoc
+#     pip upgrades have caused regressions before
+#   * Future ship: add `pip` ecosystem watching when we have CI signal
+#     stable enough to absorb dependabot PR churn
+#
+# Schedule
+# --------
+# Weekly is sufficient for actions; daily would create PR noise without
+# real value. Most actions release updates every few months at most.
+#
+# Auto-merge
+# ----------
+# Not configured here. Dependabot PRs run through the normal 9-cell
+# matrix; passing CI is the gate. v1.7.70's pre-push hook + ci_diag.ps1
+# tooling support manual review/merge by maintainers.
+# =============================================================================
+
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: America/Chicago
+    commit-message:
+      prefix: "deps"
+      include: scope
+    labels:
+      - dependencies
+      - github-actions
+    # Group all GitHub Actions bumps into one PR per week. Reduces PR
+    # churn and lets the matrix exercise multiple bumps at once (which
+    # is the same way v1.7.67 was tested manually).
+    groups:
+      github-actions-all:
+        patterns:
+          - "*"
+    # Cap concurrent open PRs to 5 (default 10). Keeps the queue clean
+    # even if multiple bumps land in different weeks.
+    open-pull-requests-limit: 5
