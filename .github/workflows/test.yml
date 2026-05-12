@@ -119,6 +119,13 @@ jobs:
           QT_QPA_PLATFORM: offscreen
           PYTHONIOENCODING: utf-8
           NO_COLOR: "1"
+          # v1.7.61: force wide terminal so Rich/Typer's --help output
+          # doesn't wrap option names like '--apply' across line boundaries
+          # with embedded ANSI codes. NO_COLOR=1 (v1.7.45) disables colors
+          # but not the table-wrapping layout. On Linux/macOS CI runners
+          # the terminal width defaults differently than Windows, causing
+          # 3 tests in test_cli_*.py to fail with split substring matches.
+          COLUMNS: "200"
         run: |
           pytest tests/ -q --tb=line --timeout=120 --cov=curator --cov-report=term --cov-report=xml
 
