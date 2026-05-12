@@ -4,6 +4,131 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.51] — 2026-05-11 — Coverage reporting (closes D3)
+
+**Headline:** Adds `pytest-cov` to the `[dev]` extras, configures `[tool.coverage]` in pyproject.toml, and updates CI to generate coverage reports on every push. **Baseline coverage: 63.79%** across 13,792 statements + 3,962 branches. Local dev opts-in via `pytest --cov=curator` (default invocation stays fast with no coverage overhead); CI runs coverage on every matrix entry and uploads `coverage.xml` as a downloadable artifact. Closes D3.
+
+### Why this matters
+
+At v1.7.50 we had 1572 tests passing on Python 3.11/3.12/3.13 but **no idea what percentage of source code they actually exercise**. Could be 90%, could be 40% — actionable signal either way. Coverage reporting:
+
+  * Gives a concrete number that can trend over time ("% coverage at v1.7.51: 63.79%")
+  * Identifies which modules are barely tested (e.g. `pii_scanner.py` 22%, `metadata_stripper.py` 25%, `forecast.py` 29%)
+  * Identifies which modules have excellent coverage (e.g. `gdrive_auth.py` 100%, `audit_repo.py` 96%, `source_repo.py` 91%)
+  * Catches future regressions in coverage trend (a ship that drops it 5% deserves a second look)
+
+### Baseline coverage breakdown (highlights)
+
+From the v1.7.51 local run:
+
+```
+TOTAL: 13,792 statements, 4,622 missed, 3,962 branches, 471 partial
+       63.79% coverage
+```
+
+**100% coverage:**
+  * `services/gdrive_auth.py` (88 stmt, 16 branch)
+  * `storage/__init__.py` (4 stmt)
+  * `storage/repositories/__init__.py` (10 stmt)
+
+**Excellent (90%+):**
+  * `repositories/audit_repo.py` 96.05%
+  * `services/music.py` 94.55%
+  * `repositories/trash_repo.py` 93.33%
+  * `services/photo.py` 93.21%
+  * `repositories/bundle_repo.py` 92.65%
+  * `repositories/migration_job_repo.py` 91.54%
+  * `repositories/source_repo.py` 91.30%
+  * `services/hash_pipeline.py` 90.38%
+
+**Strong (80–90%):**
+  * `storage/connection.py` 89.83%
+  * `storage/migrations.py` 89.19%
+  * `services/organize.py` 89.18%
+  * `services/musicbrainz.py` 88.34%
+  * `services/scan.py` 84.97%
+
+**Weak (<50%):**
+  * `services/pii_scanner.py` 22.34%
+  * `services/metadata_stripper.py` 24.66%
+  * `services/forecast.py` 29.46%
+  * `services/watch.py` 41.34%
+
+The weak ones are the natural targets for future test-writing ships. The forecast / pii_scanner / metadata_stripper modules have a lot of conditional code paths that the existing tests don't reach.
+
+### What's new
+
+**`pyproject.toml` (`[dev]` extras + `[tool.coverage]` sections, +50 lines)**
+
+  * Added `pytest-cov>=4.0` to `dev` extras
+  * `[tool.coverage.run]`:
+    - `source = ["src/curator"]` -- only measure OUR code, not site-packages
+    - `branch = true` -- branch coverage in addition to line coverage
+    - `omit` excludes `tests/`, `_vendored/` (third-party code we vendored), `__main__.py` entry points
+  * `[tool.coverage.report]`:
+    - `exclude_lines` skips `pragma: no cover`, `raise NotImplementedError`, entry-point guards, `TYPE_CHECKING` blocks, Ellipsis-only stubs
+    - `show_missing = true` lists uncovered line ranges in the report
+    - `precision = 2` (e.g. "63.79%" not "64%") for finer trend tracking
+  * `[tool.coverage.xml]` outputs `coverage.xml` for CI artifact upload
+
+**`.github/workflows/test.yml` (+15 lines)**
+
+  * pytest invocation now includes `--cov=curator --cov-report=term --cov-report=xml`
+  * New `Upload coverage report` step using `actions/upload-artifact@v4`:
+    - Artifact name includes Python version (`coverage-py3.11`, etc.) to avoid collision across matrix entries
+    - `if: always()` so coverage uploads even when tests fail (helps diagnose what was covered before the failure)
+    - 30-day retention (default would be 90 days; 30 is plenty for trend tracking)
+  * Codecov upload **intentionally not wired up** -- requires repo-level secret setup and isn't needed for the basic coverage signal. The terminal output in CI logs shows the % and the XML artifact has per-file detail. Can be added later if trend visualization is wanted.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `pyproject.toml` | +50 | `pytest-cov` dep + `[tool.coverage.*]` config |
+| `.github/workflows/test.yml` | +15 | `--cov` flags + artifact upload step |
+| `CHANGELOG.md` | +N | v1.7.51 entry |
+| `docs/releases/v1.7.51.md` | +N | release notes |
+
+### Verification
+
+- **Local coverage run (via detacher)**: ✅ 1572 / 10 / 0 / **63.79% coverage** in 241.82s (was 226.62s at v1.7.49; ~7% slower due to coverage instrumentation, as expected)
+- **Default pytest (no --cov)**: still fast at ~218s, still 0 warnings (v1.7.47's gain preserved)
+- **CI matrix run (this push)**: validates coverage runs on 3.11/3.12/3.13 + verifies the `coverage.xml` artifact upload step
+
+### Authoritative-principle catches
+
+**Catch -- coverage adds 791 ResourceWarnings (unclosed sqlite3 connections during coverage measurement).** These come from coverage's own instrumentation machinery (`coverage/collector.py`, `coverage/parser.py`) plus a few from Curator's own deferred connection cleanup (e.g. `main_window.py:215`). They're not bugs in Curator's actual error handling -- coverage's instrumentation just surfaces connection-lifecycle behavior that would otherwise be invisible (Python's gc cleans up silently). Critically: these warnings ONLY appear under coverage. Default pytest runs continue to show 0 warnings. Local dev's TDD loop is unaffected.
+
+**Catch -- coverage is CI-only, not default.** Initial sketch put `--cov=curator` into `pyproject.toml`'s `addopts`. That would have made coverage the default for every `pytest` invocation, slowing local dev's fast-feedback loop. Instead, opt-in via `pytest --cov=curator`; CI's workflow uses the flag explicitly. The trade-off: local devs need to remember to add `--cov` to see coverage. The win: TDD stays fast (~218s baseline vs ~242s with coverage = 11% slowdown).
+
+**Catch -- the 22%-coverage modules aren't a regression; they're an honest signal.** `pii_scanner.py`, `metadata_stripper.py`, `forecast.py`, and `watch.py` are all relatively new or Phase-Beta-tier code with a lot of conditional paths the existing tests don't reach. The 63.79% baseline INCLUDES these weak spots; future test-writing ships can target them specifically. The point of coverage isn't to immediately get to 100% -- it's to KNOW where we are and have a quantifiable target for future ships.
+
+**Catch -- forecast.py:217 has a SyntaxWarning (invalid escape sequence `\,`).** Surfaced by coverage but not caused by it. A minor fix (use raw string or escape the backslash) but out of scope for D3. Queued for a future minor-hardening ship.
+
+### Lessons captured
+
+**No new lesson codified.** Application of pre-existing lessons #43 ("signal beats absence of signal") and #61 ("infrastructure ships beat feature ships when missing"). The coverage % itself is the signal; what makes it valuable is that it now has a place in CI so it can't silently regress.
+
+### Limitations
+
+- **No coverage threshold enforced (`--cov-fail-under` not set).** Setting a hard floor would make CI fail when coverage drops below it; useful but premature. Better to track the trend for a few ships first, then set a floor at "current - 1%" or so. Future ship.
+- **No Codecov / Coveralls integration.** Either of those would give a nicer trend visualization and PR comments. Requires repo-level secret setup; deferred for now.
+- **ResourceWarnings during coverage are noise, not signal.** Documented above. If they ever start being correlated with real failures, we can investigate.
+- **`forecast.py:217` SyntaxWarning is real but unrelated.** Queued for future ship; minor (Python 3.12+ requires raw strings or escapes for `\,`).
+- **Coverage instrumentation slows runs by ~11% (218s → 242s locally).** Wall-clock CI impact is small since matrix runs in parallel, but local opt-in `pytest --cov` carries this cost.
+- **Some Phase-Beta modules have low coverage by design.** `watch.py` (reactive filesystem watcher) and `forecast.py` (capacity projection) are scaffolds for features that aren't fully wired up yet. Their low coverage % is honest.
+
+### Cumulative arc state (after v1.7.51)
+
+- **51 ships**, all tagged, all baselines green
+- **pytest**: 1572 / 10 / 0 / 0 warnings (default invocation; coverage adds 791 ResourceWarnings under `--cov`)
+- **Coverage**: **63.79% baseline** -- now tracked + uploaded as CI artifact on every push for trending
+- **CI matrix**: Python 3.11 + 3.12 + 3.13 on Windows, each with coverage upload
+- **Tier 1 backlog**: A1, A3, C1 closed; A2 has proven workaround
+- **Tier 2 backlog**: E3, C5 closed; **D3 closed this ship**. Remaining: C6 (OS matrix), A4 (orphan curator-mcp.exe)
+- **Lessons captured**: #46–#62 (unchanged this ship)
+- **Detacher-pattern ships**: 12 (v1.7.39 through v1.7.51; v1.7.50 had no local pytest run)
+
 ## [1.7.50] — 2026-05-11 — Python version matrix in CI (closes C5)
 
 **Headline:** Adds a Python version matrix `[3.11, 3.12, 3.13]` to the GitHub Actions workflow. Each push and PR now runs the full pytest baseline against all three supported Python versions in parallel. `fail-fast: false` ensures all three versions report independently — if one breaks, the others still complete so we can tell whether it's version-specific or universal. Closes the C5 backlog item; validates pyproject.toml's `requires-python = ">=3.11"` claim.

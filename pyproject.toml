@@ -65,6 +65,7 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-qt>=4.2",
     "pytest-timeout>=2.0",
+    "pytest-cov>=4.0",
     "hypothesis>=6.95",
     "ruff>=0.3",
     "mypy>=1.8",
@@ -190,3 +191,47 @@ python_version = "3.11"
 strict = true
 ignore_missing_imports = true
 files = ["src"]
+
+# ----------------------------------------------------------------------------
+# Coverage configuration (v1.7.51)
+#
+# Generates source-line + branch coverage for curator.* modules. CI runs
+# pytest with --cov=curator and uploads coverage.xml as a build artifact;
+# local devs can opt-in with `pytest --cov=curator`. Default invocation
+# (no --cov flag) skips coverage entirely so local TDD stays fast.
+#
+# `source = ["src/curator"]` -- only measure OUR code, not site-packages.
+# `omit` -- exclude paths we don't take responsibility for:
+#   * tests/ -- never counted in source coverage (orthogonal)
+#   * _vendored/ -- third-party code we vendored (e.g. send2trash); not
+#     our coverage to take credit for
+#   * __main__.py -- usually just thin entry points calling into main()
+# `branch = true` -- measures branch coverage in addition to line coverage,
+#   catching code that's executed but with only one branch tested.
+# ----------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["src/curator"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/_vendored/*",
+    "*/__main__.py",
+]
+
+[tool.coverage.report]
+# These regex patterns mark lines that don't need to be covered. The line
+# is still counted in total but won't drag down the percentage if missed.
+exclude_lines = [
+    "pragma: no cover",                       # opt-out marker
+    "raise NotImplementedError",              # abstract / WIP stubs
+    "if __name__ == .__main__.:",             # entry-point guards
+    "if TYPE_CHECKING:",                      # type-only imports
+    "\\.\\.\\.$",                              # Ellipsis-only stubs (e.g. Protocol method bodies)
+]
+show_missing = true
+skip_empty = true
+# precision=2 means "66.67%" not "67%" -- finer granularity for tracking trends
+precision = 2
+
+[tool.coverage.xml]
+output = "coverage.xml"

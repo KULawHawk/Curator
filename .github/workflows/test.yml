@@ -97,4 +97,21 @@ jobs:
           PYTHONIOENCODING: utf-8
           NO_COLOR: "1"
         run: |
-          pytest tests/ -q --tb=line --timeout=120
+          pytest tests/ -q --tb=line --timeout=120 --cov=curator --cov-report=term --cov-report=xml
+
+      # v1.7.51: upload coverage.xml as a CI artifact so it's downloadable
+      # from the run summary page. The matrix produces one artifact per
+      # Python version (3.11, 3.12, 3.13); the artifact name includes the
+      # version to avoid collision. Codecov upload is intentionally not
+      # wired up here -- it requires repo-level secret setup and isn't
+      # strictly needed for the coverage signal (the term output in the
+      # workflow log shows the % and the XML artifact has the per-file
+      # detail).
+      - name: Upload coverage report
+        if: always()  # upload even when tests fail -- coverage diagnoses
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-py${{ matrix.python-version }}
+          path: coverage.xml
+          if-no-files-found: warn
+          retention-days: 30
