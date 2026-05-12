@@ -107,6 +107,12 @@ app.add_typer(gdrive_app, name="gdrive")
 from curator.cli.mcp_keys import mcp_app  # noqa: E402
 app.add_typer(mcp_app, name="mcp")
 
+# v1.7.52: import side-effects register `curator mcp cleanup-orphans`
+# on the shared mcp_app instance. The module must be imported AFTER
+# mcp_app is defined (above) but BEFORE the Typer command tree is
+# finalized.
+from curator.cli import mcp_orphans  # noqa: E402, F401
+
 
 def _version_callback(value: bool):
     if value:

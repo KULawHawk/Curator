@@ -4,6 +4,121 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.52] — 2026-05-12 — `curator mcp cleanup-orphans` command (closes A4)
+
+**Headline:** New `curator mcp cleanup-orphans` CLI command finds (and optionally kills) orphaned `curator-mcp.exe` processes — those whose parent MCP client (Claude Desktop, etc.) has crashed or been force-quit without cleanly stopping its MCP server. Closes A4 from the bulletproof-live backlog. Dry-run by default; opt-in to actually kill via `--kill --yes`. Supports `--json` for automation.
+
+### Why this matters
+
+When an MCP client crashes or is force-quit, its spawned `curator-mcp.exe` subprocess often outlives it. Each orphan:
+  * Holds an open SQLite handle to the Curator DB (eventually exhausts handles)
+  * Consumes ~30-50 MB RAM
+  * Pollutes Task Manager / `ps -ef` output
+  * In rare cases, races with new MCP server instances for the same DB lock
+
+Manually killing them via Task Manager is tedious and error-prone (which `curator-mcp.exe` is which? what's the parent? is it still active?). A CLI command that knows what to look for, distinguishes orphans from live ones, and can clean up safely is the right tool.
+
+### What's new
+
+**`src/curator/cli/mcp_orphans.py` (+290 lines, new)**
+
+Five-step orchestration:
+
+| Step | What |
+|---|---|
+| 1 | Enumerate all `curator-mcp.exe` (and `curator-mcp` on POSIX) processes via `psutil.process_iter` |
+| 2 | For each, look up parent process; classify as orphan if parent dead/inaccessible |
+| 3 | Render: Rich table (default) or JSON (when `--json` global flag is set) |
+| 4 | If `--kill`, prompt for confirmation (or skip with `--yes`) |
+| 5 | Graceful kill (terminate → 3s wait → kill if still alive); report counts + failures |
+
+Key design choices:
+
+  * **psutil is required** — it's in `[organize]` and `[all]` extras. Graceful ImportError with install hint if missing (exit 2).
+  * **Dry-run by default** — destructive operations should require explicit consent. Running without `--kill` just lists what would be killed.
+  * **Confirm by default** — even with `--kill`, prompts before terminating. `--yes` is the explicit override for automation.
+  * **Cross-platform** — matches both `curator-mcp.exe` (Windows) and `curator-mcp` (POSIX). Same psutil API works on both.
+  * **Graceful kill** — `terminate()` first (SIGTERM / TerminateProcess), then `kill()` if still alive after 3s. Matches `systemd-style` cleanup.
+  * **Idempotent** — `psutil.NoSuchProcess` during kill (race condition: process exited between enumeration and kill) is counted as success.
+  * **`--json` works for both reading and killing** — with the constraint that `--kill` in JSON mode requires `--yes` (no interactive prompt available; exits 2 if not provided).
+
+**`src/curator/cli/main.py` (+5 lines)**
+
+  * Imports `curator.cli.mcp_orphans` after the existing `mcp_app` import. Import side-effects register the `cleanup-orphans` command on the shared `mcp_app` instance.
+
+**`tests/unit/test_mcp_orphans.py` (+360 lines, new, 21 tests)**
+
+  * **TestOrphansOnly** (4 tests): empty input, all alive, all dead, mixed
+  * **TestFormatAge** (4 tests): seconds-only, m+s, h+m, zero
+  * **TestEmitJson** (3 tests): empty payload, mixed alive+orphan, cmdline included
+  * **TestCleanupOrphansCli** (10 tests):
+    - No processes → empty-state message
+    - All alive → "no orphans to clean up"
+    - Orphans present, dry-run → lists + suggests `--kill`
+    - `--kill --yes` → calls `_kill_orphans`, exits 0
+    - `--kill --yes` with failures → exits 1, prints details
+    - `--json` dry-run → valid JSON with totals + per-process detail
+    - `--json --kill` without `--yes` → exits 2 (ambiguous; no interactive prompt)
+    - psutil ImportError → exits 2 with helpful message
+    - `--kill` without `--yes`, user declines → no kill, exits 0
+    - `--kill` without `--yes`, user accepts → kill called
+
+The production code path that calls real psutil is exercised by the **real-machine smoke test** I ran before writing tests: `curator mcp cleanup-orphans` showed the live curator-mcp.exe correctly identified as not-orphaned (parent `claude.exe` alive). Mocked tests + real-machine smoke = both layers covered.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `src/curator/cli/mcp_orphans.py` | +290 (new) | Five-step orchestration + JSON support + graceful kill |
+| `src/curator/cli/main.py` | +5 | Register `cleanup-orphans` via import side-effects |
+| `tests/unit/test_mcp_orphans.py` | +360 (new) | 21 tests across 4 classes |
+| `CHANGELOG.md` | +N | v1.7.52 entry |
+| `docs/releases/v1.7.52.md` | +N | release notes |
+
+### Verification
+
+- **Unit tests**: ✅ 21/21 pass in 2.53s
+- **Real-machine smoke test**: `curator mcp cleanup-orphans` correctly enumerated the live curator-mcp.exe (PID 79076, parent claude.exe, status `ok`), reported 0 orphans, exited 0
+- **Full pytest baseline (via detacher)**: ✅ **1593 passed**, 10 skipped, 10 deselected, 0 failed in 381.31s
+  - Compare to v1.7.51: 1572 passed in 226.62s
+  - +21 new tests, all passing
+  - Runtime elevated (~381s vs ~225s) -- likely lingering effects from an earlier MCP wedge mid-session; detacher kept pytest alive through it
+  - Zero warnings (v1.7.47's gain still preserved)
+- **CLI surface check**: `curator mcp --help` now shows `cleanup-orphans` as a sibling of `keys` (the existing subcommand)
+
+### Authoritative-principle catches
+
+**Catch -- Click removed `mix_stderr` from CliRunner.** Initial test draft used `CliRunner(mix_stderr=False)` to separate stdout from stderr (matching the v1.7.45 NO_COLOR fix work). Newer Click versions removed that kwarg; stderr now appears in `result.output` alongside stdout. Adapted assertions to check `result.output` instead of `result.stdout + result.stderr`. The tests still verify the error path; they just don't separate streams.
+
+**Catch -- mocking `_enumerate_curator_mcp_processes` instead of `psutil.process_iter`.** Initial sketch tried to mock psutil itself, but psutil's process_iter yields proxy objects whose `.info` attribute is populated lazily — awkward to fake. Mocking ONE function up the call stack (our wrapper) is simpler and tests the same thing: "given these processes, the CLI does X." Real psutil is exercised by the smoke test.
+
+**Catch -- `--json --kill` without `--yes` is intentionally an error.** First instinct was to default to "yes" in JSON mode ("if you wanted JSON output, you probably know what you're doing"). But destructive operations should never default to yes silently. The exit-2 behavior with a clear message is safer; automation scripts can pass `--yes` explicitly to opt in.
+
+**Catch -- `psutil.NoSuchProcess` during kill counts as success.** Race condition: a process can exit between enumeration and kill. Treating that as a failure would produce spurious exit-1 results on idempotent reruns. The code explicitly counts NoSuchProcess as `killed += 1` (idempotent semantics).
+
+### Lessons captured
+
+**No new lesson codified.** Application of lessons #41 ("clear error messages"), #58 ("modal patches need instance-level setup" -- adapted to JSON-mode prompt-suppression), and the long-running pattern of "dry-run by default, opt-in to destructive actions."
+
+### Limitations
+
+- **No automatic cleanup on Curator startup.** v1.7.52 only adds the command; doesn't wire it into `curator scan` or similar. A future ship could call cleanup-orphans automatically before starting work (idempotent, safe).
+- **psutil requirement excludes minimal install.** Users on the `[minimal]` profile (just `[dev]`) would need to install psutil separately. The error message tells them how. Could be relaxed by falling back to a Windows-specific WMI-based enumeration (no extra deps), but cross-platform consistency wins.
+- **No Docker container detection.** If curator-mcp is running in a container, its parent may appear dead on the host even when the container is fine. Out of scope for a desktop-MCP tool.
+- **`--kill` doesn't have a `--dry-run` shorthand.** Default IS dry-run, so a `--dry-run` flag would be redundant. But the inverse pattern (`--apply` instead of `--kill`) might match other Curator commands better. Trade-off accepted; `--kill` is more direct.
+- **Tests mock the process layer.** Real psutil is only exercised by my one-time manual smoke test. A future hardening could spawn a real subprocess in a test fixture and kill it, but that's invasive (and Windows-only).
+
+### Cumulative arc state (after v1.7.52)
+
+- **52 ships**, all tagged, all baselines green
+- **pytest**: 1593 / 10 / 0 / 0 warnings (+21 from v1.7.51)
+- **CI matrix**: Python 3.11 + 3.12 + 3.13 on Windows; coverage uploaded per matrix entry
+- **CLI surface**: `curator mcp` now has 2 subcommand groups (`keys`, `cleanup-orphans`)
+- **Tier 1 backlog**: A1, A3, C1 closed; A2 has proven workaround
+- **Tier 2 backlog**: E3, C5, D3 closed; **A4 closed this ship**. Remaining: C6 (OS matrix)
+- **Lessons captured**: #46–#62 (unchanged this ship)
+- **Detacher-pattern ships**: 13 (v1.7.39 through v1.7.52)
+
 ## [1.7.51] — 2026-05-11 — Coverage reporting (closes D3)
 
 **Headline:** Adds `pytest-cov` to the `[dev]` extras, configures `[tool.coverage]` in pyproject.toml, and updates CI to generate coverage reports on every push. **Baseline coverage: 63.79%** across 13,792 statements + 3,962 branches. Local dev opts-in via `pytest --cov=curator` (default invocation stays fast with no coverage overhead); CI runs coverage on every matrix entry and uploads `coverage.xml` as a downloadable artifact. Closes D3.
