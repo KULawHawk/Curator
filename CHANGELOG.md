@@ -4,6 +4,129 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.65] — 2026-05-12 — Celebrating the green: scripts/ci_diag.ps1 codifies lesson #67
+
+**Headline:** v1.7.64 closed the 20-ship CI-red arc (all 9 cells GREEN — first fully-green CI run since CI was introduced at v1.7.42). This ship codifies the **diagnostic loop** that made the closure possible. The new `scripts/ci_diag.ps1` helper provides one-command access to the GitHub Actions API: show all 9 cells' status, download logs for failing cells, or print a cross-cell failing-test summary. Lesson #67 ("diagnose with logs, not with hypotheses") explicitly called for this mitigation; this ship delivers it.
+
+### Why this ship matters
+
+v1.7.59 and v1.7.61 shipped **speculative fixes** because the diagnostic loop required ~10 manual PowerShell+API calls per investigation. v1.7.62, v1.7.63, and v1.7.64 found real causes in <10 minutes each, because we'd built ad-hoc API queries into the workflow. But every debug session re-invented the same `Invoke-RestMethod` boilerplate.
+
+This ship turns that pattern into permanent tooling. Next time CI goes red, the loop is:
+
+```powershell
+$env:GH_TOKEN = "..."   # or set $env:USERPROFILE\.curator\github_pat
+.\scripts\ci_diag.ps1 status     # see all 9 cells
+.\scripts\ci_diag.ps1 summary    # see failing test names + summaries
+.\scripts\ci_diag.ps1 logs ubuntu.*3.12   # download specific log for deep dive
+```
+
+Three commands. No boilerplate. Logs land in `~/Desktop/AL/.curator/ci_<sha>_<jobname>.log` for grep + analysis.
+
+### Script design
+
+**Three modes:**
+  * `status` (default) — colored pass/fail/running status for all 9 cells of the latest run, with overall tally
+  * `logs <name-pattern>` — download log files for failing jobs matching a name regex (defaults: all failing)
+  * `summary` — download all failing logs + extract+print `FAILED tests/` lines and `passed.*failed` summary line for each cell
+
+**Token discovery in priority order:**
+  1. `-Token` parameter (explicit)
+  2. `$env:GH_TOKEN` env var
+  3. `$env:GITHUB_TOKEN` env var
+  4. `~/.curator/github_pat` file (single-line, 0600-style permissions)
+
+The file fallback enables a one-time setup: store a fine-grained PAT once, never paste it into chat again. Lesson #67's mitigation #1: "Persist the PAT (with clear scope notice) so it's not re-pasted each time."
+
+**Defaults:**
+  * Repo: `KULawHawk/Curator` (parameter override available)
+  * Output dir: `~/Desktop/AL/.curator/` (matches existing detacher convention)
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `scripts/ci_diag.ps1` | +210 | New helper script with status/logs/summary modes |
+| `CHANGELOG.md` | +N | v1.7.65 entry |
+| `docs/releases/v1.7.65.md` | +N | release notes |
+
+No source, test, or workflow changes.
+
+### Verification
+
+- **`status` mode against v1.7.64's all-green run**: ✅
+  ```
+  === Latest run: v1.7.64: deterministic bundle member order ===
+  SHA:    fdb7e5c
+  Status: completed / success
+  [OK]   pytest (macos-latest / Python 3.11)         success
+  [OK]   pytest (macos-latest / Python 3.12)         success
+  [OK]   pytest (macos-latest / Python 3.13)         success
+  [OK]   pytest (ubuntu-latest / Python 3.11)        success
+  [OK]   pytest (ubuntu-latest / Python 3.12)        success
+  [OK]   pytest (ubuntu-latest / Python 3.13)        success
+  [OK]   pytest (windows-latest / Python 3.11)       success
+  [OK]   pytest (windows-latest / Python 3.12)       success
+  [OK]   pytest (windows-latest / Python 3.13)       success
+  === TALLY: success=9 | failure=0 | running/queued=0 ===
+  ```
+- **`summary` mode against the all-green run**: prints "All jobs passing in run fdb7e5c. Nothing to summarize." ✅
+- **Color output**: green for OK, red for FAIL, yellow for in-progress ✅
+- **No external dependencies**: pure PowerShell + `Invoke-RestMethod`/`Invoke-WebRequest` ✅
+
+### What this ship does NOT do
+
+- **Doesn't add a pre-push CI verification hook.** Lesson #67 mitigation #3. Could be a future `scripts/pre_push_ci_check.ps1` that fails locally if last CI run was red.
+- **Doesn't audit other repositories for `ORDER BY <timestamp>` patterns.** v1.7.64 fixed bundle_repo; audit_repo, source_repo, etc. may have the same bug class but no test currently exposes them. Future ship candidate ("defensive ORDER BY hardening").
+- **Doesn't fix the Windows live recycle-bin test bug.** Still deferred from v1.7.59.
+- **Doesn't bump `actions/*` to v5.** Node.js 24 deprecation forcing date is June 2026. Future ship.
+- **Doesn't include automated PAT setup** (e.g. opening browser to fine-grained-PAT creation page). Manual setup is fine for now.
+
+### Authoritative-principle catches
+
+**Catch -- closing the loop on lesson #67.** v1.7.62's CHANGELOG identified the lesson; v1.7.63 and v1.7.64 confirmed it; v1.7.65 codifies the mitigation. The full progression:
+  * v1.7.61 (speculative): COLUMNS=200 hypothesis; failed
+  * v1.7.62 (PAT-enabled): real cause found in <10 min; shipped robust fix
+  * v1.7.63 (PAT-enabled): macOS-specific bug surfaced; shipped
+  * v1.7.64 (PAT-enabled): SQLite tie-break bug surfaced; shipped
+  * **v1.7.65 (this ship): turn the ad-hoc API queries into permanent tooling**
+
+**Catch -- script is self-contained.** Pure PowerShell, no Python deps, no third-party modules. Works on any Windows machine with PAT access. Token discovery from 4 sources means it's easy to use without environment-variable wrangling.
+
+**Catch -- output paths follow existing convention.** `~/Desktop/AL/.curator/ci_<sha>_<jobname>.log` matches the directory used by `run_pytest_detached.ps1` for sentinel files and worker scripts. Same .gitignored location, no new dotfiles introduced.
+
+**Catch -- doesn't try to be a full GitHub Actions client.** Only the 3 patterns actually needed for CI debugging. No retries, no caching, no fancy auth flows. ~210 lines of script that solves the immediate problem.
+
+### Lessons captured
+
+**No new lesson codified.** Application of:
+  * #67 ("diagnose with logs, not with hypotheses") — first concrete tooling embodiment
+  * Subordinate lesson: **persist diagnostic tooling as scripts, not retyped boilerplate.** Every ad-hoc PowerShell incantation that worked is a candidate for `scripts/`.
+
+### Limitations
+
+- **No pre-push hook yet.** Mitigation #3 of lesson #67 still pending.
+- **PAT must be obtained manually** (visit github.com/settings/personal-access-tokens/new). Could write a `scripts/setup_ci_pat.ps1` that opens the URL with pre-filled scope.
+- **Doesn't audit `ORDER BY <timestamp>` patterns across repositories.**
+- **No CI status reporting in `curator status`-style CLI.** Could be a future integration.
+
+### Cumulative arc state (after v1.7.65)
+
+- **65 ships**, all tagged.
+- **pytest local Windows**: 1807 / 10 / 0 (unchanged this ship)
+- **pytest CI v1.7.64**: **9/9 GREEN** — the FIRST all-green CI run in the project's history.
+- **Coverage local**: 66.96% (unchanged)
+- **CI matrix**: 9 cells. v1.7.65 is the FIRST ship post-green; expected to continue green.
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed (fully addressed)
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **CI hygiene**: 7 ships (v1.7.59–v1.7.65); arc closed at v1.7.64; v1.7.65 codifies the diagnostic mitigation
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67 (no new this ship; v1.7.65 codifies #67's mitigation #1)
+- **Detacher-pattern ships**: 19 (unchanged; tooling-only ship)
+- **Tooling scripts**: `run_pytest_detached.ps1` (v1.7.39), `ci_diag.ps1` (v1.7.65)
+
 ## [1.7.64] — 2026-05-12 — Deterministic bundle membership order: ORDER BY added_at, rowid
 
 **Headline:** v1.7.63 closed the macOS arc (all 3 macOS cells green) but Windows Python 3.11 and 3.12 cells started failing on a SINGLE test: `tests/gui/test_gui_bundle_editor.py::TestBundleEditorDialog::test_edit_mode_pre_populates`. The test asserts that bundle membership UUIDs come back in insertion order `[files[0], files[1]]`, but got them swapped. **Root cause: SQLite's `CURRENT_TIMESTAMP` has second-level resolution, so two memberships added in the same call get identical `added_at` values, and `ORDER BY added_at` alone is non-deterministic.** Fix: add `rowid` as secondary sort key.
