@@ -4,6 +4,51 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.81] — 2026-05-12 — Phase Gamma starter: `services/tier.py` unit tests (53% → 99%)
+
+**First Phase Gamma ship after the v1.7.80 capstone.** Adds 27 focused unit tests for `TierService` and its data classes. Coverage on `services/tier.py` lifts from **52.78% to 98.61%** — one line missed (a defensive `assert` that's never legitimately triggered).
+
+**Demonstrates Doctrine Principle 9** (bug-class sweeps + regression lints — here, applied to test coverage rather than code regressions) and **Principle 12** (documentation/tests follow code, not lead it).
+
+**Ceremony note:** This release notes entry is deliberately short. Per the self-critique in v1.7.80's restart prompt, the heavy ritual (Catches / Lessons / Limitations / Cumulative arc state sections) is reserved for genuine landmarks. A focused test-only ship gets a focused entry.
+
+### What landed
+
+- `tests/unit/test_tier_service.py` (+330 lines, 27 tests, 7 test classes)
+- Stub `FakeFile` + `StubFileRepository` to avoid SQLite setup overhead
+- Tests cover: `TierRecipe.from_string` (valid/invalid/case), `TierCriteria.cutoff()`, `TierReport` derived properties (4 of them), all 3 scanners (COLD/EXPIRED/ARCHIVE) with source_id and root_prefix filters, sorting, `_matches_root_prefix` helper, and scan metadata
+- Uses `curator._compat.datetime.utcnow_naive` instead of deprecated `datetime.utcnow()` to match codebase style
+
+### Coverage delta
+
+| Module | Before | After | Delta |
+|---|---|---|---|
+| `src/curator/services/tier.py` | 52.78% | 98.61% | +45.83 pp |
+
+The one missed line (254) is the defensive `assert exp is not None` after `find_expiring_before` — the repo guarantees this, so the branch is unreachable from a correct caller. Coverage-by-design at 99%.
+
+### Files changed
+
+| File | Lines |
+|---|---|
+| `tests/unit/test_tier_service.py` | +330 (new) |
+| `CHANGELOG.md` | this entry |
+| `docs/releases/v1.7.81.md` | trimmed release notes |
+
+No source code changes. Test count: 1839 → 1866 (+27).
+
+### Arc state
+
+- 81 ships
+- pytest local: 1866 / 10 / 0
+- Coverage local: 66.96% → ~67.3% (small bump from one module going to 99%)
+- CI: 8 verified all-green runs in post-arc series
+- Doctrine: still v1.0, no amendments needed
+
+### Next
+
+More Phase Gamma. Next candidate (by under-coverage + non-GUI): `services/bundle.py` (53%) or `services/lineage.py` (54%).
+
 ## [1.7.80] — 2026-05-12 — CAPSTONE: Engineering Doctrine v1.0 + self-verifying infrastructure audit
 
 **Headline:** The capstone of the v1.7 hygiene arc. **Two new artifacts make the arc's lessons permanent and self-enforcing:**
