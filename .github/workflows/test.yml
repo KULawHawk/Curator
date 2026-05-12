@@ -1,9 +1,24 @@
 # =============================================================================
-# .github/workflows/test.yml   (v1.7.54)
+# .github/workflows/test.yml   (v1.7.67)
 #
 # Continuous integration: run the full pytest baseline on every push to main
 # and every pull request targeting main. Catches regressions before they
 # land, so "green baseline" stops being a claim and becomes a fact.
+#
+# v1.7.67: bumped all actions/* to versions that run on Node.js 24.
+# GitHub deprecated Node.js 20 on 2025-09-19 and will force Node.js 24 on
+# 2026-06-02 (3 weeks away). Node.js 20 will be removed from the runner
+# on 2026-09-16. The v1.7.42-v1.7.66 CI runs emitted a deprecation warning
+# on every job; this ship eliminates it and locks the workflow in for
+# the foreseeable future.
+#   - actions/checkout: v4 -> v5 (Node 24, released Aug 2025)
+# - actions/setup-python: v5 -> v6 (Node 24, released Sept 2025)
+# - actions/upload-artifact: v4 -> v6 (Node 24, released Dec 2025).
+#       NOTE: v5 had only "preliminary" Node 24 support and still defaulted
+#       to Node 20. v6 is the first version that runs on Node 24 by default.
+# Minimum runner version v2.327.1; already available on GitHub-hosted
+# runners. Self-hosted runners (which Curator does not currently use)
+# would need to be updated.
 #
 # Design choices
 # --------------
@@ -89,10 +104,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # v1.7.67: bumped from @v4 (Node 20, deprecated) to @v5 (Node 24).
+        uses: actions/checkout@v5
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        # v1.7.67: bumped from @v5 (Node 20, deprecated) to @v6 (Node 24).
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
@@ -137,7 +154,10 @@ jobs:
       # coverage signal.
       - name: Upload coverage report
         if: always()  # upload even when tests fail -- coverage diagnoses
-        uses: actions/upload-artifact@v4
+        # v1.7.67: bumped from @v4 (Node 20, deprecated) to @v6 (Node 24).
+        # @v5 had only preliminary Node 24 support; @v6 is the first version
+        # that runs on Node 24 by default.
+        uses: actions/upload-artifact@v6
         with:
           name: coverage-${{ matrix.os }}-py${{ matrix.python-version }}
           path: coverage.xml

@@ -4,6 +4,109 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.67] — 2026-05-12 — GitHub Actions Node.js 24 readiness: bump checkout/setup-python/upload-artifact
+
+**Headline:** GitHub deprecated Node.js 20 on 2025-09-19 and will force Node.js 24 by default on **2026-06-02 — just 3 weeks away**. Node.js 20 will be removed entirely from runners on 2026-09-16. Every CI run from v1.7.42 onward has emitted a deprecation warning on every job (`Node.js 20 actions are deprecated. The following actions are running on Node.js 20...`). This ship bumps all three GitHub Actions used by the workflow to versions that run natively on Node.js 24, eliminating the warning and locking in compatibility through the foreseeable future.
+
+### The bumps
+
+| Action | Before | After | Node.js | Released |
+|---|---|---|---|---|
+| `actions/checkout` | `@v4` | `@v5` | 24 | Aug 2025 |
+| `actions/setup-python` | `@v5` | `@v6` | 24 | Sept 2025 |
+| `actions/upload-artifact` | `@v4` | `@v6` | 24 | Dec 2025 |
+
+**Important note on `upload-artifact`:** v5 had only *preliminary* Node 24 support and STILL ran on Node 20 by default. v6 (released 2025-12-12) is the first version that runs on Node 24 by default. Bumping straight to v6 (skipping v5) gives true Node 24 compatibility without the half-measure.
+
+### Why this matters
+
+  * **Deprecation forcing date is 2026-06-02** — less than 3 weeks from this ship date (2026-05-12). After that date, GitHub will force-run any Node 20 action on Node 24, which may surface unexpected breakages if the action wasn't tested against Node 24.
+  * **Removal date is 2026-09-16** — Node 20 will be removed from runners entirely. Actions that explicitly require Node 20 will fail to start.
+  * **Proactive upgrade with full test coverage now** beats reactive fire-drill on June 2nd. The OS×Python×3 matrix gives 9 cells of validation that Node 24 works for all combinations Curator supports.
+  * **No source/test changes** — the YAML update is the entire ship. Pure infrastructure modernization.
+
+### Minimum runner requirement
+
+All three new versions require Actions Runner v2.327.1 or later. GitHub-hosted runners already ship this version (and have for months). Curator does not currently use self-hosted runners, so no additional infrastructure work is needed.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `.github/workflows/test.yml` | +18, -3 | 3 action bumps + header comment update + inline upgrade notes |
+| `CHANGELOG.md` | +N | v1.7.67 entry |
+| `docs/releases/v1.7.67.md` | +N | release notes |
+
+No source files modified. No test files modified. No dependencies changed.
+
+### Verification
+
+- **YAML syntax validation**: file parses correctly; only the `uses:` lines for the three actions changed plus the version comment headers
+- **CI matrix unchanged**: still 9 cells (3 OS × 3 Python). Each cell now runs with Node 24 instead of Node 20
+- **Pip cache unaffected**: `cache: "pip"` and `cache-dependency-path: pyproject.toml` continue to work in setup-python v6 (same input names)
+- **Coverage artifact upload unaffected**: upload-artifact v6 maintains the same input contract (`name`, `path`, `if-no-files-found`, `retention-days`) as v4
+- **Expected CI result**: all 9 cells GREEN, with **no Node.js 20 deprecation warning** in the annotations log (was previously emitted by every job since v1.7.42)
+
+### What this fix does NOT do
+
+- **Doesn't bump checkout to v6.** v6 was released Nov 2025 but is too recent; v5 is the well-tested mature Node 24 version with broader adoption. v6 has some breaking changes around credential persistence that we don't need.
+- **Doesn't add other actions.** This ship is scoped to the 3 actions currently in use.
+- **Doesn't update download-artifact** — not used in this workflow. Other workflows (if any) would need similar bumps.
+- **Doesn't change runner versions.** GitHub-hosted runners ship with current versions; no change needed.
+- **Doesn't reduce the matrix.** 9 cells stays 9 cells.
+- **Doesn't audit other repositories within Ad Astra.** If any sibling repos (Atrium, etc.) have their own CI, they need separate Node 24 bumps.
+- **Doesn't fix Windows live recycle-bin test.** Still deferred from v1.7.59.
+- **Doesn't add CI status badge in README.** Already present (was there during the v1.7.42-v1.7.64 red phase too).
+
+### Authoritative-principle catches
+
+**Catch -- skip upload-artifact v5; jump straight to v6.** GitHub's own release notes for v6 are explicit: "v5 had preliminary support for Node.js 24, however this action was by default still running on Node.js 20. Now this action by default will run on Node.js 24." Bumping v4 -> v5 would have looked like Node 24 compatibility but actually delivered nothing. v4 -> v6 is the real fix.
+
+**Catch -- pick checkout v5 over v6.** Both run on Node 24. v5 (Aug 2025) has been in production for 9 months; v6 (Nov 2025) is newer and has some breaking changes around credential persistence (separate file by default). Use v5 for proven stability; revisit v6 when there's a feature need.
+
+**Catch -- timed RIGHT before the forcing date.** Shipping on 2026-05-12 with forcing date 2026-06-02 gives 3 weeks of runway to discover any unexpected Node 24 issues before GitHub's automatic enforcement. If something breaks, we can revert and use the `ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true` opt-out as a stopgap.
+
+**Catch -- caches survive the bump.** Both setup-python v5 and v6 use the same cache key construction (Python version + runner OS + dependency-path hash). Existing wheel caches from v1.7.42-v1.7.66 will continue to be valid for v1.7.67+ runs. No cache invalidation, no extra cold-cache run.
+
+**Catch -- artifact contract is stable.** upload-artifact v4, v5, and v6 all share the same input names (`name`, `path`, `if-no-files-found`, `retention-days`, etc.). The bump is purely a runtime change, not a behavior change. Existing coverage artifact downloads from PR pages continue to work.
+
+**Catch -- no source code changes means no functional risk.** Pure workflow YAML update. The pytest invocation, environment variables, OS matrix, Python versions, install command, timeout configuration, and artifact upload semantics are all unchanged. If CI was 9/9 green at v1.7.66, it should remain 9/9 green at v1.7.67. The only behavior delta should be a Node 20 deprecation warning disappearing from the annotations.
+
+### Lessons captured
+
+**No new lesson codified.** Tech debt resolution:
+  * "Tech debt accumulates silently in tool versions just like it does in source code." The v1.7.42 introduction of CI didn't get a notice about Node 20 deprecation; it was already deprecated. v1.7.67 closes that 11-month tech debt window.
+  * Reinforces **"ship infrastructure modernization before forcing dates, not at them."** 3-week runway beats day-of-emergency.
+
+### Limitations
+
+- **Doesn't audit Curator's sibling Ad Astra repos** for similar Node 20 deprecation warnings
+- **Doesn't add a dependabot configuration** to keep actions versions current automatically
+- **Doesn't add a pre-push lint** that warns on deprecated action versions
+- **Doesn't migrate to OIDC** or other newer GitHub Actions security features
+- **Doesn't add deploy or release automation** that would benefit from newer action versions
+
+### Cumulative arc state (after v1.7.67)
+
+- **67 ships**, all tagged.
+- **pytest local Windows**: 1807 / 10 / 0 (unchanged this ship; pure YAML)
+- **pytest CI**: expected 9/9 GREEN; **no Node 20 deprecation warning** in annotations
+- **Coverage local**: 66.96% (unchanged)
+- **CI matrix**: 9 cells, now running on Node.js 24 via updated actions/*. Has been 9/9 GREEN since v1.7.64.
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed (fully addressed)
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **CI hygiene + post-arc defensive hardening + modernization**: 9 ships (v1.7.59–v1.7.67)
+  * v1.7.59–64: arc closure (red → green)
+  * v1.7.65: diagnostic tooling codified
+  * v1.7.66: bug-class sweep (ORDER BY rowid hardening)
+  * v1.7.67: Node.js 24 modernization (this ship)
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67 (no new this ship)
+- **Detacher-pattern ships**: 19 (unchanged; YAML-only ship)
+- **Tooling scripts**: `run_pytest_detached.ps1` (v1.7.39), `ci_diag.ps1` (v1.7.65)
+
 ## [1.7.66] — 2026-05-12 — Defensive ORDER BY hardening: secondary rowid on 13 timestamp queries
 
 **Headline:** v1.7.64 fixed ONE non-deterministic `ORDER BY <timestamp>` in `bundle_repo.get_memberships`. An audit of all 7 repository modules surfaced **12 more queries** with the same bug class — single-timestamp ORDER BY clauses (or COALESCE'd timestamps) without a tie-breaker. Any of them could surface flakiness on the OS×Python CI matrix the moment a test happens to insert two rows in the same second. **This ship adds `rowid` as secondary sort across 13 query sites in 7 repositories** — defensive hardening that costs nothing at runtime and eliminates an entire class of latent test flakiness.
