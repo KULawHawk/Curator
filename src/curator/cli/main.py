@@ -5129,8 +5129,9 @@ def audit_export_cmd(
             f"--before/--older-than ({before_dt.isoformat()})",
         )
 
-    # Query the audit log
-    entries = rt.audit_repo.query(
+    # Query the audit log (v1.7.39: streaming via iter_query so memory
+    # stays bounded for huge exports)
+    entries = rt.audit_repo.iter_query(
         since=since_dt,
         until=before_dt,
         actor=actor,
@@ -5138,6 +5139,13 @@ def audit_export_cmd(
         entity_type=entity_type,
         limit=limit,
     )
+
+    # v1.7.39: with iter_query, we can't use len() to count exported
+    # rows. Track the count manually as we write each row. This also
+    # means we can't easily distinguish "zero rows queried" from "zero
+    # rows after limit" without materializing -- the streaming win
+    # outweighs the lost metadata.
+    rows_exported = 0
 
     # Open output (stdout or file)
     use_stdout = (output == "-")
@@ -5165,6 +5173,7 @@ def audit_export_cmd(
                     "entity_id": e.entity_id,
                     "details": e.details,
                 }, default=str) + "\n")
+                rows_exported += 1
         else:  # csv or tsv (v1.7.37)
             # v1.7.37: use build_csv_writer helper so CSV and TSV share
             # the same lineterminator='\n' fix from v1.7.36. fmt is
@@ -5185,6 +5194,7 @@ def audit_export_cmd(
                     e.entity_id or "",
                     json.dumps(e.details, default=str),
                 ])
+                rows_exported += 1
     finally:
         if not use_stdout:
             out_handle.close()
@@ -5198,7 +5208,7 @@ def audit_export_cmd(
         details={
             "output_path": output,
             "format": fmt,
-            "rows_exported": len(entries),
+            "rows_exported": rows_exported,
             "filters": {
                 "since": since_dt.isoformat() if since_dt else None,
                 "before": before_dt.isoformat() if before_dt else None,
@@ -5215,15 +5225,15 @@ def audit_export_cmd(
     if rt.json_output:
         if not use_stdout:
             _emit_json(rt, {
-                "rows_exported": len(entries),
+                "rows_exported": rows_exported,
                 "output_path": output,
                 "format": fmt,
             })
     elif not use_stdout:
         console = _console(rt)
         console.print(
-            f"[green]{CHECK}[/] Exported {len(entries)} audit "
-            f"entr{'y' if len(entries) == 1 else 'ies'} to "
+            f"[green]{CHECK}[/] Exported {rows_exported} audit "
+            f"entr{'y' if rows_exported == 1 else 'ies'} to "
             f"[bold]{output}[/] ({fmt})"
         )
 

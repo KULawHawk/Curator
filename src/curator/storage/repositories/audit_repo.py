@@ -86,7 +86,7 @@ class AuditRepository:
         row = cursor.fetchone()
         return self._row_to_entry(row) if row else None
 
-    def query(
+    def _build_query_sql_and_params(
         self,
         *,
         since: datetime | None = None,
@@ -96,7 +96,18 @@ class AuditRepository:
         entity_type: str | None = None,
         entity_id: str | None = None,
         limit: int = 1000,
-    ) -> list[AuditEntry]:
+    ) -> tuple[str, tuple]:
+        """Build the SQL + params tuple shared by :meth:`query` and :meth:`iter_query`.
+
+        v1.7.39: extracted from :meth:`query` so the streaming
+        :meth:`iter_query` companion stays in sync with the filter
+        semantics. Any new filter parameter added here is automatically
+        available to both methods.
+
+        Returns:
+            A 2-tuple of (sql_string, params_tuple) ready to pass to
+            :meth:`sqlite3.Connection.execute`.
+        """
         clauses: list[str] = []
         params: list[Any] = []
 
@@ -122,8 +133,69 @@ class AuditRepository:
         where = " AND ".join(clauses) if clauses else "1"
         sql = f"SELECT * FROM audit_log WHERE {where} ORDER BY occurred_at DESC LIMIT ?"
         params.append(limit)
-        cursor = self.db.conn().execute(sql, tuple(params))
+        return sql, tuple(params)
+
+    def query(
+        self,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        actor: str | None = None,
+        action: str | None = None,
+        entity_type: str | None = None,
+        entity_id: str | None = None,
+        limit: int = 1000,
+    ) -> list[AuditEntry]:
+        sql, params = self._build_query_sql_and_params(
+            since=since, until=until, actor=actor, action=action,
+            entity_type=entity_type, entity_id=entity_id, limit=limit,
+        )
+        cursor = self.db.conn().execute(sql, params)
         return [self._row_to_entry(row) for row in cursor.fetchall()]
+
+    def iter_query(
+        self,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        actor: str | None = None,
+        action: str | None = None,
+        entity_type: str | None = None,
+        entity_id: str | None = None,
+        limit: int = 1_000_000,
+    ):
+        """Stream :class:`AuditEntry` rows matching the filters one at a time.
+
+        v1.7.39: companion to :meth:`query` optimized for large result
+        sets where materializing every row in memory would be wasteful.
+        The primary caller is the ``curator audit-export`` CLI command,
+        which can export hundreds of thousands of rows; the streaming
+        version keeps peak memory roughly constant in row count.
+
+        Filter parameters are identical to :meth:`query` (same names,
+        same semantics, same SQL composition via the shared
+        :meth:`_build_query_sql_and_params` helper). Default ``limit``
+        is bumped to 1,000,000 to match the audit-export CLI default,
+        since callers using the streaming path typically want bulk
+        access; pass an explicit ``limit`` to constrain.
+
+        Implementation: uses SQLite cursor iteration directly
+        (``for row in cursor``) rather than ``fetchall()`` so rows are
+        fetched from the underlying engine incrementally. Peak Python
+        memory stays bounded at one :class:`AuditEntry` plus the
+        cursor's internal buffer (driver-managed, typically 1–1KiB).
+
+        Yields:
+            :class:`AuditEntry` instances in ``occurred_at DESC`` order,
+            matching :meth:`query`'s ordering exactly.
+        """
+        sql, params = self._build_query_sql_and_params(
+            since=since, until=until, actor=actor, action=action,
+            entity_type=entity_type, entity_id=entity_id, limit=limit,
+        )
+        cursor = self.db.conn().execute(sql, params)
+        for row in cursor:
+            yield self._row_to_entry(row)
 
     def count(self) -> int:
         cursor = self.db.conn().execute("SELECT COUNT(*) FROM audit_log")

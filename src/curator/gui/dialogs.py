@@ -36,6 +36,7 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -2749,6 +2750,30 @@ class SourceAddDialog(QDialog):
         self._cb_enabled.setChecked(True)
         gc.addWidget(self._cb_enabled)
 
+        # v1.7.39: Share visibility dropdown -- GUI parity for v1.7.29
+        # T-B07 CLI feature. Controls metadata-stripping behavior on
+        # migrations TO this source. Default 'private' = legacy behavior.
+        row_visibility = QHBoxLayout()
+        row_visibility.addWidget(QLabel("Share visibility:"))
+        self._cb_share_visibility = QComboBox()
+        self._cb_share_visibility.addItem("private (default)", "private")
+        self._cb_share_visibility.addItem("team", "team")
+        self._cb_share_visibility.addItem("public (auto-strip on migrate)", "public")
+        self._cb_share_visibility.setToolTip(
+            "Controls metadata-stripping behavior on migrations TO this source.\n\n"
+            "  - private (default): no auto-strip; legacy behavior\n"
+            "  - team: no auto-strip\n"
+            "  - public: when files are migrated TO this source, EXIF/docProps/\n"
+            "    PDF metadata is automatically stripped to prevent accidental\n"
+            "    PII leakage (v1.7.29 T-B07).\n\n"
+            "Override per-migration with the 'Keep metadata' checkbox in the\n"
+            "Tier Scan dialog (v1.7.35 --no-autostrip).\n\n"
+            "CLI equivalent: --share-visibility on 'curator sources config'."
+        )
+        row_visibility.addWidget(self._cb_share_visibility)
+        row_visibility.addStretch(1)
+        gc.addLayout(row_visibility)
+
         # Plugin capabilities label (updated when type changes)
         self._lbl_caps = QLabel("")
         self._lbl_caps.setStyleSheet("color: #5C6BC0; padding: 4px;")
@@ -2940,6 +2965,9 @@ class SourceAddDialog(QDialog):
             )
             return
 
+        # v1.7.39: read share_visibility from the new dropdown
+        share_visibility = self._cb_share_visibility.currentData() or "private"
+
         # Build SourceConfig + insert
         try:
             src = SourceConfig(
@@ -2949,6 +2977,7 @@ class SourceAddDialog(QDialog):
                 config=config,
                 enabled=enabled,
                 created_at=datetime.now(),
+                share_visibility=share_visibility,
             )
             self.runtime.source_repo.insert(src)
         except Exception as e:  # noqa: BLE001
@@ -3538,6 +3567,31 @@ class TierDialog(QDialog):
             lambda: self._action_bulk_migrate(self._get_selected_file_entities())
         )
         footer.addWidget(self._btn_migrate)
+
+        # v1.7.39: --no-autostrip toggle -- GUI parity for v1.7.35.
+        # Opts out of the v1.7.29 auto-strip behavior for this migration.
+        # Only meaningful when the destination source's share_visibility
+        # is 'public'; no-op otherwise. Off by default (preserves the
+        # v1.7.29 default of stripping for privacy).
+        self._cb_no_autostrip = QCheckBox("Keep metadata")
+        self._cb_no_autostrip.setToolTip(
+            "Opt out of v1.7.29 auto-strip behavior for this migration.\n\n"
+            "When the destination source has share_visibility='public', migrations\n"
+            "normally auto-strip EXIF/docProps/PDF metadata on each moved file\n"
+            "(v1.7.29 T-B07). Check this to skip the strip -- the move still\n"
+            "happens; only the metadata-stripping phase is disabled.\n\n"
+            "Use cases:\n"
+            "  - Forensic archival (preserve EXIF as evidence)\n"
+            "  - Cross-system replication where destination has its own privacy\n"
+            "    posture\n"
+            "  - Reorganization within an already-public source\n\n"
+            "When checked AND dst is public, the override is recorded in the\n"
+            "audit log as 'migration.autostrip.opted_out' for the trail.\n\n"
+            "No effect when dst is private/team (no strip was going to happen).\n\n"
+            "CLI equivalent: --no-autostrip on 'curator migrate' / 'curator tier'."
+        )
+        footer.addWidget(self._cb_no_autostrip)
+
         btn_close = QPushButton("Close")
         btn_close.clicked.connect(self.accept)
         footer.addWidget(btn_close)
@@ -4016,11 +4070,17 @@ class TierDialog(QDialog):
         )
 
         # Execute
+        # v1.7.39: thread no_autostrip from the Keep-metadata checkbox.
+        # When checked: skip the v1.7.29 auto-strip on this migration even
+        # if dst is public. The MigrationService logs the opt-out as an
+        # audit event when it actually changes behavior.
+        no_autostrip = self._cb_no_autostrip.isChecked()
         try:
             migration_report = self.runtime.migration.apply(
                 full_plan,
                 keep_source=False,
                 include_caution=True,
+                no_autostrip=no_autostrip,
             )
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(

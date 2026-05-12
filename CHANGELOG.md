@@ -4,6 +4,105 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.39] — 2026-05-11 — GUI parity for v1.7.29 + v1.7.35; streaming audit-export; detached-pytest workflow
+
+**Headline:** Combined ship covering three threads: (1) GUI parity for two prior CLI features (`share_visibility` dropdown in `SourceAddDialog`, Keep-metadata checkbox in `TierDialog`); (2) streaming audit-export via new `AuditRepository.iter_query()` so multi-hundred-thousand-row exports stay memory-bounded; (3) a workflow fix — `scripts/run_pytest_detached.ps1` — that lets long pytest runs complete without wedging MCP servers via held stdio pipes (a problem encountered repeatedly in autonomous-mode sessions).
+
+### Why each piece matters
+
+**GUI parity gap.** v1.7.29 (T-B07) added `share_visibility` to `SourceConfig` and v1.7.35 added the `--no-autostrip` migration opt-out. Both shipped CLI-only and left the GUI without parity. A user adding a source through the dialog couldn't pick its visibility; a user running a migration through `TierDialog` couldn't opt out of metadata-stripping. Both are now first-class GUI controls with tooltips explaining the v1.7.29/v1.7.35 semantics.
+
+**Streaming export gap.** v1.7.31's `audit-export` command materialized every matching audit row in memory via `AuditRepository.query()` before writing the first byte of output. For a 100k-row audit log this is a ~150 MB heap spike; for a 1M-row log it's prohibitive. The new `iter_query()` generator yields rows lazily through the same shared SQL builder, so the new `audit_export_cmd` streams row-by-row with bounded memory.
+
+**Workflow fix.** Across multiple autonomous-mode sessions, the same failure mode kept recurring: a single MCP PowerShell call running pytest for 3+ minutes would wedge the Windows-MCP server such that ALL subsequent tool calls hung at the ~4 min ceiling, requiring a Claude Desktop restart. Three sessions in a row hit this. Root cause: MCP's PowerShell tool holds the child stdio pipe open for the duration of the call; when pytest runs longer than MCP's internal ceiling, MCP gives up but doesn't reset its pipe state, so every subsequent call queues behind a dead handle. The fix is `scripts/run_pytest_detached.ps1`: a small launcher that spawns pytest via `Start-Process -WindowStyle Hidden` with redirection handled by the spawned process itself (no parent file handles cross the process boundary). Output streams to a log file; a `<log>.done` sentinel with `EXIT:<code>` appears on completion. The MCP call returns in milliseconds; pollers read the sentinel with sub-second calls. Verified end-to-end: ran the full 1514-test baseline in 170s with MCP responsive throughout, no wedge.
+
+### What's new
+
+**Part 1 — GUI parity (`src/curator/gui/dialogs.py`, +60 lines)**
+
+  * `QCheckBox` added to top-level Qt imports (needed for the new TierDialog checkbox).
+  * `SourceAddDialog`: new `share_visibility` `QComboBox` between the Enabled checkbox and the plugin-capabilities label. Items `["private", "team", "public"]` with tooltips describing the v1.7.29 metadata-strip semantics for each. Default `"private"` (legacy back-compat).
+  * `SourceAddDialog._on_ok_clicked`: reads `self._cb_share_visibility.currentData()` and passes it to the `SourceConfig` constructor (alongside source_id, source_type, etc.).
+  * `TierDialog`: new "Keep metadata" `QCheckBox` (`self._cb_no_autostrip`) inserted between the Migrate button and the Close button in the footer row. Default unchecked (preserves v1.7.29 strip-on-public default). Tooltip documents when checking matters (only when destination is `public`), use cases (forensic archival, cross-system replication, in-source reorg), and that the override is recorded in the audit log.
+  * `TierDialog._action_bulk_migrate`: reads `self._cb_no_autostrip.isChecked()` and threads it as the `no_autostrip` kwarg to `runtime.migration.apply(...)`.
+
+**Part 2 — Streaming audit-export (`audit_repo.py` +78, `main.py` +22)**
+
+  * New private helper `AuditRepository._build_query_sql_and_params(...)` extracts the shared SQL+params construction from the original `query()` method. Returns `(sql_string, params_tuple)`. Both `query()` and `iter_query()` delegate to this helper, so any new filter parameter added here is automatically available to both methods (regression-proofed by `test_build_query_sql_and_params_returns_tuple`).
+  * `AuditRepository.query()` refactored to a thin wrapper over the helper (no behavior change — same filter semantics, same return shape).
+  * New `AuditRepository.iter_query(...)` generator method: same filter parameters as `query()`, but yields `AuditEntry` rows one at a time via `for row in cursor:` instead of materializing `cursor.fetchall()`. Default `limit=1_000_000` (vs. `query()`'s `1000`) reflects the streaming use case where large result sets are expected.
+  * `audit_export_cmd` in `cli/main.py`: switched from `audit_repo.query(...)` to `audit_repo.iter_query(...)`. Because generators don't support `len()`, added a manual `rows_exported` counter incremented inside each format branch (jsonl, csv, tsv) as rows are written. The audit-log entry written by `audit_export_cmd` for the export itself now uses this counter.
+
+**Part 3 — Detached pytest workflow (`scripts/run_pytest_detached.ps1`, new)**
+
+  * PowerShell launcher that spawns pytest fully detached from the calling MCP context.
+  * Writes a deterministic worker script to disk next to the requested log path, then spawns it via `Start-Process -WindowStyle Hidden -PassThru` (no `-Wait`, no `-RedirectStandardOutput` — the spawned process handles its own I/O internally via `*>` redirection, so no file handles cross the caller-spawnee boundary).
+  * On completion, the worker writes `EXIT:<code>` to `<log>.done`. Poller pattern: `while (-not (Test-Path "$Log.done")) { Start-Sleep 15 ; ... }`.
+  * `scripts/run_pytest_detached.cmd` is a stub that points to the .ps1 (left as breadcrumb for anyone who reaches for cmd batch first).
+
+**Tests (25 new total)**
+
+  * `tests/gui/test_gui_share_visibility_and_autostrip.py` — 9 tests covering dropdown presence, options, default, DB-write path, back-compat default-private path, checkbox presence, default-unchecked, threading to apply (both checked and unchecked variants). Includes a `_select_local_type` helper that picks the `local` plugin and fills its required `roots` `QPlainTextEdit` (the dialog defaults to `gdrive` which would fail validation in unit tests).
+  * `tests/unit/test_audit_iter_query.py` — 16 tests covering: generator semantics (yields lazily, exhausts once), correctness equivalence with `query()` across no-filter / actor / action / time-range / limit / combined-filter cases, shared-builder behavior (`_build_query_sql_and_params` returns `(sql, tuple)`, no-filter case uses `WHERE 1`), high-volume row handling (>10k rows), and integration tests of the `audit-export` CLI's `rows_exported` counter for jsonl + csv + empty-DB paths.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `src/curator/gui/dialogs.py` | +60 | 5 edits: QCheckBox import + share_visibility dropdown + dropdown -> SourceConfig wiring + Keep-metadata checkbox + checkbox -> apply() wiring |
+| `src/curator/cli/main.py` | +22 | `audit_export_cmd` switched to iter_query + rows_exported counter |
+| `src/curator/storage/repositories/audit_repo.py` | +78 | `_build_query_sql_and_params` helper + `iter_query` generator + `query` refactor |
+| `tests/gui/test_gui_share_visibility_and_autostrip.py` | +340 | 9 GUI parity tests (with QMessageBox.exec patch fix and local-plugin helper) |
+| `tests/unit/test_audit_iter_query.py` | +260 | 16 streaming/equivalence tests |
+| `scripts/run_pytest_detached.ps1` | +97 | Detached-spawn workflow launcher |
+| `scripts/run_pytest_detached.cmd` | +6 | Stub redirecting to the .ps1 |
+| `CHANGELOG.md` | +N | v1.7.39 entry |
+| `docs/releases/v1.7.39.md` | +N | release notes |
+
+### Verification
+
+- **GUI parity tests**: 9/9 pass in 2.34s (`tests/gui/test_gui_share_visibility_and_autostrip.py`)
+- **Streaming tests**: 16/16 pass in 18.98s (`tests/unit/test_audit_iter_query.py`)
+- **Full pytest baseline (via detacher)**: ✅ **1514 passed**, 9 skipped, 9 deselected, 0 failed in 169.94s (was 1486 at v1.7.38; +28 new tests)
+- **Detacher smoke test**: spawn returned in <2s, GUI test subset ran 9 tests in 2.34s in detached worker, sentinel wrote `EXIT:0`, MCP stayed responsive throughout
+- **Detacher full baseline test**: 170s pytest run with MCP-side polling every ~30s, zero wedges, zero hangs, sentinel wrote `EXIT:0` on clean completion
+- **Lesson #50 lint**: still passing on every commit
+
+### Authoritative-principle catches (this turn)
+
+**Catch #1 — Dialog's plugin dropdown defaults alphabetically.** First two `SourceAddDialog` write-path tests failed with mysterious `source is None` results from `source_repo.get(...)`. Root cause: `for stype in sorted(self._registered_types.keys()): _cb_source_type.addItem(...)` means `gdrive` (alphabetically first) is the default. The local plugin requires only `roots`; gdrive requires `credentials_path` + `client_secrets_path`. Tests not setting either left `_on_ok_clicked` to fail validation silently and return without inserting. Fix: a `_select_local_type(dlg)` helper that explicitly picks `local` and fills its `roots` `QPlainTextEdit`. Lesson #57 captured (see below).
+
+**Catch #2 — Modal QMessageBox.exec() blocks unit tests.** `_action_bulk_migrate` calls `result_msg.exec()` at the end to show the post-migration summary. In headless tests this would hang indefinitely. Fix: `patch.object(QMessageBox, "exec", return_value=QMessageBox.StandardButton.Ok)` added to the test patch context. Lesson #58 captured.
+
+**Catch #3 — MCP wedges on >3-min stdio holds.** Not a code bug, but a workflow bug discovered in the wild. Three sessions in a row had to be restarted because pytest baselines wedged MCP. The workflow fix (detached spawn + sentinel poll) is now codified as `scripts/run_pytest_detached.ps1`. Lesson #59 captured.
+
+### Lessons captured
+
+* **#57: Dialog dropdowns default alphabetically, not semantically.** When a unit test exercises a dialog that lists plugins/options from a dict-keys iteration, the default selection is whatever sorts first alphabetically. Tests that need a specific selection MUST set it explicitly. Don't rely on "the simpler/cheaper option" being default — that's a human-readability assumption, not a code property.
+* **#58: Modal QMessageBox.exec() must be patched in unit tests.** Any GUI code path that ends in `<modal>.exec()` (QMessageBox, QDialog, file pickers) needs the `.exec()` method patched in unit tests — not the constructor, not `Icon`, not `question()`/`information()`/etc. (those are convenience static methods that internally call `.exec()`). Patch the instance method on the class.
+* **#59: MCP PowerShell tool wedges on >3-min stdio holds.** Any single MCP call where a child process holds stdout/stderr open longer than ~3 min will wedge the MCP server. Recovery requires Claude Desktop restart. Workflow rule: never run long-duration commands in a foreground MCP call — always use `scripts/run_pytest_detached.ps1` (or equivalent detached-spawn + sentinel-poll pattern) and poll the sentinel file with sub-second MCP calls.
+
+### Limitations
+
+- **GUI source-edit dialog still missing.** v1.7.39 adds `share_visibility` to `SourceAddDialog` (creation only). Changing an EXISTING source's visibility still requires the CLI (`curator sources config <id> --share-visibility X`). A right-click "Source Properties" action with an edit dialog is queued as a future ship.
+- **`iter_query` count metadata loss.** The streaming path can't pre-count rows before writing, so users who want "how many would I export?" before running need a separate query call. Acceptable tradeoff for the memory win; the post-export count from `rows_exported` covers the audit trail.
+- **Detacher is Windows + PowerShell only.** `scripts/run_pytest_detached.ps1` uses `Start-Process -WindowStyle Hidden`. A POSIX equivalent (using `nohup` + `&`) is straightforward but not yet written. Curator currently targets Windows-first, so this is acceptable.
+- **No new GUI smoke for the share_visibility tooltip text.** The tooltips contain the operational guidance for the dropdown; if they drift, users won't see consistent help. Future hardening could add a snapshot test for tooltip strings.
+
+### Cumulative arc state (after v1.7.39)
+
+- **39 ships**, all tagged, all baselines green
+- **pytest**: 1514 / 9 / 0 (+28 from v1.7.38)
+- **CLI commands with CSV/TSV output**: 10 (unchanged)
+- **GUI dialogs with v1.7.29 share_visibility parity**: 1 (SourceAddDialog) — NEW
+- **GUI dialogs with v1.7.35 no_autostrip parity**: 1 (TierDialog) — NEW
+- **Streaming-capable repositories**: 1 (AuditRepository.iter_query) — NEW
+- **Detached workflow scripts**: 1 (run_pytest_detached.ps1) — NEW
+- **Lessons captured**: #46–#59 (+3 this ship)
+- **v1.7.29 GUI deferred**: closed
+- **v1.7.31 limitation 1 (streaming export)**: closed
+- **v1.7.35 GUI limitation 4**: closed
+
 ## [1.7.38] — 2026-05-11 — Clean error for invalid `--csv-dialect` (closes v1.7.37 limitation)
 
 **Headline:** New `_check_csv_dialect()` helper in `cli/main.py` catches the v1.7.37 `--csv-dialect xyz` typo case at the CLI layer and surfaces a clean typer-style error message instead of letting `build_csv_writer`'s `ValueError` propagate as a Rich traceback. Two-layer validation preserved: helper-side defends library callers; CLI-side polishes the user experience.
