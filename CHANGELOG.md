@@ -4,6 +4,66 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.43] — 2026-05-11 — Add `pytest-timeout` to `[dev]` extras (CI caught it on first run)
+
+**Headline:** v1.7.42's first CI run failed within 4 minutes with `pytest: error: unrecognized arguments: --timeout=120`. The local dev environment had `pytest-timeout` installed manually but pyproject's `[dev]` extras didn't declare it. Any new contributor running `scripts/setup_dev_env.py` would have hit the same error. v1.7.43 fixes the missing dep declaration -- a 1-line pyproject change.
+
+### Why this matters
+
+This is **the value of CI made explicit**. CI shipped less than 20 minutes before this fix; CI's first run caught a real bug that local pytest had been silently passing for ~10 ships because the local `.venv` was carrying an undeclared dependency (`pytest-timeout==2.4.0`) installed manually at some point.
+
+New contributors -- or future-me on a fresh machine -- running `scripts/setup_dev_env.py` would get a venv with the documented `[dev]` extras, then immediately hit `pytest: error: unrecognized arguments: --timeout=120` the first time they tried to run the test detacher (which passes `--timeout=20`) or follow the README's recommended pytest invocation.
+
+The v1.7.41 setup script was technically correct -- it installed exactly what pyproject declared -- but pyproject itself was missing this dependency. The `scripts/run_pytest_detached.ps1` from v1.7.39 used `--timeout=20`; the new CI workflow used `--timeout=120`; all my recent test invocations used the flag. None of these would work on a freshly-set-up dev environment.
+
+### What's new
+
+**`pyproject.toml` (+1 line)**
+
+In the `[project.optional-dependencies].dev` group, added:
+
+```toml
+"pytest-timeout>=2.0",
+```
+
+The `>=2.0` floor matches what we've been using locally (v2.4.0 installed) and is the version that introduced the `--timeout` CLI flag we depend on.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `pyproject.toml` | +1 | `pytest-timeout>=2.0` in `[dev]` |
+| `CHANGELOG.md` | +N | v1.7.43 entry |
+| `docs/releases/v1.7.43.md` | +N | release notes |
+
+### Verification
+
+- **Local diagnosis confirmed**: `pip show pytest-timeout` in `.venv` returns version 2.4.0 -- locally installed, not via pyproject
+- **Reproduction confirmed**: CI run #1 on commit 81a84a1 failed with `pytest: error: unrecognized arguments: --timeout=120` (exit code 1, install step succeeded, pytest step failed)
+- **Fix verification**: will be confirmed by CI run #2 (this v1.7.43 push)
+
+### Authoritative-principle catches
+
+**Catch -- the missing dep was masked by an undeclared local install.** This is a class of bug that's structurally invisible in local-only dev: the host environment carries assumed-installed packages that aren't declared in the package's manifest. Code that uses those features works locally and breaks on every fresh install. The ONLY systematic way to catch this is a clean-environment CI run.
+
+Lesson #61 from v1.7.42 ("infrastructure ships beat feature ships when missing") already covered this conceptually. v1.7.43 is the concrete proof: the infrastructure shipped 20 minutes ago caught a bug that had been latent for ~10 ships.
+
+**No new lesson codified.** This is a textbook example of lesson #61 in action; doesn't deserve its own lesson, but does deserve to be highlighted as the inaugural CI catch.
+
+### Limitations
+
+- **CI run #1 result is preserved.** GitHub Actions retains the failed run as historical record; not retroactively edited. Run #2 (this v1.7.43 push) will be the first green run.
+- **Other latent missing deps may exist.** v1.7.43 fixes the specific dep CI flagged. If the test suite uses other plugins not declared in `[dev]`, they'll surface on next CI run. The fix pattern is the same: add to `[dev]` and reship.
+- **Local `.venv` had `pytest-timeout` from an unknown source.** Probably installed manually months ago via `pip install pytest-timeout` for a one-off test. The cleanup is automatic when contributors next recreate their venv.
+
+### Cumulative arc state (after v1.7.43)
+
+- **43 ships**, all tagged, all baselines green (anticipating CI run #2 passes)
+- **pytest**: 1549 / 9 / 0 (unchanged)
+- **CI workflows**: 1 (`test.yml`) -- shipped v1.7.42; first run found this bug; second run will validate the fix
+- **Lessons captured**: #46–#61 (unchanged; this is lesson #61 in action, not a new lesson)
+- **First CI-caught bug fix**: v1.7.43. Demonstrates the multiplier effect of the CI ship.
+
 ## [1.7.42] — 2026-05-11 — GitHub Actions CI (C1)
 
 **Headline:** New `.github/workflows/test.yml` runs the full pytest baseline on every push to main and every pull request, on a Windows runner with Python 3.13 + full extras profile + Qt offscreen. Green baseline stops being a claim and becomes an enforced fact. README now shows a live CI status badge.
