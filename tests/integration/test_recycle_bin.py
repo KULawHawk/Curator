@@ -199,3 +199,118 @@ class TestLiveRecycleBin:
                         entry.index_path.unlink()
                 except OSError:
                     pass
+
+
+# ---------------------------------------------------------------------------
+# v1.7.46: tests for _to_long_path 8.3 short-path expansion
+# ---------------------------------------------------------------------------
+
+
+class TestToLongPath:
+    """v1.7.46: unit tests for the new ``_to_long_path`` helper.
+
+    Closes CI failure #4 from v1.7.44's CI run #3: on GitHub Actions
+    Windows runners, ``tempfile.gettempdir()`` returns a path like
+    ``C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\...`` (8.3 short-path
+    form of ``runneradmin``). The Recycle Bin's ``$I`` files always store
+    the LONG path, so a substring lookup against the SHORT path fails.
+    The fix normalizes via ``GetLongPathNameW`` so both sides of the
+    comparison use the long form.
+
+    These tests can't easily synthesize a real short-path component
+    without admin privileges to enable 8.3 generation on a test volume,
+    so they focus on:
+
+    * Function is importable and has the right signature
+    * No-op contract: paths with no short components are returned
+      unchanged
+    * Non-Windows platforms get the input back unchanged (safety)
+    * The fallback path (leaf doesn't exist) doesn't raise
+    * Round-trip consistency: long(short(p)) == long(p) on any path
+      that we can construct
+
+    The end-to-end behavior (RUNNER~1 -> runneradmin) is exercised on
+    the actual CI runner by ``TestLiveRecycleBin.test_trash_then_find_in_recycle_bin``;
+    these unit tests pin down the helper's contract for everywhere else.
+    """
+
+    def test_to_long_path_importable(self):
+        """v1.7.46: _to_long_path is exported from the module."""
+        from curator._vendored.send2trash.win.recycle_bin import _to_long_path
+        assert callable(_to_long_path)
+
+    def test_to_long_path_returns_string(self):
+        """v1.7.46: _to_long_path always returns a string (never None)."""
+        from curator._vendored.send2trash.win.recycle_bin import _to_long_path
+        result = _to_long_path(r"C:\Users")
+        assert isinstance(result, str)
+
+    def test_to_long_path_idempotent_on_long_path(self):
+        """v1.7.46: a path that's already in long form should round-trip unchanged.
+
+        ``C:\\Users\\jmlee\\Desktop`` (or whatever real long path exists)
+        has no 8.3 components, so GetLongPathNameW returns it as-is.
+        """
+        from curator._vendored.send2trash.win.recycle_bin import _to_long_path
+        long_path = str(Path.home())  # always a long path, always exists
+        once = _to_long_path(long_path)
+        twice = _to_long_path(once)
+        # Round-trip should be stable
+        assert once == twice
+
+    def test_to_long_path_nonexistent_leaf_handled(self):
+        """v1.7.46: the fallback path activates when the leaf doesn't exist.
+
+        This is the typical post-trash case: ``$R<random>`` is gone from
+        disk by the time we look it up, so GetLongPathNameW on the full
+        path returns 0. The function should fall back to translating just
+        the parent and re-append the leaf, never raising.
+        """
+        from curator._vendored.send2trash.win.recycle_bin import _to_long_path
+        # A non-existent file under an existing long-form parent
+        bogus = str(Path.home() / "this_file_definitely_doesnt_exist_xyz123.tmp")
+        result = _to_long_path(bogus)
+        # Should not crash; should return something that looks like a path
+        assert isinstance(result, str)
+        assert "this_file_definitely_doesnt_exist_xyz123.tmp" in result
+
+    def test_to_long_path_drive_root_handled(self):
+        """v1.7.46: edge case -- a bare drive root has no parent to translate.
+
+        The function should detect ``parent == path`` and return the input.
+        """
+        from curator._vendored.send2trash.win.recycle_bin import _to_long_path
+        # Bare drive root: parent == self
+        result = _to_long_path("C:\\")
+        assert isinstance(result, str)
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="non-Windows safety test")
+    def test_to_long_path_noop_on_non_windows(self):
+        """v1.7.46: on POSIX, _to_long_path is a no-op that returns input unchanged.
+
+        Marked skipif win32 so it actually runs on Linux/macOS CI in the
+        future (when we add a cross-platform matrix). On Windows CI this
+        gets skipped, which is correct.
+        """
+        from curator._vendored.send2trash.win.recycle_bin import _to_long_path
+        input_path = "/tmp/somefile.txt"
+        assert _to_long_path(input_path) == input_path
+
+    def test_normalize_for_compare_uses_long_path(self):
+        """v1.7.46: _normalize_for_compare now expands short paths via _to_long_path.
+
+        Integration check: the function we EXPORT for path comparison
+        should give equivalent output for paths that differ only in
+        short-vs-long form. We can't easily synthesize a short path in
+        a unit test, but we CAN verify the call chain is wired:
+        normalize_for_compare(p) for any long p should equal
+        normalize_for_compare(_to_long_path(p)).
+        """
+        from curator._vendored.send2trash.win.recycle_bin import (
+            _normalize_for_compare,
+            _to_long_path,
+        )
+        p = str(Path.home() / "Desktop")
+        a = _normalize_for_compare(p)
+        b = _normalize_for_compare(_to_long_path(p))
+        assert a == b

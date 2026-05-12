@@ -250,8 +250,70 @@ def _normalize_for_compare(path: str) -> str:
 
     Windows paths are case-insensitive. We also unify forward-slashes
     and trailing separators so equivalent paths compare equal.
+
+    v1.7.46: ALSO expands 8.3 short-path components to their long form
+    via :func:`_to_long_path`. The Recycle Bin's ``$I`` files store the
+    LONG form of the original path, but callers may pass the SHORT form
+    (e.g. on GitHub Actions Windows runners, ``tempfile.gettempdir()``
+    returns ``C:\\Users\\RUNNER~1\\...`` because the runner's username
+    ``runneradmin`` is too long for 8.3 and gets aliased). Without
+    long-path normalization the lookup fails on those runners.
     """
-    return os.path.normcase(os.path.normpath(path))
+    return os.path.normcase(os.path.normpath(_to_long_path(path)))
+
+
+def _to_long_path(path: str) -> str:
+    """v1.7.46: Expand 8.3 Windows short-paths (e.g. ``RUNNER~1``) to long.
+
+    Calls Win32 ``GetLongPathNameW`` if available. Returns the input
+    unchanged if:
+      * Running on a non-Windows platform
+      * ``GetLongPathNameW`` returns 0 (the path doesn't exist, or has
+        no short-path components)
+      * The ctypes import or call raises for any reason
+
+    Falls back to a parent-directory translation when the leaf doesn't
+    exist (typical for post-trash lookups: the file is gone from disk
+    but its parent dir still exists). This handles the GitHub Actions
+    Windows-runner case where ``tempfile.NamedTemporaryFile`` returns
+    a short-path under a username that's been 8.3-aliased.
+    """
+    if sys.platform != "win32":
+        return path
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        GetLongPathNameW = ctypes.windll.kernel32.GetLongPathNameW
+        GetLongPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        GetLongPathNameW.restype = wintypes.DWORD
+
+        # First, try the full path. Works if every component exists.
+        size = GetLongPathNameW(path, None, 0)
+        if size > 0:
+            buf = ctypes.create_unicode_buffer(size)
+            written = GetLongPathNameW(path, buf, size)
+            if 0 < written < size:
+                return buf.value
+
+        # Fallback: leaf doesn't exist (e.g. file was trashed). Translate
+        # just the parent dir, then re-append the leaf. The parent dir is
+        # where the short-path aliasing lives anyway (it's the username
+        # component, e.g. RUNNER~1 in ``C:\Users\RUNNER~1\...``).
+        p = Path(path)
+        parent = str(p.parent)
+        if parent == path:  # no parent (e.g. "C:\\")
+            return path
+        size = GetLongPathNameW(parent, None, 0)
+        if size == 0:
+            return path
+        buf = ctypes.create_unicode_buffer(size)
+        written = GetLongPathNameW(parent, buf, size)
+        if 0 < written < size:
+            return str(Path(buf.value) / p.name)
+    except Exception:  # noqa: BLE001 -- best-effort normalization
+        pass
+    return path
 
 
 def find_in_recycle_bin(original_path: str) -> RecycleBinEntry | None:
@@ -285,4 +347,5 @@ __all__ = [
     "enumerate_recycle_bin",
     "find_in_recycle_bin",
     "parse_index_file",
+    "_to_long_path",  # v1.7.46 -- exported for testability
 ]
