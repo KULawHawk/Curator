@@ -214,7 +214,7 @@ class ForecastService:
         """Forecast every mounted fixed-disk partition.
 
         Skips removable/optical drives. On Windows, this typically yields
-        C:\, D:\, etc. On Unix, the root ``/``.
+        ``C:\\``, ``D:\\``, etc. On Unix, the root ``/``.
         """
         results: list[DiskForecast] = []
         for part in psutil.disk_partitions(all=False):

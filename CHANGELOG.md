@@ -4,6 +4,96 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.53] — 2026-05-12 — forecast.py SyntaxWarning cleanup (closes F1)
+
+**Headline:** Fixes the last 4 `SyntaxWarning: invalid escape sequence '\,'` warnings, which were surfaced by v1.7.51's coverage instrumentation and originated from unescaped backslashes in the `compute_all_drives()` docstring in `src/curator/services/forecast.py`. Closes F1 from the post-v1.7.51 mop-up backlog. After this ship, `--cov` runs are SyntaxWarning-free; only the 811 instrumentation-internal ResourceWarnings remain (and those are noise from coverage's own SQLite connections, not Curator bugs).
+
+### Why this matters
+
+v1.7.51's coverage run exposed 4 `SyntaxWarning: invalid escape sequence '\,'` warnings at `forecast.py:217`. Two are visible in the source line:
+
+```python
+Skips removable/optical drives. On Windows, this typically yields
+C:\, D:\, etc. On Unix, the root ``/``.
+```
+
+The `\,` sequences inside the docstring (a regular Python string literal) trigger SyntaxWarning on Python 3.12+, which will become a SyntaxError in a future Python release per PEP 626. The 4 warning instances came from the same source line being parsed multiple times across test workers / coverage measurement.
+
+Left alone, this would become a build-blocker when Python eventually upgrades the warning to an error. Better to fix now than retrofit when 3.14 or 3.15 demands it.
+
+### What's new
+
+**`src/curator/services/forecast.py` (1-line fix)**
+
+The docstring's drive-letter examples are now properly escaped inside RST backticks:
+
+```python
+# Before:
+        Skips removable/optical drives. On Windows, this typically yields
+        C:\, D:\, etc. On Unix, the root ``/``.
+
+# After:
+        Skips removable/optical drives. On Windows, this typically yields
+        ``C:\\``, ``D:\\``, etc. On Unix, the root ``/``.
+```
+
+Two improvements packed into one edit:
+  1. **Backslashes escaped (`\\` instead of `\`)** — silences the SyntaxWarning. Python interprets `\\` as a single literal backslash in the runtime string.
+  2. **RST backticks added** — wraps the drive letters in `` ``...`` `` for consistency with the docstring above (`compute_disk_forecast` already uses `` ``C:\\`` `` on line 102). Now both docstrings render identically in Sphinx / IDE tooltips.
+
+The runtime docstring value is identical to before (still reads `C:\, D:\, etc.` with single backslashes) for any tool reading `__doc__`.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `src/curator/services/forecast.py` | 1 modified | Escape backslashes + add RST backticks in docstring |
+| `CHANGELOG.md` | +N | v1.7.53 entry |
+| `docs/releases/v1.7.53.md` | +N | release notes |
+
+### Verification
+
+- **`py_compile -W default::SyntaxWarning forecast.py`**: ✅ clean (exit 0, no warnings)
+- **Regex sweep for suspect escapes in forecast.py**: ✅ 0 remaining
+- **Full pytest baseline with coverage (via detacher)**: ✅ **1593 passed**, 10 skipped, 10 deselected, 0 failed in 256.92s
+  - SyntaxWarnings: **4 → 0** (the actual fix)
+  - ResourceWarnings: 791 → 811 (+20; new mcp_orphans module being instrumented surfaces more coverage-internal unclosed-connection warnings; unrelated to this ship)
+  - Tests passed: 1593 (unchanged from v1.7.52)
+  - Coverage: 63.79% → 63.80% (tiny lift from new mcp_orphans coverage; was already credited last ship)
+- **Detacher pattern**: 14th consecutive ship; no MCP wedges
+
+### Authoritative-principle catches
+
+**Catch -- the single-line regex sweep almost overshot.** My initial regex `[^\\][...]` flagged a false positive at L102 (`C:\\` which is correctly escaped). The negative lookbehind needed to be careful: a real `\,` is `[^\\]\\,`, NOT `\\,` (which would be `\\` followed by `,`, a legitimate escaped backslash + comma). Tightened the regex to require a non-backslash character BEFORE the suspect `\`. After tightening, only L217 came up — the real bug.
+
+**Catch -- RST backticks add semantic value, not just escaping.** The escape fix alone (`C:\\, D:\\,`) would silence the warning. Adding the `` ``...`` `` wrappers is a small extra: makes Sphinx render the drive paths as inline code, matching the docstring above and improving help-text readability in IDEs / web docs. The 30-second extra effort is worth it; technical debt is easier to pay off in the same edit than to come back to later.
+
+**Catch -- runtime docstring value preserved.** The original `__doc__` value contained literal `\` characters (because Python parsed `\,` as `\,` per the loose pre-warning rules); the fixed `__doc__` still contains literal `\` characters (because `\\` is a properly-escaped single backslash). No behavior change at runtime, no test fixture impact, no break in `--help` output formatting. The only difference: Python's parser is happy now.
+
+**Catch -- why not use a raw docstring (`r"""..."""`)?** Tempting one-line fix: change `"""..."""` to `r"""..."""`. But raw strings can't end in a single backslash, and Curator's coding standard generally avoids raw docstrings (consistency with the rest of the codebase, which uses regular triple-quoted docstrings everywhere). Escaping the offending backslashes is the local-minimum-disruption fix.
+
+### Lessons captured
+
+**No new lesson codified.** This is a pure-cleanup ship applying lesson #43 ("signal beats absence of signal") in reverse: coverage gave us the signal (4 SyntaxWarnings), we acted on it. Mop-up ships closing a known low-priority technical debt items are exactly the kind of work the bulletproof-live backlog exists to capture.
+
+### Limitations
+
+- **Doesn't preempt other Python deprecations.** PEP 626 covers invalid escape sequences but other deprecations (like `datetime.utcnow()` from v1.7.47) are separate ships per deprecation class.
+- **No mass sweep of other modules.** This ship only fixes forecast.py because that's the only file with active SyntaxWarnings. A future hardening could add `python -W error::SyntaxWarning` to CI to prevent reintroduction, but that's a separate ship.
+- **The 811 ResourceWarnings remain.** They're coverage-instrumentation-internal (unclosed sqlite connections in coverage's own collector + parser); not Curator bugs. Documented as noise in v1.7.51 release notes. If they ever start correlating with real failures, investigate then.
+
+### Cumulative arc state (after v1.7.53)
+
+- **53 ships**, all tagged, all baselines green
+- **pytest**: 1593 / 10 / 0 / 0 warnings (default invocation; under `--cov`: 0 SyntaxWarnings, 811 instrumentation ResourceWarnings)
+- **Coverage**: 63.80% (v1.7.53), 63.79% (v1.7.51 baseline)
+- **CI matrix**: Python 3.11 + 3.12 + 3.13 on Windows; coverage uploaded per matrix entry
+- **Tier 1 backlog**: A1, A3, C1 closed; A2 has proven workaround
+- **Tier 2 backlog**: E3, C5, D3, A4 closed. Remaining: **only C6 (OS matrix)**
+- **F-series (mop-up)**: F1 closed this ship
+- **Lessons captured**: #46–#63 (unchanged this ship)
+- **Detacher-pattern ships**: 14 (v1.7.39 through v1.7.53)
+
 ## [1.7.52] — 2026-05-12 — `curator mcp cleanup-orphans` command (closes A4)
 
 **Headline:** New `curator mcp cleanup-orphans` CLI command finds (and optionally kills) orphaned `curator-mcp.exe` processes — those whose parent MCP client (Claude Desktop, etc.) has crashed or been force-quit without cleanly stopping its MCP server. Closes A4 from the bulletproof-live backlog. Dry-run by default; opt-in to actually kill via `--kill --yes`. Supports `--json` for automation.
