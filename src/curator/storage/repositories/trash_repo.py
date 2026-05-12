@@ -93,7 +93,7 @@ class TrashRepository:
         if actor is not None:
             sql += " AND trashed_by = ?"
             params.append(actor)
-        sql += " ORDER BY trashed_at DESC"
+        sql += " ORDER BY trashed_at DESC, rowid DESC"
         if limit is not None:
             sql += " LIMIT ?"
             params.append(limit)

@@ -173,7 +173,7 @@ class LineageRepository:
         sql = (
             "SELECT * FROM lineage_edges "
             "WHERE confidence >= ? AND confidence < ? "
-            "ORDER BY confidence DESC, detected_at DESC"
+            "ORDER BY confidence DESC, detected_at DESC, rowid DESC"
         )
         params: list = [min_confidence, max_confidence]
         if limit is not None:

@@ -87,7 +87,7 @@ class BundleRepository:
         if bundle_type is not None:
             sql += " WHERE bundle_type = ?"
             params.append(bundle_type)
-        sql += " ORDER BY created_at DESC"
+        sql += " ORDER BY created_at DESC, rowid DESC"
         cursor = self.db.conn().execute(sql, tuple(params))
         return [self._row_to_bundle(row) for row in cursor.fetchall()]
 

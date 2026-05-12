@@ -154,18 +154,18 @@ class SourceRepository:
         return self._row_to_source(row) if row else None
 
     def list_all(self) -> list[SourceConfig]:
-        cursor = self.db.conn().execute("SELECT * FROM sources ORDER BY created_at")
+        cursor = self.db.conn().execute("SELECT * FROM sources ORDER BY created_at, rowid")
         return [self._row_to_source(row) for row in cursor.fetchall()]
 
     def list_enabled(self) -> list[SourceConfig]:
         cursor = self.db.conn().execute(
-            "SELECT * FROM sources WHERE enabled = 1 ORDER BY created_at"
+            "SELECT * FROM sources WHERE enabled = 1 ORDER BY created_at, rowid"
         )
         return [self._row_to_source(row) for row in cursor.fetchall()]
 
     def list_by_type(self, source_type: str) -> list[SourceConfig]:
         cursor = self.db.conn().execute(
-            "SELECT * FROM sources WHERE source_type = ? ORDER BY created_at",
+            "SELECT * FROM sources WHERE source_type = ? ORDER BY created_at, rowid",
             (source_type,),
         )
         return [self._row_to_source(row) for row in cursor.fetchall()]

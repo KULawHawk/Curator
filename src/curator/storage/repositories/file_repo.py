@@ -386,7 +386,7 @@ class FileRepository:
             params.append(source_id)
         if not include_deleted:
             sql += " AND deleted_at IS NULL"
-        sql += " ORDER BY seen_at DESC"
+        sql += " ORDER BY seen_at DESC, rowid DESC"
         if limit is not None:
             sql += " LIMIT ?"
             params.append(limit)
@@ -414,7 +414,7 @@ class FileRepository:
             params.append(source_id)
         if not include_deleted:
             sql += " AND deleted_at IS NULL"
-        sql += " ORDER BY expires_at ASC"
+        sql += " ORDER BY expires_at ASC, rowid ASC"
         cursor = self.db.conn().execute(sql, tuple(params))
         return [self._row_to_entity(row) for row in cursor.fetchall()]
 

@@ -132,7 +132,7 @@ class AuditRepository:
             params.append(entity_id)
 
         where = " AND ".join(clauses) if clauses else "1"
-        sql = f"SELECT * FROM audit_log WHERE {where} ORDER BY occurred_at DESC LIMIT ?"
+        sql = f"SELECT * FROM audit_log WHERE {where} ORDER BY occurred_at DESC, rowid DESC LIMIT ?"
         params.append(limit)
         return sql, tuple(params)
 

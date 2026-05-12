@@ -124,7 +124,7 @@ class ScanJobRepository:
         cursor = self.db.conn().execute(
             """
             SELECT * FROM scan_jobs
-            ORDER BY COALESCE(started_at, completed_at) DESC
+            ORDER BY COALESCE(started_at, completed_at) DESC, rowid DESC
             LIMIT ?
             """,
             (limit,),
@@ -133,7 +133,7 @@ class ScanJobRepository:
 
     def list_by_status(self, status: str) -> list[ScanJob]:
         cursor = self.db.conn().execute(
-            "SELECT * FROM scan_jobs WHERE status = ? ORDER BY started_at DESC",
+            "SELECT * FROM scan_jobs WHERE status = ? ORDER BY started_at DESC, rowid DESC",
             (status,),
         )
         return [self._row_to_job(row) for row in cursor.fetchall()]

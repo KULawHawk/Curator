@@ -177,7 +177,7 @@ class MigrationJobRepository:
             cursor = self.db.conn().execute(
                 """
                 SELECT * FROM migration_jobs
-                ORDER BY COALESCE(started_at, completed_at) DESC
+                ORDER BY COALESCE(started_at, completed_at) DESC, rowid DESC
                 LIMIT ?
                 """,
                 (limit,),
@@ -186,7 +186,7 @@ class MigrationJobRepository:
             cursor = self.db.conn().execute(
                 """
                 SELECT * FROM migration_jobs WHERE status = ?
-                ORDER BY COALESCE(started_at, completed_at) DESC
+                ORDER BY COALESCE(started_at, completed_at) DESC, rowid DESC
                 LIMIT ?
                 """,
                 (status, limit),

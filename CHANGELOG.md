@@ -4,6 +4,141 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.66] — 2026-05-12 — Defensive ORDER BY hardening: secondary rowid on 13 timestamp queries
+
+**Headline:** v1.7.64 fixed ONE non-deterministic `ORDER BY <timestamp>` in `bundle_repo.get_memberships`. An audit of all 7 repository modules surfaced **12 more queries** with the same bug class — single-timestamp ORDER BY clauses (or COALESCE'd timestamps) without a tie-breaker. Any of them could surface flakiness on the OS×Python CI matrix the moment a test happens to insert two rows in the same second. **This ship adds `rowid` as secondary sort across 13 query sites in 7 repositories** — defensive hardening that costs nothing at runtime and eliminates an entire class of latent test flakiness.
+
+### Why this ship matters
+
+v1.7.64 codified the diagnosis: SQLite's `CURRENT_TIMESTAMP` has second-level resolution, so two rows inserted in the same call get identical timestamps. `ORDER BY <timestamp>` alone returns them in implementation-defined order, which varies by:
+  * SQLite version (Win 3.11 = SQLite 3.43, Win 3.13 = SQLite 3.47, etc.)
+  * Page layout / row insertion patterns
+  * Build flags
+
+The OS×Python matrix exposes this divergence: a test that passes on 6 cells may fail on 3 because of tie-breaking. v1.7.64 caught one such test (`test_edit_mode_pre_populates`). A grep of `ORDER BY` across all repositories revealed many other sites with the SAME pattern, all latent flakiness waiting for the right test to trigger them.
+
+v1.7.66 sweeps them all.
+
+### The audit results
+
+13 query sites across 7 repositories had single-timestamp (or COALESCE'd timestamp) ORDER BY without a tie-breaker:
+
+| Repository | Site | Original | Fixed |
+|---|---|---|---|
+| audit_repo.py | L135 | `ORDER BY occurred_at DESC` | `+ , rowid DESC` |
+| bundle_repo.py | L90 | `ORDER BY created_at DESC` | `+ , rowid DESC` |
+| file_repo.py | L389 | `ORDER BY seen_at DESC` | `+ , rowid DESC` |
+| file_repo.py | L417 | `ORDER BY expires_at ASC` | `+ , rowid ASC` |
+| job_repo.py | L127 | `ORDER BY COALESCE(...) DESC` | `+ , rowid DESC` |
+| job_repo.py | L136 | `ORDER BY started_at DESC` | `+ , rowid DESC` |
+| lineage_repo.py | L176 | `ORDER BY confidence DESC, detected_at DESC` | `+ , rowid DESC` |
+| migration_job_repo.py | L180 | `ORDER BY COALESCE(...) DESC` | `+ , rowid DESC` |
+| migration_job_repo.py | L189 | `ORDER BY COALESCE(...) DESC` | `+ , rowid DESC` |
+| source_repo.py | L157 | `ORDER BY created_at` | `+ , rowid` |
+| source_repo.py | L162 | `ORDER BY created_at` | `+ , rowid` |
+| source_repo.py | L168 | `ORDER BY created_at` | `+ , rowid` |
+| trash_repo.py | L96 | `ORDER BY trashed_at DESC` | `+ , rowid DESC` |
+
+Not included (already deterministic without `rowid`):
+  * `file_repo.py L269`: `ORDER BY curator_id` — curator_id is a unique UUID, no ties possible
+  * `migration_job_repo.py L275/399`: `ORDER BY src_path ASC` — src_path is unique within a job
+  * `bundle_repo.py L144`: `ORDER BY added_at, rowid` — already fixed in v1.7.64
+
+### Pattern
+
+For every ORDER BY with a primary key that can tie:
+  * Direction matches the primary key's direction: `DESC` → `, rowid DESC`; `ASC` → `, rowid ASC`
+  * `rowid` is SQLite's automatic row-numbering for any non-`WITHOUT ROWID` table
+  * Monotonic on insertion: matches user-intent order when timestamps tie
+  * Zero performance impact: `rowid` is always available, no index needed
+  * Zero schema change: pure query-level fix
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `src/curator/storage/repositories/audit_repo.py` | +1, -1 | `ORDER BY occurred_at DESC, rowid DESC` |
+| `src/curator/storage/repositories/bundle_repo.py` | +1, -1 | `ORDER BY created_at DESC, rowid DESC` |
+| `src/curator/storage/repositories/file_repo.py` | +2, -2 | seen_at + expires_at hardening |
+| `src/curator/storage/repositories/job_repo.py` | +2, -2 | scan_jobs hardening |
+| `src/curator/storage/repositories/lineage_repo.py` | +1, -1 | confidence + detected_at + rowid |
+| `src/curator/storage/repositories/migration_job_repo.py` | +2, -2 | 2 migration_jobs queries |
+| `src/curator/storage/repositories/source_repo.py` | +3, -3 | 3 sources queries |
+| `src/curator/storage/repositories/trash_repo.py` | +1, -1 | trashed_at hardening |
+| `CHANGELOG.md` | +N | v1.7.66 entry |
+| `docs/releases/v1.7.66.md` | +N | release notes |
+
+**13 SQL statements modified, 7 source files touched, 13 +/- 13 lines.**
+
+### Verification
+
+- **Pattern is purely additive.** Adding a secondary sort key to ORDER BY cannot change the order of results when the primary key is unique. Only changes behavior when primary key ties — and there, deterministic order is the goal.
+- **Targeted regression tests pass**: 53 tests across `test_audit_iter_query.py`, `test_audit_writer.py`, `test_source_repo_immutability.py`, `test_cli_bundles.py` all pass ✅
+- **No new tests added** — this is defensive infrastructure hardening, not feature work
+- **Expected CI result**: 9/9 GREEN, same as v1.7.65
+
+### What this fix does NOT do
+
+- **Doesn't upgrade `CURRENT_TIMESTAMP` to sub-second precision.** SQLite's `CURRENT_TIMESTAMP` is fixed at second resolution; `rowid` fallback is simpler and sufficient.
+- **Doesn't add `ORDER BY rowid` to queries that don't have any sort.** Tests that depend on "natural" SQLite order are still subject to implementation defined behavior — but no such test currently exists.
+- **Doesn't audit non-repository code** for similar patterns. Service-layer code (e.g. `services/audit.py` if it does its own SQL) wasn't audited. Future ship candidate.
+- **Doesn't add a pre-commit lint** for new ORDER BY clauses lacking secondary keys. Would prevent regression but isn't critical given the small SQL surface.
+- **Doesn't fix the Windows live recycle-bin test bug.** Still deferred from v1.7.59.
+- **Doesn't address Node.js 20 deprecation warning.**
+
+### Authoritative-principle catches
+
+**Catch -- v1.7.64 was a single-site fix; v1.7.66 closes the bug class.** The bundle membership bug was one instance of "single-timestamp ORDER BY is non-deterministic." The audit shows 12 more sites with the same vulnerability. Fixing all of them now is cheaper than waiting for the next CI flake.
+
+**Catch -- the OS×Python matrix earned its keep AGAIN.** v1.7.64 surfaced the underlying bug class. Without this fix sweep, future ships would have likely hit other instances of the same flakiness. Defensive hardening, motivated by lessons from a real production-grade matrix.
+
+**Catch -- `rowid` is the canonical SQLite tie-breaker.** Universal across all non-`WITHOUT ROWID` tables. Monotonic on insertion. No schema change required. No performance overhead. Idiomatic and documented.
+
+**Catch -- 3 sites were left intentionally unchanged:**
+  1. `file_repo.py L269: ORDER BY curator_id` — UUIDs are unique, no ties
+  2. `migration_job_repo.py L275: ORDER BY src_path ASC` — src_path unique within job
+  3. `migration_job_repo.py L399: ORDER BY src_path ASC` — same
+  
+  Adding rowid would be harmless but adds noise. Skip when primary key is provably unique.
+
+**Catch -- `lineage_repo.py L176` had TWO existing keys (confidence + detected_at) but still tied.** Pure float `confidence` values can tie at the same precision; identical confidence values fall through to `detected_at` which then ties at the same second. Added `, rowid DESC` as tertiary. The defensive principle is: "any chain of ORDER BY keys that doesn't include a guaranteed-unique column is non-deterministic."
+
+### Lessons captured
+
+**No new lesson codified.** Reinforces:
+  * #66 ("green local pytest does not imply green CI") — eighth ship in this CI-green sub-arc
+  * #67 ("diagnose with logs, not with hypotheses") — audit pattern from v1.7.64's diagnosis
+  * Subordinate lesson: **`ORDER BY <timestamp>` is non-deterministic when timestamps can tie.** Always add `rowid` (or another unique column) as the final sort key.
+  * Subordinate lesson: **single-site bug fixes should consider the bug CLASS.** v1.7.64 fixed one instance; v1.7.66 sweeps the class.
+
+### Limitations
+
+- **No pre-commit lint** to catch new ORDER BY violations
+- **Service-layer SQL not audited** (only `src/curator/storage/repositories/`)
+- **`CURRENT_TIMESTAMP` precision not upgraded** (rowid suffices)
+- **No CI status badge yet beyond what's there**
+- **Node.js 20 deprecation tech debt still pending**
+
+### Cumulative arc state (after v1.7.66)
+
+- **66 ships**, all tagged.
+- **pytest local Windows**: 1807 / 10 / 0 (unchanged this ship)
+- **pytest CI v1.7.65**: expected 9/9 GREEN; v1.7.66 should also be 9/9 GREEN
+- **Coverage local**: 66.96% (unchanged; pure SQL hardening)
+- **CI matrix**: 9 cells. Has been 9/9 GREEN since v1.7.64. v1.7.66 is the third post-green ship.
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed (fully addressed)
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **CI hygiene + post-arc defensive hardening**: 8 ships (v1.7.59–v1.7.66)
+  * v1.7.59–64: arc closure (red → green)
+  * v1.7.65: diagnostic tooling codified
+  * v1.7.66: bug-class sweep (this ship)
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67 (no new this ship; reinforces #66, #67)
+- **Detacher-pattern ships**: 19 (unchanged; targeted fix didn't need full baseline)
+- **Tooling scripts**: `run_pytest_detached.ps1` (v1.7.39), `ci_diag.ps1` (v1.7.65)
+
 ## [1.7.65] — 2026-05-12 — Celebrating the green: scripts/ci_diag.ps1 codifies lesson #67
 
 **Headline:** v1.7.64 closed the 20-ship CI-red arc (all 9 cells GREEN — first fully-green CI run since CI was introduced at v1.7.42). This ship codifies the **diagnostic loop** that made the closure possible. The new `scripts/ci_diag.ps1` helper provides one-command access to the GitHub Actions API: show all 9 cells' status, download logs for failing cells, or print a cross-cell failing-test summary. Lesson #67 ("diagnose with logs, not with hypotheses") explicitly called for this mitigation; this ship delivers it.
