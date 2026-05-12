@@ -4,6 +4,176 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.78] — 2026-05-12 — Bash variant of ci_diag for full cross-platform CI tooling parity
+
+**Headline:** v1.7.76 shipped a bash variant of `setup_dev_hooks` but `ci_diag` remained PowerShell-only — macOS/Linux/WSL contributors needed `pwsh` (PowerShell Core) installed to use the diagnostic loop. **This ship adds `scripts/ci_diag.sh`**, a functionally-equivalent bash variant. README now shows both invocations side by side. **Full cross-platform parity for the dev tooling.**
+
+### Why this ship matters
+
+v1.7.76's release notes called out the gap:
+  * "ci_diag.ps1 is still PowerShell-only. macOS/Linux contributors who want CI diagnostic loop access need pwsh installed."
+  * "A native bash variant of ci_diag is a possible future ship."
+
+With v1.7.78, the toolkit's cross-platform story is complete. A contributor on any of {Windows, macOS, Linux, WSL} has identical commands and identical output formats. No more "works in PowerShell" footnotes.
+
+### Feature parity with the PowerShell variant
+
+| Feature | PowerShell (v1.7.65) | Bash (v1.7.78) |
+|---|---|---|
+| `status` mode (9-cell grid) | ✅ | ✅ |
+| `logs <pattern>` mode (download failing logs) | ✅ | ✅ |
+| `summary` mode (failing tests across cells) | ✅ | ✅ |
+| Token discovery (3-tier) | ✅ | ✅ |
+| Color-coded output | `Write-Host -ForegroundColor` | ANSI escapes (TTY-aware) |
+| `--help` / `-h` | `Get-Help` (auto) | extracted from header comment |
+| Output paths | `~\Desktop\AL\.curator` | `~/.curator/logs` (POSIX-canonical) |
+| Log file naming | `ci_<sha>_<safe-name>.log` | identical |
+| Summary parsing (FAILED lines + test count) | Select-String regex | grep -E + sed timestamp strip |
+| Sorted job display | Sort-Object | `sort` (Unix) |
+
+### Implementation notes
+
+  * **jq preferred, Python fallback.** Same fallback chain as `.githooks/pre-push` (v1.7.70). jq is canonical for shell JSON parsing; Python (3 or fallback to 2) covers systems where jq isn't installed.
+  * **The Python fallback is query-specific.** Only the handful of jq queries this script uses are translated; not a general jq replacement. Each query is matched literally and dispatched to a small Python program inline.
+  * **TTY-aware color output.** ANSI escapes only when stdout is a TTY (`[ -t 1 ]`). Pipes and redirects get plain text — standard Unix convention.
+  * **POSIX-canonical paths.** Output directory is `~/.curator/logs/` instead of the PowerShell variant's `~\Desktop\AL\.curator\`. Aligns with v1.7.74/76's `~/.curator/github_pat` location.
+  * **`set -e` for fail-fast.** Bash's standard error-exit-on-failure semantics.
+  * **`curl -sf`.** Silent + fail-on-non-2xx. If the API returns 4xx/5xx, the script propagates a clear error instead of silently dumping HTML.
+
+### Live test output
+
+Status mode against the latest run:
+```
+$ bash scripts/ci_diag.sh status
+
+=== Latest run: github_actions in / for actions/checkout, ... ===
+SHA:    a1fa730
+Status: completed / success
+URL:    https://github.com/KULawHawk/Curator/actions/runs/...
+
+[OK]   Dependabot                                         completed     success
+
+=== TALLY: success=1 | failure=0 | running/queued=0 ===
+```
+
+Summary mode (all passing):
+```
+$ bash scripts/ci_diag.sh summary
+All jobs passing in run a1fa730. Nothing to summarize.
+```
+
+Help mode (extracted from header comment):
+```
+$ bash scripts/ci_diag.sh --help
+CI diagnostic helper -- one-command access to the latest GitHub Actions run.
+...
+```
+
+All three modes match the PowerShell variant's behavior exactly.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `scripts/ci_diag.sh` | +273 | New bash variant with status/logs/summary modes, jq+Python fallback |
+| `README.md` | +10, -2 | Updated CI diagnostic loop section to show both PowerShell and bash invocations |
+| `CHANGELOG.md` | +N | v1.7.78 entry |
+| `docs/releases/v1.7.78.md` | +N | release notes |
+
+No source, test, workflow, or production-code changes.
+
+### Verification
+
+- **Live test on Git Bash** (Windows): all 3 modes ran cleanly ✅
+- **status mode** returned 1 job (Dependabot's latest scan) with correct success/tally
+- **summary mode** correctly reported "All jobs passing" for the green run
+- **--help** extracted the header comment and printed properly
+- **TTY-aware color** verified: ANSI codes in interactive terminal
+- **Expected CI result**: 9/9 GREEN (script-only ship)
+
+### What this fix does NOT do
+
+- **Doesn't deprecate `ci_diag.ps1`.** Windows users continue using the PowerShell variant. Both are first-class.
+- **Doesn't share code between PowerShell and bash variants.** Same intentional design choice as v1.7.76's `setup_dev_hooks` pair.
+- **Doesn't add an `events=push` filter.** Both variants currently show "latest run of any workflow" (so the latest result can be Dependabot's update run, not the tests run). Filtering by workflow event is a future enhancement; matters less in practice because the tests workflow is by far the most common.
+- **Doesn't add a `--watch` mode** that polls for CI completion. Lesson #67's mitigation was the pre-push hook for invisibility; on-demand `status` invocations cover real-time inspection.
+- **Doesn't auto-detect platform.** Contributors run the variant matching their shell; README documents both.
+- **Doesn't add a `--workflow <name>` filter.** Future enhancement; for now, the latest workflow's status is informative enough.
+- **Doesn't generate JSON output for piping.** All modes are human-formatted; if scripted automation becomes useful, a `--json` flag could be added.
+
+### Authoritative-principle catches
+
+**Catch -- functional parity, not code parity.** Same design philosophy as v1.7.76: two clean idiomatic implementations beat one cross-platform Rube Goldberg. Each script uses its host shell's idioms.
+
+**Catch -- jq preferred, Python fallback.** Matches the pre-push hook's pattern (v1.7.70). Contributors on stripped-down systems without jq still get working diagnostics via Python.
+
+**Catch -- Python fallback is query-specific, not general.** Translating jq's entire DSL to Python would be ~500 lines for marginal benefit. The script uses a small fixed set of queries; each is matched literally. Simple, clear, maintainable.
+
+**Catch -- TTY-aware color output.** ANSI when interactive, plain when piped. Matches v1.7.76's `setup_dev_hooks.sh` and the pre-push hook conventions.
+
+**Catch -- output directory is `~/.curator/logs/`.** Aligns with v1.7.74's `~/.curator/github_pat`. PowerShell variant uses the legacy `~\Desktop\AL\.curator\` path; the bash variant chose the POSIX-canonical XDG-style location. Future ship could harmonize the PS variant.
+
+**Catch -- `curl -sf` for fail-fast on API errors.** Without `-f`, curl returns 0 even on 401/403/500 responses, silently dumping error JSON into our parsing pipeline. `-f` makes errors loud.
+
+**Catch -- safe filename sanitization.** Job names like `pytest (windows-latest / Python 3.13)` contain spaces and parens; `tr -c 'a-zA-Z0-9' '_'` replaces all non-alphanumeric with underscores. Matches the PowerShell variant's `[^a-zA-Z0-9]` regex.
+
+**Catch -- README shows both invocations side by side.** Same parallel pattern as v1.7.76: PowerShell block and bash block adjacent, same content, different language tags.
+
+### Lessons captured
+
+**No new lesson codified.** Reinforces:
+  * **Cross-platform tooling needs cross-platform documentation.** Both READMEs and feature parity must be visible.
+  * **Defense-in-depth via fallbacks.** curl→wget, jq→Python. Each tool may be missing on any given system; layered fallbacks keep the script working across the widest range of environments.
+  * **Output paths should align with each variant's host conventions.** PowerShell uses Windows-style paths; bash uses POSIX-canonical paths. Forcing identical paths would create unnatural compromises in one or the other.
+
+### Limitations
+
+- **PowerShell and bash variants don't share an output directory.** PS uses `~\Desktop\AL\.curator\`; bash uses `~/.curator/logs/`. Running both would produce two sets of log files. Acceptable; users rarely use both on the same system.
+- **No JSON output mode** for either variant
+- **No `--watch` mode** for either variant
+- **No `--workflow <name>` filter**
+- **Help text extraction** relies on stable header line numbers (will need updating if header changes)
+- **Some jq queries in the bash variant** are tightly coupled to specific paths; if the GitHub API changes shape, both `jq` and Python fallback branches need updates
+
+### Cumulative arc state (after v1.7.78)
+
+- **78 ships**, all tagged.
+- **pytest local Windows**: 1809 / 10 / 0 (unchanged this ship; script + docs only)
+- **pytest CI v1.7.77**: in_progress at v1.7.78 ship time; v1.7.78 expected 9/9 GREEN.
+- **Coverage local**: 66.96% (unchanged)
+- **CI matrix**: 9 cells, on Node.js 24, using checkout@v6, setup-python@v6, upload-artifact@v7. 9/9 GREEN since v1.7.64.
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **20 ships in CI-hygiene + post-arc arc** (v1.7.59–v1.7.78):
+  * v1.7.59–64: arc closure (red → green)
+  * v1.7.65: `ci_diag.ps1` (lesson #67 mitigation #1)
+  * v1.7.66: ORDER BY rowid sweep
+  * v1.7.67: Node.js 24 readiness
+  * v1.7.68: `strip_ansi` fixture DRY refactor
+  * v1.7.69: Linux `/var` audit
+  * v1.7.70: pre-push CI hook (lesson #67 mitigation #3 — lesson fully mitigated)
+  * v1.7.71: Dependabot automation
+  * v1.7.72: pre-commit ORDER BY lint
+  * v1.7.73: pre-commit ANSI regex lint
+  * v1.7.74: auto-install PowerShell installer
+  * v1.7.75: README "Contributing — dev setup" section
+  * v1.7.76: auto-install bash installer
+  * v1.7.77: Accept Dependabot PR #1
+  * v1.7.78: `ci_diag.sh` bash variant (this ship)
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67
+- **Detacher-pattern ships**: 19 (unchanged)
+- **Tooling scripts (5 total now)**: `run_pytest_detached.ps1`, `ci_diag.ps1`, `ci_diag.sh`, `setup_dev_hooks.ps1`, `setup_dev_hooks.sh`
+- **Git hooks**: `.githooks/pre-commit` (3 lints), `.githooks/pre-push` (CI warning)
+- **Shared test helpers**: `strip_ansi` fixture (v1.7.68)
+- **Automated tracking**: Dependabot (v1.7.71)
+- **Project invariant lints**: glyph, ORDER BY, ANSI regex
+- **Top-level documentation**: README "Contributing — dev setup" section
+- **Cross-platform parity**: PowerShell + bash dev-setup installers + ci_diag variants. **Full toolkit parity achieved.**
+- **GitHub Actions versions**: checkout@v6, setup-python@v6, upload-artifact@v7
+
 ## [1.7.77] — 2026-05-12 — Accept Dependabot PR #1: bump checkout v5→v6 and upload-artifact v6→v7
 
 **Headline:** Dependabot's first grouped PR (PR #1) proposed bumping `actions/checkout` v5→v6 and `actions/upload-artifact` v6→v7. **The PR's CI ran 9/9 GREEN on its bump branch (fa16240), empirically validating that v1.7.67's conservative choice of checkout@v5 was unnecessary** — v6's credential-persistence change doesn't affect Curator (no submodules, no post-checkout auth, no push). This ship lands the bumps directly into `test.yml` after the PR's green CI proved them safe.

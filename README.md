@@ -108,15 +108,23 @@ Bypass with `git push --no-verify`. The hook is a *signal*, not a *gate*: it nev
 
 ### CI diagnostic loop
 
-`.\scripts\ci_diag.ps1` is the one-command CI loop that codifies lesson #67 mitigation #1:
+`scripts/ci_diag.ps1` (PowerShell) and `scripts/ci_diag.sh` (bash) are functionally-equivalent one-command CI loops codifying lesson #67 mitigation #1:
 
 ```powershell
+# Windows / PowerShell
 .\scripts\ci_diag.ps1 status      # 9-cell grid of the latest run
 .\scripts\ci_diag.ps1 summary     # Failing-test list across all red cells
 .\scripts\ci_diag.ps1 logs <pat>  # Grep logs for a substring
 ```
 
-Token discovery (in order): `$GH_TOKEN`, `$GITHUB_TOKEN`, `~/.curator/github_pat`. The script silently skips if no token is available.
+```bash
+# macOS / Linux / WSL / Git Bash
+./scripts/ci_diag.sh status       # 9-cell grid of the latest run
+./scripts/ci_diag.sh summary      # Failing-test list across all red cells
+./scripts/ci_diag.sh logs <pat>   # Grep logs for a substring
+```
+
+Token discovery (in order): `$GH_TOKEN`, `$GITHUB_TOKEN`, `~/.curator/github_pat`. Both variants silently skip if no token is available.
 
 ### Automated dependency tracking
 
