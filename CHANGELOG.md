@@ -4,6 +4,120 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.56] — 2026-05-12 — metadata_stripper.py test coverage lift (Tier 3)
+
+**Headline:** Writes the first comprehensive test suite for `src/curator/services/metadata_stripper.py`. **Coverage on that module: 24.66% → 94.17% (+69.5 pp).** Total project coverage: 65.03% → **65.89% (+0.86 pp)**. **36 new tests** across 9 test classes covering the three format-specific strippers (image via Pillow, DOCX via zipfile, PDF via pypdf), dispatch logic, directory walks, and the entire `StripReport` aggregate-properties surface. Second weakest module after pii_scanner; closes the second of four Tier 3 coverage targets.
+
+### Why this matters
+
+v1.7.51's coverage baseline showed `metadata_stripper.py` at 24.66% — second weakest after `pii_scanner.py` (which v1.7.55 lifted to 97.94%). Like pii_scanner, **zero existing test files** referenced metadata_stripper by name. The 25% was incidental coverage from other tests transitively importing the module.
+
+This matters because metadata stripping is a **privacy-preserving export feature**. When a file's destination is "shareable" (sent to a client, posted publicly, etc.), embedded metadata is a privacy leak — EXIF GPS in photos, author/company in DOCX, originating-application in PDFs. False negatives = privacy violations. False positives that *modify pixel data* = lossy content corruption. **You want very high test coverage on this file, not low coverage.**
+
+With 36 tests now exercising the strip-and-write paths, the next time someone touches `metadata_stripper.py` they get immediate feedback if they break any of: EXIF removal from JPEGs, PNG text chunk removal, DOCX core/app/custom XML handling, PDF metadata clearing, extension dispatch, directory walks, ICC profile preservation, or error path coverage.
+
+### Coverage breakdown
+
+```
+Before: metadata_stripper.py    173 stmt   118 missed   50 branches   24.66%
+After:  metadata_stripper.py    173 stmt     7 missed   50 branches   94.17%
+Gain:                                    -111                     +69.51 pp
+```
+
+7 statements missed (lines 269-270, 311, 313, 315, 320, 325): pure defensive paths in `_strip_image` for uncommon image formats (TIFF subformats) and a fallback in `_strip_pdf`'s error reporting. Reaching 100% would require constructing files with very specific embedded format quirks for one-line tests — disproportionate effort.
+
+Total project coverage moved from **65.03% (v1.7.55)** to **65.89% (v1.7.56)**. The two test-coverage ships (v1.7.55 + v1.7.56) combined raised total coverage by 2.09 percentage points.
+
+### What's new
+
+**`tests/unit/test_metadata_stripper.py` (+490 lines, new, 36 tests across 9 classes)**
+
+| Class | Count | Covers |
+|---|---|---|
+| `TestStripOutcome` | 1 | Enum value enumeration |
+| `TestStripResult` | 2 | Basic construction, FAILED has no destination |
+| `TestStripReport` | 4 | Empty report, duration computation, mixed-outcome aggregation |
+| `TestStubXMLPayloads` | 4 | The two `_EMPTY_*_XML` constants are valid OOXML |
+| `TestStripImage` | 5 | JPEG EXIF removal, PNG text chunk removal, byte counts, ICC profile keep, JPEG quality kwarg |
+| `TestStripDocx` | 5 | core/app XML replaced with stubs, custom.xml dropped, document.xml preserved, all 4 .docx-family extensions dispatch correctly |
+| `TestStripPdf` | 3 | Metadata removed from PDF, output has no /Author, pages preserved |
+| `TestStripFileDispatch` | 4 | Unknown extension = passthrough, missing source = FAILED, corrupt image = FAILED (no exception escape), case-insensitive extension matching |
+| `TestStripDirectory` | 6 | Recursive walks subdirs, non-recursive skips them, extension filter, invalid-dir error, dst auto-create, timestamps populated |
+| `TestPassthrough` | 2 | Byte-copy preserves content + byte counts |
+
+Total: **36 tests**. All pass in 1.17s (fast — small synthetic fixtures).
+
+### Design choices in the test file
+
+  * **Real binary fixtures, not mocks.** `_make_jpeg_with_exif` uses Pillow's `getexif()` API to construct a properly-structured EXIF block; `_make_minimal_docx` builds a real OOXML zip with valid Content-Types + document.xml; `_make_minimal_pdf` uses pypdf to write a one-page PDF with metadata. This exercises the actual code paths the production code uses.
+  * **`pytest.fixture` for the stripper.** Default-config `MetadataStripper` is needed in most tests; a fixture eliminates the repetition.
+  * **`tmp_path` for all file I/O.** No project-relative paths; no cleanup logic needed.
+  * **Verifies STRIP RESULTS, not just exit code.** Many tests open the output file and check the actual content (e.g. `TestStripDocx::test_drops_custom_xml` confirms `custom.xml` is NOT in the output zip's namelist; `TestStripPdf::test_output_has_no_metadata` re-reads via pypdf and checks `/Author` is absent).
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `tests/unit/test_metadata_stripper.py` | +490 (new) | 36 tests across 9 classes |
+| `CHANGELOG.md` | +N | v1.7.56 entry |
+| `docs/releases/v1.7.56.md` | +N | release notes |
+
+No source code changed. Pure test addition.
+
+### Verification
+
+- **Coverage check on metadata_stripper.py**: 24.66% → **94.17%** (+69.5 pp)
+- **Total project coverage**: 65.03% → **65.89%** (+0.86 pp)
+- **New tests pass**: ✅ 36/36 in 1.17s
+- **Full pytest baseline (via detacher, with --cov)**: ✅ **1746 passed**, 10 skipped, 10 deselected, 0 failed in 272.29s
+  - Compare to v1.7.55: 1710 passed; +36 from new metadata_stripper tests
+  - Zero regression in the existing 1710
+  - Coverage instrumentation noise (~800 ResourceWarnings) unchanged in character
+- **Detacher pattern**: 16th consecutive ship; no MCP wedges
+
+### Authoritative-principle catches
+
+**Catch -- one test had a bug (test_strips_jpeg_exif).** First run: 35/36 passing. My `_make_jpeg_with_exif` fixture passed a bogus `exif_bytes = b"Exif\x00\x00" + b"\x00" * 100` to Pillow's save(). Pillow wrote it, but `_getexif()` returned None on read-back because the bytes weren't real EXIF. Fix: use Pillow's `img.getexif()` API to build a real EXIF block with Make/Model/DateTimeOriginal tags. The stripper's detection logic was correct; my fixture was wrong. (Same lesson as v1.7.55's Google API key test: code verifies tests as much as tests verify code.)
+
+**Catch -- Pillow's PngInfo writes tEXt chunks that the stripper detects via `im.text`.** The PNG fixture uses `PngInfo.add_text()` rather than constructing tEXt bytes manually. This is the documented-supported way to attach text chunks to a PNG; the stripper's detection (`hasattr(im, "text") and im.text`) reads exactly this attribute back.
+
+**Catch -- DOCX fixture doesn't need to be Word-openable.** The stripper operates on the zip container structure (does `docProps/core.xml` exist? does `docProps/app.xml`?). A minimal zip with those entries + a `[Content_Types].xml` + a `word/document.xml` is enough to exercise the strip logic; we don't need Office's full schema compliance.
+
+**Catch -- PDF fixture uses pypdf's `add_metadata()` not direct dictionary access.** pypdf's metadata API is the documented way to attach `/Author`, `/Title`, etc. to a new PDF. Tests then re-read via `PdfReader(...).metadata` to verify the strip removed them. This exercises the same code paths real PDFs would hit.
+
+**Catch -- case-insensitive extension matching test.** Production code uses `src.suffix.lower()` for dispatch. Test verifies that `PHOTO.JPG` dispatches to `_strip_image` (returns STRIPPED), not `_passthrough` (which would return PASSTHROUGH). Real-world impact: users on Windows often have mixed-case extensions from camera exports.
+
+### Lessons captured
+
+**No new lesson codified.** Application of:
+  * #43 ("signal beats absence of signal") — same as v1.7.55
+  * The general principle: privacy-preserving features deserve high test coverage
+  * Reinforces lesson from v1.7.55: real binary fixtures > mocked stdlib internals when the production code does real I/O
+
+### Limitations
+
+- **Doesn't test against real camera/Word/Adobe PDFs.** All fixtures are minimal synthetic files. Real-world EXIF blocks from a DSLR or Word DOCXs from Office 365 might have format quirks the synthetic fixtures don't capture. Future ship could integrate a curated test-asset directory.
+- **No performance tests.** Stripping a 100MB photo isn't benchmarked. Pillow's re-encode time scales linearly with pixel count; should be fine but unverified.
+- **TIFF format edge cases untested.** TIFF supports multiple subformats (LZW, ZIP, JPEG-in-TIFF); tests use 8x8 RGB images which take simple paths. The 7 unmissed statements include some TIFF-specific branches.
+- **No image dimension regression check.** Tests verify the output file opens with Pillow, but don't compare pixel-by-pixel that the visible content is preserved. A future ship could add hash-based content equivalence checks.
+- **DOCX content preservation only checked for body text.** Tests verify `Hello world` is in `word/document.xml`. Styles, headers, footers aren't verified; the implementation copies them verbatim so they should be fine, but isn't tested.
+- **PDF page-content preservation only checked by count.** Tests verify `len(out.pages) == len(in.pages)` but don't compare page content. pypdf's `add_page` copies references; should preserve content but isn't pixel-verified.
+- **Other weak-coverage modules unchanged.** `forecast.py` (29%), `watch.py` (41%) are still candidates for follow-up ships.
+
+### Cumulative arc state (after v1.7.56)
+
+- **56 ships**, all tagged, all baselines green
+- **pytest**: 1746 / 10 / 0 / 0 warnings (default invocation; coverage adds ~800 instrumentation ResourceWarnings)
+- **Coverage**: **65.89%** (was 65.03% at v1.7.55; +0.86 pp from this ship alone; +2.09 pp total over v1.7.51 baseline)
+- **Per-module coverage flagship**: `metadata_stripper.py` now at **94.17%** (was 2nd weakest; now in top 30% by coverage)
+- **CI matrix**: 9 cells (3 OSes × 3 Python versions)
+- **Tier 1 backlog**: A1, A3, C1 closed; A2 has proven workaround
+- **Tier 2 backlog**: E3, C5, D3, A4, C6 closed (fully addressed)
+- **Tier 3 (test coverage)**: pii_scanner (v1.7.55), **metadata_stripper closed this ship**. Remaining: `forecast.py` (29%), `watch.py` (41%)
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#63 (unchanged this ship)
+- **Detacher-pattern ships**: 16 (v1.7.39–v1.7.56; v1.7.50, v1.7.54 had no local pytest run)
+
 ## [1.7.55] — 2026-05-12 — pii_scanner.py test coverage lift (Tier 3)
 
 **Headline:** Writes the first comprehensive test suite for `src/curator/services/pii_scanner.py`. **Coverage on that module: 22.34% → 97.94% (+75.6 pp).** Total project coverage: 63.80% → **65.03% (+1.23 pp)**. **117 new tests** across 11 test classes covering all 17 PII patterns, 6 enrichment parsers, 2 validators (Luhn + IPv4), the `PIIScanner` service class (scan_text/scan_file/scan_directory), and edge cases (Unicode, truncation, non-UTF8 bytes, invalid base64). Closes the first weak-coverage module from the v1.7.51 baseline; second largest single-file coverage jump in the arc's history (after v1.7.47's warnings cleanup).
