@@ -4,6 +4,150 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.72] — 2026-05-12 — Pre-commit ORDER BY lint: codify the v1.7.66 sweep as a regression guard
+
+**Headline:** v1.7.66 swept 13 ORDER BY sites across 7 repositories, adding `, rowid <DIR>` as a deterministic tie-breaker. Without a lint, the next contributor could re-introduce a single-timestamp ORDER BY and reset the bug class clock. **This ship adds a pytest-level lint test (`test_repo_order_by_lint.py`) and wires it into the pre-commit hook**, making the v1.7.66 invariant mandatory at commit time.
+
+### Why this ship matters
+
+The v1.7.66 release notes warned: "No pre-commit lint to catch new ORDER BY violations." v1.7.72 closes that gap. The lint pattern mirrors the v1.7.32 lesson #50 glyph lint:
+
+  * **Pytest-level test** — anyone running `pytest` locally sees the failure
+  * **Pre-commit hook enforcement** — commits that would introduce a violation get blocked, with a clear remediation message
+  * **Bypass available** — `git commit --no-verify` for intentional cases
+
+Future contributors adding a query like `ORDER BY created_at DESC` to a repository module will see:
+
+```
+Found 1 ORDER BY clause(s) in src/curator/storage/repositories/
+without a deterministic tie-breaker:
+
+  src/curator/storage/repositories/foo_repo.py:L42: sql += " ORDER BY created_at DESC"
+
+Fix: append `, rowid <DIR>` to the ORDER BY clause (DIR matches the primary key's direction)...
+```
+
+The error message includes:
+  * **File and line number** of each violation
+  * **Concrete fix examples** for the common patterns (DESC, ASC, multi-key)
+  * **Exemption mechanism** for documented-unique columns
+  * **Pointer to v1.7.66 release notes** explaining why the rule exists
+
+### The lint logic
+
+```python
+for py_path in repos_dir.rglob("*.py"):
+    for line_num, line in enumerate(lines, start=1):
+        if not ORDER_BY_PATTERN.search(line):
+            continue
+        if stripped.startswith("#"):
+            continue  # comment-only line, skip
+        # Build a 5-line window (current + next 4) for multi-line SQL.
+        window = "\n".join(lines[line_num - 1 : line_num + 5])
+        has_rowid = bool(re.search(r"\browid\b", window))
+        has_known_unique = any(
+            re.search(rf"\b{col}\b", window) for col in KNOWN_UNIQUE_COLUMNS
+        )
+        has_exemption = "order-by-lint:" in window
+        if not (has_rowid or has_known_unique or has_exemption):
+            violations.append(...)
+```
+
+Key design choices:
+  * **5-line window** — captures multi-line SQL strings like the `migration_job_repo.py` `""" SELECT ... ORDER BY ... LIMIT ? """` pattern. The `rowid` (or other signal) only needs to appear somewhere in that window.
+  * **`KNOWN_UNIQUE_COLUMNS` allowlist** — matches v1.7.66's audit decisions: `curator_id` (UUID, globally unique) and `src_path` (unique within a migration job). Future-extensible by editing the set in the test file.
+  * **Inline exemption** via `# order-by-lint: <reason>` comment — escape hatch for legitimate cases the allowlist doesn't cover (e.g. a new schema with a documented-unique column the contributor doesn't want to add to the global allowlist).
+  * **Skip pure-comment lines** — a Python comment containing "ORDER BY" as documentation isn't a SQL string.
+  * **Skip `__init__.py`** — reduces false-positive surface; no real SQL there.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `tests/unit/test_repo_order_by_lint.py` | +130 | New lint test with detailed docstring + remediation message |
+| `.githooks/pre-commit` | +12, -8 | Add the new lint to the hook's pytest invocation; update header comment + failure message |
+| `CHANGELOG.md` | +N | v1.7.72 entry |
+| `docs/releases/v1.7.72.md` | +N | release notes |
+
+No source, workflow, or production-code changes.
+
+### Verification
+
+- **Lint passes against current state**: `pytest tests/unit/test_repo_order_by_lint.py` → 1 passed in 0.59s ✅. v1.7.66's sweep is correctly recognized as compliant.
+- **Hook ran on this commit** (via `git config core.hooksPath .githooks`): both lints executed, both passed, commit allowed.
+- **Expected CI result**: 9/9 GREEN. The lint is purely additive; it only fails on new violations.
+
+### What this fix does NOT do
+
+- **Doesn't add a lint for inline ANSI regex in test files.** That's a separate ship; the pattern is analogous but the scope differs (test files vs. repository SQL).
+- **Doesn't enforce ORDER BY tie-breakers in non-repository code** (e.g. service-layer ad-hoc SQL, if any exists). Scope intentional; the lint matches the v1.7.66 audit boundary.
+- **Doesn't add a Windows-native PowerShell variant of the lint.** Python is sufficient and runs everywhere pytest does.
+- **Doesn't auto-fix violations.** The lint reports; the contributor fixes. Standard pre-commit hygiene.
+- **Doesn't scan migration SQL files** under `src/curator/storage/migrations/` (if any). Schema migrations don't have ORDER BY tie-breaking concerns.
+- **Doesn't update README** with the new lint rule. The error message is self-documenting; future doc ship may consolidate.
+
+### Authoritative-principle catches
+
+**Catch -- mirrors the v1.7.32 lesson #50 lint pattern exactly.** Same file structure (`test_<X>_lint.py`), same pre-commit hook invocation pattern, same error message style. New contributors who've seen the glyph lint will immediately recognize this lint.
+
+**Catch -- 5-line window captures multi-line SQL.** A naive single-line check would false-positive on multi-line SQL strings where ORDER BY is on one line and `rowid` is on the next. The window approach matches how Python SQL strings are typically formatted.
+
+**Catch -- `KNOWN_UNIQUE_COLUMNS` is a set, not a hardcoded list.** Future expansion (e.g. if a new repo adds `ORDER BY hash_sha256` where the hash is content-addressed and unique) is a one-line edit to the test file.
+
+**Catch -- exemption mechanism uses an inline comment, not a separate config.** Following the convention of `# noqa:` for ruff/flake8, `# type: ignore` for mypy, etc. The exemption travels with the code.
+
+**Catch -- exemption uses `order-by-lint:` namespace.** Specific to this lint; doesn't conflict with other inline comments. If future lints are added, they can use their own namespace (e.g. `# ansi-lint: ok`).
+
+**Catch -- the lint test name itself documents the rule.** `test_every_order_by_has_deterministic_tie_breaker` is self-explanatory in pytest output. Contrast with a generic `test_lint_repos` which would require reading the body to understand.
+
+**Catch -- two passes per commit, not one combined pass.** The hook invokes pytest with two test node IDs in one command. pytest runs both, and the hook checks the combined exit code. Faster than two separate pytest invocations (one process startup, not two).
+
+### Lessons captured
+
+**No new lesson codified.** Reinforces:
+  * **Pytest-level lints + pre-commit hooks make project invariants mandatory.** The combination prevents regressions even when contributors skip running pytest manually.
+  * **Defensive sweeps (v1.7.66) pair naturally with regression lints (v1.7.72).** First sweep the existing violations; then prevent future ones from being introduced.
+  * **Error messages should include the fix, not just the violation.** Each lint failure message includes concrete remediation examples and a pointer to the originating ship's release notes.
+
+### Limitations
+
+- **No inline ANSI regex lint yet** (separate future ship)
+- **No README documentation** for the new lint rule (self-documenting error message suffices for now)
+- **No auto-fix** capability (manual remediation only)
+- **Pre-commit hook adds ~1-2 seconds to commit time** (running 2 lints instead of 1; still fast)
+- **Doesn't catch ORDER BY in service-layer or migration SQL** (scope intentional)
+- **`KNOWN_UNIQUE_COLUMNS` is hardcoded in the test** (consider extracting to a project-level constant if it grows beyond 5-10 entries)
+
+### Cumulative arc state (after v1.7.72)
+
+- **72 ships**, all tagged.
+- **pytest local Windows**: 1808 / 10 / 0 (+1 from new lint test; was 1807 / 10 / 0)
+- **pytest CI v1.7.71**: in_progress at v1.7.72 ship time; v1.7.72 expected 9/9 GREEN.
+- **Coverage local**: 66.96% (unchanged; new test exercises path scanning, not production code)
+- **CI matrix**: 9 cells, on Node.js 24 since v1.7.67, watched by Dependabot since v1.7.71. 9/9 GREEN since v1.7.64.
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **CI hygiene + post-arc hardening + modernization + refactor + audit + hook + automation + lint**: 14 ships (v1.7.59–v1.7.72)
+  * v1.7.59–64: arc closure (red → green)
+  * v1.7.65: diagnostic tooling codified (lesson #67 mitigation #1)
+  * v1.7.66: bug-class sweep (ORDER BY rowid hardening)
+  * v1.7.67: Node.js 24 modernization
+  * v1.7.68: DRY refactor (strip_ansi fixture)
+  * v1.7.69: Linux `/var` audit (mirrors v1.7.63)
+  * v1.7.70: pre-push CI verification hook (lesson #67 mitigation #3 — lesson fully mitigated)
+  * v1.7.71: Dependabot automation
+  * v1.7.72: Pre-commit ORDER BY regression lint (this ship)
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67 (no new this ship; reinforces #50/#66/#67's enforcement patterns)
+- **Detacher-pattern ships**: 19 (unchanged)
+- **Tooling scripts**: `run_pytest_detached.ps1` (v1.7.39), `ci_diag.ps1` (v1.7.65)
+- **Git hooks**: `.githooks/pre-commit` (v1.7.34 lesson #50 lint + v1.7.72 ORDER BY lint), `.githooks/pre-push` (v1.7.70 lesson #67 CI warning)
+- **Shared test helpers**: `strip_ansi` fixture (v1.7.68)
+- **Automated tracking**: Dependabot (v1.7.71)
+- **Project invariant lints**: glyph lint (v1.7.32/34), ORDER BY lint (v1.7.72)
+
 ## [1.7.71] — 2026-05-12 — Dependabot config: automated GitHub Actions version tracking
 
 **Headline:** v1.7.67 manually bumped 3 GitHub Actions to Node.js 24 versions — a process that required research (which v5/v6 actually runs Node 24?), web searches, and 3 weeks of buffer before GitHub's forcing date. **This ship configures Dependabot to watch our GitHub Actions versions automatically**, opening a grouped weekly PR whenever any action publishes a new version. Future deprecation cycles get detected within days, not 8 months.
