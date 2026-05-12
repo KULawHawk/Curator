@@ -4,6 +4,139 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.68] — 2026-05-12 — Hoist inline ANSI-strip to shared `strip_ansi` fixture in conftest.py
+
+**Headline:** v1.7.62 fixed the Rich/Typer help-output assertion problem by inlining the same ANSI-strip regex in 3 test files. That triplication has been latent technical debt ever since. This ship hoists the pattern into a single shared `strip_ansi` pytest fixture in `tests/conftest.py`, eliminating the duplicated regex and `import re` lines from each test file. **Pure refactor: zero behavior change, 100% test pass parity.**
+
+### Why this ship matters
+
+v1.7.62 was a rush-fix during the CI-red arc. Each test file got its own:
+```python
+import re
+output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+```
+
+Three identical inline patterns are:
+  * **DRY-violating** — future help-output tests would re-add the same pattern by default
+  * **Maintenance hazard** — if Rich changes ANSI emission semantics, 3 files need patching
+  * **Discoverable for new contributors** — the pattern is buried in test methods, not signaled as a project-level helper
+
+This ship adds `strip_ansi` as a pytest fixture that returns a callable. Tests gain a parameter and lose the `import re` + regex line:
+
+```python
+# Before
+def test_help_lists_options(self, runner, db_path):
+    result = runner.invoke(app, ["--help"])
+    import re
+    output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert "--apply" in output
+
+# After
+def test_help_lists_options(self, runner, db_path, strip_ansi):
+    result = runner.invoke(app, ["--help"])
+    output = strip_ansi(result.output)
+    assert "--apply" in output
+```
+
+### Fixture design
+
+```python
+_ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
+
+@pytest.fixture
+def strip_ansi():
+    def _strip(text: str) -> str:
+        return _ANSI_ESCAPE_PATTERN.sub("", text)
+    return _strip
+```
+
+  * **Module-level compiled pattern** — compiled once at conftest import time, not per-call
+  * **Fixture returns callable** — tests use it like a regular function: `strip_ansi(result.output)`. No method-on-fixture awkwardness.
+  * **Closure pattern** — the inner `_strip` captures the compiled pattern; standard Python idiom.
+  * **`re` import added to conftest.py top imports** — idiomatic Python, not `__import__("re")` hack.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `tests/conftest.py` | +43, -1 | Add `re` import, compiled pattern, `strip_ansi` fixture + docstring block |
+| `tests/integration/test_cli_cleanup_duplicates.py` | +4, -7 | Replace inline regex with fixture parameter; signature gains `strip_ansi` |
+| `tests/integration/test_cli_migrate.py` | +3, -6 | Same |
+| `tests/integration/test_organize_mb_enrichment.py` | +3, -6 | Same |
+| `CHANGELOG.md` | +N | v1.7.68 entry |
+| `docs/releases/v1.7.68.md` | +N | release notes |
+
+**Net change:** − 9 lines of inline duplication, + 43 lines of well-documented infrastructure (with usage example in conftest.py docstring).
+
+### Verification
+
+- **Targeted regression check**: 3 affected tests pass individually ✅
+- **Broader regression check**: 55 tests in `test_cli_cleanup_duplicates.py` + `test_cli_migrate.py` + `test_cli_bundles.py` pass (1 unrelated skip for PyDrive2 environmental check) ✅
+- **conftest.py loads cleanly**: pytest discovery succeeds; no import errors
+- **Expected CI result**: 9/9 GREEN (no behavior change — the new fixture produces identical output to the inlined regex)
+
+### What this fix does NOT do
+
+- **Doesn't add similar fixtures for other duplicated patterns.** A grep for `import re` inside other test methods might reveal more candidates (e.g. UUID stripping, path normalization). Not done in this ship to keep scope focused.
+- **Doesn't expose `strip_ansi` as a module-level helper.** Tests use it via fixture injection only. If a non-fixture context ever needs it (e.g. a parametrize decorator), the fixture would need to be lifted again.
+- **Doesn't add a unit test for `strip_ansi` itself.** The function is trivially correct (4-token regex, well-known pattern). A test would test pytest's fixture machinery, not the function.
+- **Doesn't update the Linux `/var` audit.** Still pending.
+- **Doesn't add a pre-commit lint** for new inline `re.sub(r"\x1b\[...")` patterns to prevent regression.
+- **Doesn't audit other test directories** (perf/, property/) for similar duplication patterns.
+
+### Authoritative-principle catches
+
+**Catch -- rush-fix DRY violations age into permanent technical debt.** v1.7.62 was the right ship for the right reason (close the CI-red arc), but it created 3 inline regex patterns that would have lived forever without a deliberate hoist ship. "Rush-fix done, refactor later" only works if there's an actual "later" with bandwidth.
+
+**Catch -- pytest fixture is the right abstraction, not a module-level function.** A module-level `strip_ansi` would require `from tests.conftest import strip_ansi`, which is brittle without an `__init__.py` at the tests root (and adding one would change pytest's discovery semantics). Fixture injection works regardless of import topology.
+
+**Catch -- compiled pattern is at module level, not inside fixture body.** Compiling the pattern inside `_strip` would re-compile on every call. Module level means compile-once. Tests that call `strip_ansi(...)` thousands of times pay the regex-compile cost once.
+
+**Catch -- fixture returns callable, not strips-then-returns-result.** This is the canonical pattern for parameterized helpers: `make_file(name, content)` returns a Path; `strip_ansi(text)` returns stripped text. Tests apply the callable wherever they need it, not just once per test.
+
+**Catch -- two-step refactor: add then remove.** The fixture is added in conftest.py BEFORE removing the inline regex in the 3 test files. Tests pass at every intermediate state. Standard refactor discipline.
+
+**Catch -- one of the 3 tests didn't use the `runner` fixture.** `test_help_lists_enrich_mb` instantiates `CliRunner()` inline (it took `tmp_path` only). Adding `strip_ansi` to its signature is unaffected by that choice. Different test files have different conventions; the fixture works for both.
+
+### Lessons captured
+
+**No new lesson codified.** Reinforces:
+  * **Hoist duplicated patterns to shared helpers when they appear in 3+ places.** This is general software engineering hygiene; conftest.py is the right home for cross-test helpers in pytest.
+  * **Schedule the refactor ship after the rush-fix ship that introduced the duplication.** v1.7.62 → v1.7.68 is 6 ships later, but it WAS scheduled (was in the post-arc backlog).
+  * **Pytest fixtures are the right abstraction for cross-test reusable helpers.** Better than module-level functions because they sidestep import topology issues.
+
+### Limitations
+
+- **No pre-commit lint** to catch new inline `re.sub(r"\x1b\[...")` patterns
+- **No audit of `perf/` or `property/` test directories** for similar duplication
+- **No unit test for `strip_ansi`** (trivial function, not worth the overhead)
+- **Single-purpose fixture**; doesn't handle other escape codes (e.g. cursor movement `\x1b[2J`) since none currently appear in Curator's Rich output
+- **Node.js 24 modernization complete** but other tech debt remains (CI status badge timing, dependabot config, OIDC migration)
+
+### Cumulative arc state (after v1.7.68)
+
+- **68 ships**, all tagged.
+- **pytest local Windows**: 1807 / 10 / 0 (unchanged this ship; pure refactor)
+- **pytest CI v1.7.67**: 9/9 GREEN — fourth consecutive all-green run.
+- **pytest CI v1.7.68 expected**: 9/9 GREEN.
+- **Coverage local**: 66.96% (unchanged)
+- **CI matrix**: 9 cells. Running on Node.js 24 since v1.7.67. Has been 9/9 GREEN since v1.7.64.
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed (fully addressed)
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **CI hygiene + post-arc hardening + modernization + refactor**: 10 ships (v1.7.59–v1.7.68)
+  * v1.7.59–64: arc closure (red → green)
+  * v1.7.65: diagnostic tooling codified
+  * v1.7.66: bug-class sweep (ORDER BY rowid hardening)
+  * v1.7.67: Node.js 24 modernization
+  * v1.7.68: DRY refactor (this ship)
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67 (no new this ship)
+- **Detacher-pattern ships**: 19 (unchanged; small refactor)
+- **Tooling scripts**: `run_pytest_detached.ps1` (v1.7.39), `ci_diag.ps1` (v1.7.65)
+- **Shared test helpers**: `strip_ansi` fixture (v1.7.68)
+
 ## [1.7.67] — 2026-05-12 — GitHub Actions Node.js 24 readiness: bump checkout/setup-python/upload-artifact
 
 **Headline:** GitHub deprecated Node.js 20 on 2025-09-19 and will force Node.js 24 by default on **2026-06-02 — just 3 weeks away**. Node.js 20 will be removed entirely from runners on 2026-09-16. Every CI run from v1.7.42 onward has emitted a deprecation warning on every job (`Node.js 20 actions are deprecated. The following actions are running on Node.js 20...`). This ship bumps all three GitHub Actions used by the workflow to versions that run natively on Node.js 24, eliminating the warning and locking in compatibility through the foreseeable future.

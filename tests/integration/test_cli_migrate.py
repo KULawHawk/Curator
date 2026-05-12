@@ -104,16 +104,14 @@ def test_migrate_command_listed_in_help(runner):
     assert "migrate" in result.stdout
 
 
-def test_migrate_help_shows_phase_1_note(runner):
+def test_migrate_help_shows_phase_1_note(runner, strip_ansi):
     result = runner.invoke(app, ["migrate", "--help"])
     assert result.exit_code == 0
     # v1.7.62: on POSIX CI, Rich/Typer writes help output via a Console
     # that goes to a stream CliRunner doesn't capture in `result.stdout`
     # (likely stderr or a separate file descriptor). Use `result.output`
-    # (combined) and strip ANSI codes so the substring assertion is
-    # robust against Rich's formatting choices.
-    import re
-    output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    # (combined) and strip ANSI codes via the v1.7.68 shared fixture.
+    output = strip_ansi(result.output)
     # Phase 1 docstring + the "--apply" gate note appear
     assert "Phase 1" in output or "phase 1" in output.lower()
     assert "--apply" in output

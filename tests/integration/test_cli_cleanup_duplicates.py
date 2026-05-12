@@ -48,16 +48,13 @@ class TestCleanupDuplicatesHelp:
         assert result.exit_code == 0
         assert "duplicates" in result.stdout
 
-    def test_duplicates_help_lists_strategies(self, runner, db_path):
+    def test_duplicates_help_lists_strategies(self, runner, db_path, strip_ansi):
         result = runner.invoke(
             app, ["--db", str(db_path), "cleanup", "duplicates", "--help"],
         )
         assert result.exit_code == 0
-        # v1.7.62: Rich/Typer help output may go to stderr or contain ANSI
-        # codes that break substring matching on POSIX CI. Use combined
-        # output with ANSI stripped.
-        import re
-        output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        # v1.7.68: ANSI strip via shared fixture (hoisted from v1.7.62 inline regex).
+        output = strip_ansi(result.output)
         for s in ("shortest_path", "longest_path", "oldest", "newest"):
             assert s in output
         assert "--keep-under" in output

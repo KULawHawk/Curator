@@ -24,6 +24,7 @@ Conventions:
 from __future__ import annotations
 
 import dataclasses
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator
@@ -259,3 +260,44 @@ def cli_db(tmp_path: Path) -> Path:
     db_dir = tmp_path / "cli_db"
     db_dir.mkdir(parents=True, exist_ok=True)
     return db_dir / "cli_test.db"
+
+
+# v1.7.68: ANSI escape stripping helper.
+#
+# Rich/Typer emits ANSI color codes in help output by default, and on
+# POSIX CI those codes can split substring matches across escape sequences
+# (e.g. ``--apply`` becomes ``--\x1b[36mapply\x1b[0m`` and a naive
+# ``"--apply" in output`` assertion misses it). NO_COLOR=1 helps but
+# doesn't disable all colorization paths -- some Rich tables still emit
+# ANSI for table-wrapping decoration even with colors off.
+#
+# v1.7.62 inlined the regex in 3 test files; v1.7.68 hoists it here as
+# a shared pytest fixture. Test usage:
+#
+#     def test_help_lists_options(self, runner, strip_ansi):
+#         result = runner.invoke(app, ["--help"])
+#         output = strip_ansi(result.output)
+#         assert "--apply" in output
+#
+# The fixture returns a callable so tests can apply it to multiple
+# strings (e.g. result.stdout AND result.stderr) without re-importing
+# the pattern. Compiled once per test session via the closure.
+
+_ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
+
+
+@pytest.fixture
+def strip_ansi():
+    """Return a callable that strips ANSI color/escape codes from text.
+
+    Use in CLI tests where Rich/Typer help output may contain ANSI
+    escapes that break substring matching across platforms.
+
+    Example:
+        def test_help(self, runner, strip_ansi):
+            result = runner.invoke(app, ["--help"])
+            assert "--apply" in strip_ansi(result.output)
+    """
+    def _strip(text: str) -> str:
+        return _ANSI_ESCAPE_PATTERN.sub("", text)
+    return _strip

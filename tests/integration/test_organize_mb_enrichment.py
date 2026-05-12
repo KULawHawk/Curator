@@ -264,7 +264,7 @@ class TestOrganizePlanMBEnrichment:
 
 
 class TestEnrichMbCliValidation:
-    def test_help_lists_enrich_mb(self, tmp_path):
+    def test_help_lists_enrich_mb(self, tmp_path, strip_ansi):
         from typer.testing import CliRunner
         from curator.cli.main import app
         runner = CliRunner()
@@ -272,11 +272,8 @@ class TestEnrichMbCliValidation:
             app, ["--db", str(tmp_path / "x.db"), "organize", "--help"],
         )
         assert result.exit_code == 0
-        # v1.7.62: Rich/Typer help output may go to stderr or contain ANSI
-        # codes that break substring matching on POSIX CI. Use combined
-        # output with ANSI stripped.
-        import re
-        output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        # v1.7.68: ANSI strip via shared fixture (hoisted from v1.7.62 inline regex).
+        output = strip_ansi(result.output)
         assert "--enrich-mb" in output
         assert "MusicBrainz" in output
 
