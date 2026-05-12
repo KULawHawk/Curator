@@ -4,6 +4,98 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.41] — 2026-05-11 — One-shot dev environment setup script
+
+**Headline:** New `scripts/setup_dev_env.py` takes a fresh clone to a working dev install + smoke-tested baseline in one command. Three profiles (minimal / standard / full) cover most contributor needs; `--dry-run`, `--force`, and `--no-smoke` flags handle edge cases. Closes the dev-onboarding friction and codifies what was previously tribal knowledge (correct Python version, right extras to install, how to verify the install).
+
+### Why this matters
+
+The manual setup steps (check Python >= 3.11, create venv, activate, `pip install -e ".[all]"`, run pytest to confirm) are common knowledge but easy to fumble. New contributors -- or future-me on a fresh machine -- should get a green smoke test in one command, with clear errors if something's wrong with the environment. v1.7.41 codifies the steps into a small, well-tested Python script.
+
+Design choice: pure Python rather than a `.cmd` or `.ps1` script. This keeps the helpers (`check_python_version`, `find_project_root`, `venv_python_path`) importable and unit-testable, lets the same code run on Windows + POSIX (relevant if Curator goes cross-platform), and avoids the bash/cmd quoting pitfalls.
+
+### What's new
+
+**`scripts/setup_dev_env.py` (+325 lines, new)**
+
+Five-step orchestration with clear `[N/5]` markers:
+
+| Step | What | Failure exit |
+|---|---|---|
+| 1 | Python version check (`>= 3.11`) | 2 |
+| 2 | Project root resolution (walk up to 4 levels looking for pyproject.toml) | 3 |
+| 3 | Venv creation (`python -m venv .venv`); skipped if exists unless `--force` | 4 |
+| 4 | `pip install -e ".[<profile>]"` using the venv's pip | 5 |
+| 5 | Smoke test (`pytest tests/unit --collect-only -q`); skipped on `--no-smoke` | warn-only (install succeeded) |
+
+Profile mapping:
+
+| `--profile` | Extras |
+|---|---|
+| `minimal` | `[dev]` (just pytest + ruff + mypy; ~6 packages) |
+| `standard` | `[dev,beta,organize]` (most dev needs without GUI; ~20 packages) |
+| `full` | `[all]` (everything; ~40+ packages including GUI, MCP, cloud, Windows-specific) |
+
+Defaults to `full` because most Curator dev sessions need GUI + MCP for testing the GUI dialogs and MCP server. Tested via `--dry-run` for each profile.
+
+Cross-platform venv binary resolution: `.venv\Scripts\python.exe` on Windows, `.venv/bin/python` elsewhere. Curator is Windows-first today, but the script doesn't gate on platform.
+
+**`tests/unit/test_setup_dev_env.py` (+250 lines, new, 20 tests)**
+
+Focused on pure helpers + orchestration via subprocess:
+
+  * `check_python_version` (2): passes on current interpreter, MIN_PYTHON constant matches pyproject
+  * `find_project_root` (4): from script dir, from repo root, from outside-project tmp_path (None), deep nested (None, 4-level cap)
+  * `venv_python_path` + `venv_exists` (3): cross-platform path resolution; negative when missing; positive when binary present
+  * `PROFILES` mapping (4): three profiles exist, minimal=dev, standard=dev+beta+organize, full=all
+  * `main()` orchestration via subprocess + `--dry-run` (7): --help works, each profile dry-runs cleanly, default is 'full', unknown profile rejected by argparse, --no-smoke surfaces SKIPPED
+
+The side-effectful steps (`create_venv`, `install_curator`, `run_smoke_test`) aren't unit-tested -- they'd take 30+ seconds each just verifying that `subprocess.run()` works. Integration testing happens manually when a developer runs the script.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `scripts/setup_dev_env.py` | +325 (new) | Five-step setup orchestration |
+| `tests/unit/test_setup_dev_env.py` | +250 (new) | 20 helper + orchestration tests |
+| `CHANGELOG.md` | +N | v1.7.41 entry |
+| `docs/releases/v1.7.41.md` | +N | release notes |
+
+### Verification
+
+- **setup-script tests**: ✅ 20/20 pass in 1.41s (`tests/unit/test_setup_dev_env.py`)
+- **Dry-run smoke**: all three profiles (minimal/standard/full) print correct pip-install commands; default is `full`; `--no-smoke` surfaces SKIPPED marker; `--help` lists all options
+- **Full pytest baseline (via detacher)**: ✅ **1549 passed**, 9 skipped, 9 deselected, 0 failed in 340.78s (was 1529 at v1.7.40; +20 new tests, all passing)
+- **Flaky test**: `test_abort_during_run_marks_cancelled` (in `tests/unit/test_migration_phase2.py`) failed in the first baseline run but passed in isolation (1.90s) and passed in the second baseline run. Confirmed pre-existing threading flake, not a v1.7.41 regression. Added to limitations below.
+- **Detacher pattern**: fourth consecutive ship using `scripts/run_pytest_detached.ps1` -- pytest survived an MCP wedge mid-run (caused by my own poll call holding the MCP for 120s via Start-Sleep). The detacher kept the worker alive while MCP recovered; total runtime was elevated (340s vs usual ~175s) but the test run completed successfully. **Workflow refinement noted in lessons** -- poll calls themselves should be short (<60s) to avoid the MCP-call-holds-MCP wedge mode.
+- **Lesson #50 lint**: still passing on every commit
+
+### Authoritative-principle catches
+
+**Catch -- script-as-module pattern for testing.** Initially the script's helpers were tested via subprocess only (slow, opaque on failure). Refactored to make every pure function importable: tests use `importlib.util.spec_from_file_location` to load `setup_dev_env.py` as a module, then call its helpers directly. Subprocess tests are reserved for end-to-end orchestration via `--dry-run`. Fast (1.41s for 20 tests) and gives clean assertion failures.
+
+**Catch -- MCP wedge mid-poll observed.** A new failure mode for the detacher pattern: when my polling MCP call itself holds the MCP for ~120s (via `Start-Sleep 120` inside the call), MCP's internal queue can still wedge. The detached pytest keeps running, but my next poll call hits the 4-min ceiling. Recovery: just wait a few minutes and MCP unwedges. Lesson #60 captured below.
+
+### Lessons captured
+
+* **#60: Polling MCP calls themselves should be short (<60s).** Even with detached worker spawns (lesson #59), individual MCP tool calls that hold open for > ~2 min can wedge the MCP server. The detached worker keeps running, but subsequent tool calls queue behind the wedged one. Workflow rule: poll calls should sleep <= 60s, check the sentinel + log, and return. Multiple short poll calls beat one long one for keeping MCP responsive.
+
+### Limitations
+
+- **Smoke test is collect-only.** The smoke phase runs `pytest --collect-only -q` rather than a real test execution. This catches missing imports + obviously broken tests but not subtle install issues (e.g., a corrupt sqlite binary that loads but crashes on first query). Full `pytest tests/` should be the developer's first real check after running the script.
+- **No venv-deletion on `--force`.** `--force` just lets `python -m venv` overwrite scripts; it doesn't `rm -rf .venv` first. Users who truly want a clean slate need to remove `.venv` manually before running with `--force`. Documented inline in the script.
+- **Profile `standard` doesn't include GUI deps.** A contributor running `--profile standard` and then trying to work on GUI tests will hit `ModuleNotFoundError: PySide6`. The profile names are a tradeoff between speed and completeness; `full` is the safer default and is what the script picks if no profile is specified.
+- **Flaky migration test.** `test_abort_during_run_marks_cancelled` in `tests/unit/test_migration_phase2.py` is a threading-timing intermittent: passes in isolation, occasionally fails in the full baseline. Not introduced by v1.7.41; pre-existing. Worth investigating as a separate hardening ship.
+- **No `uv` integration.** The script uses stdlib `venv` + `pip`. Curator's stack doesn't currently use `uv`; if/when it does, a parallel `setup_dev_env.py --uv` mode could speed installs significantly. Not in scope here.
+
+### Cumulative arc state (after v1.7.41)
+
+- **41 ships**, all tagged, all baselines green
+- **pytest**: 1549 / 9 / 0 (+20 from v1.7.40)
+- **Workflow scripts**: 2 (`run_pytest_detached.ps1`, `setup_dev_env.py`) -- second one of these, completing the dev-onboarding loop
+- **Lessons captured**: #46–#60 (+1 this ship)
+- **Detacher-pattern ships**: 3 (v1.7.39 + v1.7.40 + v1.7.41) -- one MCP wedge encountered + recovered automatically via the detacher
+
 ## [1.7.40] — 2026-05-11 — GUI source-edit dialog (closes v1.7.39 limitation 1)
 
 **Headline:** Right-click a row in the Sources tab → **Properties...** now opens `SourceAddDialog` in edit mode. Users can change `share_visibility`, `display_name`, `enabled`, and any plugin config field on an existing source via the GUI — no more CLI fallback. The class supports both add + edit modes via a single optional `editing_source` constructor parameter (DRY).
