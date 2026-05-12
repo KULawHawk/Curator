@@ -105,7 +105,7 @@ jobs:
     steps:
       - name: Checkout
         # v1.7.67: bumped from @v4 (Node 20, deprecated) to @v5 (Node 24).
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Python ${{ matrix.python-version }}
         # v1.7.67: bumped from @v5 (Node 20, deprecated) to @v6 (Node 24).
@@ -157,7 +157,7 @@ jobs:
         # v1.7.67: bumped from @v4 (Node 20, deprecated) to @v6 (Node 24).
         # @v5 had only preliminary Node 24 support; @v6 is the first version
         # that runs on Node 24 by default.
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.os }}-py${{ matrix.python-version }}
           path: coverage.xml
