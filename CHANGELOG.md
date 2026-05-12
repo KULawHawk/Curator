@@ -4,6 +4,163 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.74] — 2026-05-12 — Auto-install dev setup script: codify hooksPath + PAT manual steps
+
+**Headline:** v1.7.70 (pre-push hook) and v1.7.65 (ci_diag.ps1) both rely on per-clone configuration: `git config core.hooksPath .githooks` plus an optional `~/.curator/github_pat` file. Until now, those steps were documented only in inline hook header comments and required manual execution. **This ship adds `scripts/setup_dev_hooks.ps1`**, an idempotent one-stop installer that configures both, with token discovery, prompting, validation, and verification.
+
+### Why this ship matters
+
+v1.7.70 release notes explicitly identified the gap:
+  * "Hook requires per-clone activation (`git config core.hooksPath .githooks`). New contributors won't get the hook automatically."
+  * "No auto-install script that sets up hooksPath, PAT file, and ci_diag.ps1 in one go."
+
+The pre-commit hook (v1.7.34) was the first to need activation. By v1.7.73, the hook ran 3 lints. Plus the v1.7.70 pre-push hook. Plus the optional `~/.curator/github_pat` for ci_diag.ps1 and pre-push tooling. Each step trivial in isolation; the cumulative friction for a new clone was real.
+
+v1.7.74 reduces it to: `./scripts/setup_dev_hooks.ps1`.
+
+### What the script does
+
+**Step 1: git core.hooksPath**
+  * Reads current `core.hooksPath` config
+  * If already `.githooks`: skip with confirmation
+  * Otherwise: set it; warn if a different non-default value was present
+  * Verify `.githooks/pre-commit` and `.githooks/pre-push` exist on disk
+
+**Step 2: PAT setup** (skippable with `-SkipPat`)
+  * Ensure `~/.curator/` directory exists
+  * If `~/.curator/github_pat` already exists and contains a valid-format token: skip
+  * If parameter `-Token` provided: validate prefix (`github_pat_` or `ghp_`), save
+  * Otherwise: print step-by-step PAT creation instructions, prompt via `SecureString`, validate prefix, save
+  * Mark the saved file as hidden (best-effort on Windows; ACLs are complicated)
+
+**Step 3: Verify setup**
+  * Re-read `core.hooksPath` and confirm
+  * List the lints the pre-commit hook will run
+  * Note the pre-push hook's role
+  * Print quick-reference commands
+
+Idempotent: safe to run repeatedly. Each step detects existing state and skips with a SKIP marker (yellow) rather than overwriting.
+
+### Output sample (already-configured environment)
+
+```
+Curator dev hooks setup (v1.7.74)
+Repo root: C:\Users\...\Curator
+
+==> Configuring git core.hooksPath...
+    SKIP: core.hooksPath already set to .githooks
+    OK: Pre-commit + pre-push hooks found and activated
+==> Skipping PAT setup (--SkipPat)
+    SKIP: ci_diag.ps1 and pre-push hook will silently skip without a token
+==> Verifying setup...
+    OK: core.hooksPath: .githooks
+    OK: Pre-commit hook present (runs 3 lints: glyph, ORDER BY, ANSI regex)
+    OK: Pre-push hook present (warns when CI is red)
+
+Setup complete.
+
+Quick reference:
+  CI status:       .\scripts\ci_diag.ps1 status
+  Failing tests:   .\scripts\ci_diag.ps1 summary
+  Bypass hook:     git commit --no-verify  /  git push --no-verify
+```
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `scripts/setup_dev_hooks.ps1` | +175 | New PowerShell auto-install script |
+| `CHANGELOG.md` | +N | v1.7.74 entry |
+| `docs/releases/v1.7.74.md` | +N | release notes |
+
+No source, test, workflow, or production-code changes.
+
+### Verification
+
+- **Live test against already-configured environment**: script correctly detected the existing `.githooks` config and skipped redundant operations ✅
+- **Test verification step**: confirmed all expected files present and `core.hooksPath` value matches ✅
+- **Expected CI result**: 9/9 GREEN (script-only addition; no test or source changes)
+
+### What this fix does NOT do
+
+- **Doesn't add a bash/sh variant.** Cross-platform contributors using WSL2/macOS/Linux would need a `.sh` companion. Future ship; not blocking for primary use case.
+- **Doesn't auto-revoke the PAT.** If a user creates a PAT via the prompt, it's their responsibility to set an expiration and revoke when no longer needed. The script doesn't track or rotate.
+- **Doesn't install Python or set up the virtualenv.** Those steps are documented in CONTRIBUTING.md (if any) and `setup_dev_env.py` per pyproject.toml convention.
+- **Doesn't validate PAT against the GitHub API.** The format check (starts with `github_pat_` or `ghp_`) is sufficient for the prefix; actual validity is verified the first time `ci_diag.ps1` runs.
+- **Doesn't update README** with a reference to this script. Future doc ship.
+- **Doesn't add a Windows registry entry or scheduled task.** Out of scope; per-repo activation only.
+- **Doesn't migrate PATs from environment variables to the file.** Users can keep using `$GH_TOKEN` or `$GITHUB_TOKEN` env vars; the file is one of three discovery paths.
+
+### Authoritative-principle catches
+
+**Catch -- idempotent design from the start.** Every step has an explicit skip path for already-configured state. Running the script repeatedly is safe; no destructive overwrites without confirmation.
+
+**Catch -- SecureString prompt for PAT input.** Using `Read-Host -AsSecureString` prevents the token from appearing in PowerShell's command history or transcript files. Token converted back to plaintext only at save time.
+
+**Catch -- prefix validation, not API validation.** Validating the token format (`github_pat_` or `ghp_` prefix) catches the common typo case without requiring a live API call during setup. If the prefix doesn't match, the user gets immediate feedback rather than a confusing failure later.
+
+**Catch -- Skip-don't-overwrite for existing PAT file.** If `~/.curator/github_pat` already exists with valid content, the script preserves it. Re-running the script never destroys a working setup.
+
+**Catch -- explicit `-SkipPat` flag.** Contributors who don't need CI tooling (one-off PR submitters, exploratory clones) can skip the PAT step entirely with one flag. Better than silent skipping when no token is provided, which would be ambiguous (did the user mean to skip, or did they forget?).
+
+**Catch -- hidden-attribute on the PAT file.** Best-effort security: ACL-based permissions are complicated cross-platform and would require significant code. Marking hidden is the simplest defense against accidental discovery (e.g. a file manager opened to `~/.curator/`).
+
+**Catch -- repo-root resolution from script path.** Uses `$PSCommandPath` to locate the repo root independent of the current working directory. Script can be invoked from anywhere; doesn't assume CWD is the repo root.
+
+**Catch -- explicit color-coded output.** Cyan for steps, green for OK, yellow for SKIP/WARN, red for FAIL. Visual hierarchy makes the verification output scannable.
+
+**Catch -- detailed PAT creation instructions in the prompt.** Step-by-step list with the exact URL, recommended scopes (`actions:read` only), and the expected token prefix. New contributors don't need to leave the script to figure out PAT creation.
+
+**Catch -- prints quick-reference commands at the end.** ci_diag.ps1 invocation patterns and the `--no-verify` bypass for the hooks. Reduces post-setup back-reference to documentation.
+
+### Lessons captured
+
+**No new lesson codified.** Reinforces:
+  * **Per-clone setup friction accumulates silently.** v1.7.34 (one hook activation) + v1.7.65 (PAT) + v1.7.70 (second hook) + v1.7.72-73 (more lints) each added a tiny step. By v1.7.74 the friction was real enough to deserve an installer.
+  * **Idempotent installers are the right default.** Scripts that destructively overwrite working configurations cause more friction than they save.
+  * **Auto-installers should detect existing state and report it.** Silent success (no output for already-configured steps) is confusing; explicit SKIP markers convey "this was already done" clearly.
+
+### Limitations
+
+- **PowerShell-only** (no bash/sh variant yet)
+- **Doesn't auto-revoke or rotate PATs**
+- **Doesn't validate PAT against the live API** (prefix check only)
+- **No README documentation** referencing the script yet
+- **No registry/scheduled-task integration** (out of scope)
+- **Doesn't handle Python venv setup** (separate concern, separate script)
+
+### Cumulative arc state (after v1.7.74)
+
+- **74 ships**, all tagged.
+- **pytest local Windows**: 1809 / 10 / 0 (unchanged this ship; script-only)
+- **pytest CI v1.7.73**: in_progress at v1.7.74 ship time; v1.7.74 expected 9/9 GREEN.
+- **Coverage local**: 66.96% (unchanged)
+- **CI matrix**: 9 cells, on Node.js 24 since v1.7.67, watched by Dependabot since v1.7.71. 9/9 GREEN since v1.7.64.
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **CI hygiene + post-arc hardening + modernization + refactor + audit + hook + automation + lint x2 + installer**: 16 ships (v1.7.59–v1.7.74)
+  * v1.7.59–64: arc closure (red → green)
+  * v1.7.65: diagnostic tooling codified (lesson #67 mitigation #1)
+  * v1.7.66: bug-class sweep (ORDER BY rowid hardening)
+  * v1.7.67: Node.js 24 modernization
+  * v1.7.68: DRY refactor (strip_ansi fixture)
+  * v1.7.69: Linux `/var` audit (mirrors v1.7.63)
+  * v1.7.70: pre-push CI verification hook (lesson #67 mitigation #3 — lesson fully mitigated)
+  * v1.7.71: Dependabot automation
+  * v1.7.72: Pre-commit ORDER BY regression lint
+  * v1.7.73: Pre-commit inline ANSI regex lint
+  * v1.7.74: Auto-install dev setup script (this ship)
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67
+- **Detacher-pattern ships**: 19 (unchanged)
+- **Tooling scripts**: `run_pytest_detached.ps1` (v1.7.39), `ci_diag.ps1` (v1.7.65), **`setup_dev_hooks.ps1` (v1.7.74)**
+- **Git hooks**: `.githooks/pre-commit` (3 lints), `.githooks/pre-push` (CI warning)
+- **Shared test helpers**: `strip_ansi` fixture (v1.7.68)
+- **Automated tracking**: Dependabot (v1.7.71)
+- **Project invariant lints**: glyph (v1.7.32/34), ORDER BY (v1.7.72), ANSI regex (v1.7.73)
+
 ## [1.7.73] — 2026-05-12 — Pre-commit inline ANSI regex lint: codify the v1.7.68 fixture hoist as a regression guard
 
 **Headline:** v1.7.68 hoisted 3 inline `re.sub(r"\x1b\[...")` patterns into a shared `strip_ansi` pytest fixture. **This ship adds a pytest-level lint that prevents regression**: any future test file that introduces an inline ANSI-strip regex (instead of using the fixture) gets blocked at commit time with a remediation message. Mirrors the v1.7.72 ORDER BY lint pattern. Third project-invariant lint codified.
