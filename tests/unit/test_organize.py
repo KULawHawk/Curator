@@ -8,6 +8,7 @@ behavior is covered by ``tests/integration/test_organize_flow.py``.
 from __future__ import annotations
 
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from pathlib import Path
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -40,7 +41,7 @@ def _make_file(path: str, size: int = 100, source_id: str = "local") -> FileEnti
         source_id=source_id,
         source_path=path,
         size=size,
-        mtime=datetime.utcnow(),
+        mtime=utcnow_naive(),
     )
 
 
@@ -153,7 +154,7 @@ class TestOrganizePlan:
 
     def test_duration_computed_after_completed(self):
         p = OrganizePlan(source_id="local", root_prefix=None)
-        p.completed_at = datetime.utcnow()
+        p.completed_at = utcnow_naive()
         # Don't assert exact value; just that it's non-negative.
         assert p.duration_seconds is not None
         assert p.duration_seconds >= 0

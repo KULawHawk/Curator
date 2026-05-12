@@ -11,6 +11,7 @@ deployments need.
 from __future__ import annotations
 
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from typing import Any
 
 from curator.models.audit import AuditEntry
@@ -71,7 +72,7 @@ class AuditRepository:
             entity_type=entity_type,
             entity_id=entity_id,
             details=details or {},
-            occurred_at=when or datetime.utcnow(),
+            occurred_at=when or utcnow_naive(),
         )
         return self.insert(entry)
 

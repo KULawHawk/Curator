@@ -8,6 +8,7 @@ invariants that we don't want to lose without a deliberate decision.
 from __future__ import annotations
 
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from uuid import UUID
 
 import pytest
@@ -34,13 +35,13 @@ class TestFileEntity:
             source_id="local",
             source_path="/tmp/x",
             size=10,
-            mtime=datetime.utcnow(),
+            mtime=utcnow_naive(),
         )
         assert isinstance(f.curator_id, UUID)
 
     def test_distinct_files_get_distinct_ids(self):
-        a = FileEntity(source_id="local", source_path="/tmp/a", size=1, mtime=datetime.utcnow())
-        b = FileEntity(source_id="local", source_path="/tmp/b", size=1, mtime=datetime.utcnow())
+        a = FileEntity(source_id="local", source_path="/tmp/a", size=1, mtime=utcnow_naive())
+        b = FileEntity(source_id="local", source_path="/tmp/b", size=1, mtime=utcnow_naive())
         assert a.curator_id != b.curator_id
 
     def test_flex_attrs_round_trip(self):
@@ -48,7 +49,7 @@ class TestFileEntity:
             source_id="local",
             source_path="/tmp/x",
             size=1,
-            mtime=datetime.utcnow(),
+            mtime=utcnow_naive(),
         )
         f.set_flex("topic", "stats")
         f.set_flex("priority", 5)
@@ -56,13 +57,13 @@ class TestFileEntity:
         assert f.flex.get("priority") == 5
 
     def test_is_deleted_reflects_deleted_at(self):
-        f = FileEntity(source_id="local", source_path="/tmp/x", size=1, mtime=datetime.utcnow())
+        f = FileEntity(source_id="local", source_path="/tmp/x", size=1, mtime=utcnow_naive())
         assert not f.is_deleted
-        f.deleted_at = datetime.utcnow()
+        f.deleted_at = utcnow_naive()
         assert f.is_deleted
 
     def test_has_full_hash_only_when_xxhash_present(self):
-        f = FileEntity(source_id="local", source_path="/tmp/x", size=1, mtime=datetime.utcnow())
+        f = FileEntity(source_id="local", source_path="/tmp/x", size=1, mtime=utcnow_naive())
         assert not f.has_full_hash
         f.xxhash3_128 = "deadbeef" * 4
         assert f.has_full_hash

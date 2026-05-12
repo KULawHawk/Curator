@@ -43,6 +43,7 @@ from __future__ import annotations
 import json
 import sys
 from datetime import datetime, timedelta
+from curator._compat.datetime import utcnow_naive
 from pathlib import Path
 from typing import Optional
 from uuid import UUID
@@ -1441,7 +1442,7 @@ def audit(
     """Query the audit log."""
     rt: CuratorRuntime = ctx.obj
     since = (
-        datetime.utcnow() - timedelta(hours=since_hours)
+        utcnow_naive() - timedelta(hours=since_hours)
         if since_hours else None
     )
     entries = rt.audit_repo.query(
@@ -4836,7 +4837,7 @@ def audit_summary_cmd(
             console.print(f"[red]Bad --since value: {e}[/]")
             raise typer.Exit(code=2)
     else:
-        since_dt = datetime.utcnow() - timedelta(days=days)
+        since_dt = utcnow_naive() - timedelta(days=days)
 
     # Query
     entries = rt.audit_repo.query(
@@ -4923,7 +4924,7 @@ def audit_summary_cmd(
         return
 
     # Rich pretty-print
-    period_end = datetime.utcnow()
+    period_end = utcnow_naive()
     period_start = since_dt
     # v1.7.20: --local converts the header timestamps to system local TZ
     if local:
@@ -5102,7 +5103,7 @@ def audit_export_cmd(
     if older_than is not None:
         if older_than < 0:
             raise _err_exit(rt, f"--older-than must be >= 0; got {older_than}")
-        before_dt = datetime.utcnow() - timedelta(days=older_than)
+        before_dt = utcnow_naive() - timedelta(days=older_than)
     elif before is not None:
         try:
             before_dt = datetime.fromisoformat(before.rstrip("Z"))

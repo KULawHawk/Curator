@@ -69,6 +69,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from enum import Enum
 from fnmatch import fnmatch
 from pathlib import Path
@@ -184,7 +185,7 @@ class MigrationReport:
 
     plan: MigrationPlan
     moves: list[MigrationMove] = field(default_factory=list)
-    started_at: datetime = field(default_factory=datetime.utcnow)
+    started_at: datetime = field(default_factory=utcnow_naive)
     completed_at: datetime | None = None
 
     # Phase 3 P2: counts now span the new conflict-resolution outcome
@@ -789,7 +790,7 @@ class MigrationService:
                             and self._on_conflict_mode == "fail"):
                         # --on-conflict=fail aborts the whole pass on the
                         # first collision per design DM-4.
-                        report.completed_at = datetime.utcnow()
+                        report.completed_at = utcnow_naive()
                         raise MigrationConflictError(
                             move.dst_path, src_path=move.src_path,
                         )
@@ -835,12 +836,12 @@ class MigrationService:
             # first).
             if (move.outcome == MigrationOutcome.FAILED_DUE_TO_CONFLICT
                     and self._on_conflict_mode == "fail"):
-                report.completed_at = datetime.utcnow()
+                report.completed_at = utcnow_naive()
                 raise MigrationConflictError(
                     move.dst_path, src_path=move.src_path,
                 )
 
-        report.completed_at = datetime.utcnow()
+        report.completed_at = utcnow_naive()
         return report
 
     def _auto_strip_metadata(self, move: MigrationMove) -> None:
@@ -1505,7 +1506,7 @@ class MigrationService:
         legal on Windows. UTC-fixed because servers + dev machines may sit
         in different timezones.
         """
-        timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H-%M-%SZ")
+        timestamp = utcnow_naive().strftime("%Y-%m-%dT%H-%M-%SZ")
         stem = dst_p.stem
         ext = dst_p.suffix
         new_name = f"{stem}.curator-backup-{timestamp}{ext}"
@@ -3335,7 +3336,7 @@ class MigrationService:
         return MigrationReport(
             plan=plan,
             moves=moves,
-            started_at=job.started_at or datetime.utcnow(),
+            started_at=job.started_at or utcnow_naive(),
             completed_at=job.completed_at,
         )
 

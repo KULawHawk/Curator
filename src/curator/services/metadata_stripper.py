@@ -49,6 +49,7 @@ import shutil
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from enum import Enum
 from pathlib import Path
 
@@ -240,7 +241,7 @@ class MetadataStripper:
         """
         src_root_p = Path(src_root)
         dst_root_p = Path(dst_root)
-        report = StripReport(started_at=datetime.utcnow())
+        report = StripReport(started_at=utcnow_naive())
 
         if not src_root_p.is_dir():
             report.results.append(StripResult(
@@ -249,7 +250,7 @@ class MetadataStripper:
                 outcome=StripOutcome.FAILED,
                 error=f"Not a directory: {src_root_p}",
             ))
-            report.completed_at = datetime.utcnow()
+            report.completed_at = utcnow_naive()
             return report
 
         ext_set: set[str] | None = (
@@ -281,7 +282,7 @@ class MetadataStripper:
             dst.parent.mkdir(parents=True, exist_ok=True)
             report.results.append(self.strip_file(src, dst))
 
-        report.completed_at = datetime.utcnow()
+        report.completed_at = utcnow_naive()
         return report
 
     # ------------------------------------------------------------------

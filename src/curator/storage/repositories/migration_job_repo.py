@@ -16,6 +16,7 @@ claimed row (or None if no pending rows remain).
 from __future__ import annotations
 
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from uuid import UUID
 
 from curator.models.migration import MigrationJob, MigrationProgress
@@ -86,7 +87,7 @@ class MigrationJobRepository:
                     SET status = ?, completed_at = ?, error = ?
                     WHERE job_id = ?
                     """,
-                    (status, datetime.utcnow(), error, uuid_to_str(job_id)),
+                    (status, utcnow_naive(), error, uuid_to_str(job_id)),
                 )
             elif status == "running":
                 conn.execute(
@@ -96,7 +97,7 @@ class MigrationJobRepository:
                         started_at = COALESCE(started_at, ?)
                     WHERE job_id = ?
                     """,
-                    (status, datetime.utcnow(), uuid_to_str(job_id)),
+                    (status, utcnow_naive(), uuid_to_str(job_id)),
                 )
             else:
                 conn.execute(
@@ -281,7 +282,7 @@ class MigrationJobRepository:
                 conn.execute("COMMIT")
                 return None
 
-            now = datetime.utcnow()
+            now = utcnow_naive()
             conn.execute(
                 """
                 UPDATE migration_progress
@@ -330,7 +331,7 @@ class MigrationJobRepository:
                 sets.append("src_xxhash = ?"); params.append(src_xxhash)
 
             if status in ("completed", "skipped", "failed"):
-                sets.append("completed_at = ?"); params.append(datetime.utcnow())
+                sets.append("completed_at = ?"); params.append(utcnow_naive())
 
             params.extend([uuid_to_str(job_id), uuid_to_str(curator_id)])
 

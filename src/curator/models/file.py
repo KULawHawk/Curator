@@ -16,6 +16,7 @@ Notes:
 from __future__ import annotations
 
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from uuid import UUID, uuid4
 
 from pydantic import Field
@@ -25,7 +26,7 @@ from curator.models.base import CuratorEntity
 
 def _utcnow() -> datetime:
     """Single source of timestamp truth (UTC)."""
-    return datetime.utcnow()
+    return utcnow_naive()
 
 
 class FileEntity(CuratorEntity):

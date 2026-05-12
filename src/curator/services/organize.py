@@ -37,6 +37,7 @@ import shutil
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from enum import Enum
 from pathlib import Path
 from typing import Iterable
@@ -119,7 +120,7 @@ class OrganizePlan:
     safe: OrganizeBucket = field(default_factory=OrganizeBucket)
     caution: OrganizeBucket = field(default_factory=OrganizeBucket)
     refuse: OrganizeBucket = field(default_factory=OrganizeBucket)
-    started_at: datetime = field(default_factory=datetime.utcnow)
+    started_at: datetime = field(default_factory=utcnow_naive)
     completed_at: datetime | None = None
     target_root: str | None = None  # set when organize_type was used
 
@@ -315,7 +316,7 @@ class OrganizeService:
         plan = OrganizePlan(
             source_id=source_id,
             root_prefix=root_prefix,
-            started_at=datetime.utcnow(),
+            started_at=utcnow_naive(),
             target_root=str(target_root) if target_root is not None else None,
         )
 
@@ -329,7 +330,7 @@ class OrganizeService:
             files = self.files.query(query)
         except Exception as e:
             logger.error("organize: file query failed: {e}", e=e)
-            plan.completed_at = datetime.utcnow()
+            plan.completed_at = utcnow_naive()
             return plan
 
         # For organize_type="code", discover projects ONCE up front by
@@ -462,7 +463,7 @@ class OrganizeService:
 
             bucket.add(f, report, proposed_destination=proposed)
 
-        plan.completed_at = datetime.utcnow()
+        plan.completed_at = utcnow_naive()
         logger.debug(
             "organize plan: {n} files in {d:.2f}s "
             "(safe={s}, caution={c}, refuse={r})",
@@ -533,7 +534,7 @@ class OrganizeService:
         target_root_p = Path(plan.target_root).resolve()
         report = StageReport(
             stage_root=str(stage_root_p),
-            started_at=datetime.utcnow(),
+            started_at=utcnow_naive(),
         )
 
         stage_root_p.mkdir(parents=True, exist_ok=True)
@@ -630,7 +631,7 @@ class OrganizeService:
                 except Exception as e:  # pragma: no cover — defensive
                     logger.warning("{m} audit log failed: {e}", m=mode, e=e)
 
-        report.completed_at = datetime.utcnow()
+        report.completed_at = utcnow_naive()
 
         # Write/merge the manifest. If a manifest already exists at the
         # stage_root (e.g. a prior partial run), merge our new entries
@@ -764,7 +765,7 @@ class OrganizeService:
 
         report = RevertReport(
             stage_root=str(stage_root_p),
-            started_at=datetime.utcnow(),
+            started_at=utcnow_naive(),
         )
 
         remaining: list[dict] = []
@@ -850,7 +851,7 @@ class OrganizeService:
                 except Exception as e:  # pragma: no cover
                     logger.warning("revert audit log failed: {e}", e=e)
 
-        report.completed_at = datetime.utcnow()
+        report.completed_at = utcnow_naive()
 
         # Update or remove the manifest.
         try:

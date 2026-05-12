@@ -14,6 +14,7 @@ asymmetry, the third test will catch it.
 from __future__ import annotations
 
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from uuid import UUID
 
 import pytest
@@ -35,7 +36,7 @@ def _file_with(curator_id: UUID, xxhash: str | None) -> FileEntity:
         source_id="local",
         source_path=f"/tmp/{curator_id}",
         size=100,
-        mtime=datetime.utcnow(),
+        mtime=utcnow_naive(),
         xxhash3_128=xxhash,
     )
     # Override the auto-generated curator_id with our deterministic one.

@@ -8,6 +8,7 @@ LineageService machinery for these tests.
 from __future__ import annotations
 
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from uuid import uuid4
 
 import pytest
@@ -27,7 +28,7 @@ def _make_file(*, path: str, size: int = 100, xxhash: str | None = None,
         source_id="local",
         source_path=path,
         size=size,
-        mtime=datetime.utcnow(),
+        mtime=utcnow_naive(),
         xxhash3_128=xxhash,
         fuzzy_hash=fuzzy_hash,
     )

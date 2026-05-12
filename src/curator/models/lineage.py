@@ -11,6 +11,7 @@ Lineage detector plugins decide direction based on their own logic
 from __future__ import annotations
 
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from enum import Enum
 from uuid import UUID, uuid4
 
@@ -20,7 +21,7 @@ from curator.models.base import CuratorEntity
 
 
 def _utcnow() -> datetime:
-    return datetime.utcnow()
+    return utcnow_naive()
 
 
 class LineageKind(str, Enum):

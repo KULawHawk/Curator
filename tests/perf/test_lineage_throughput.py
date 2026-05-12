@@ -36,6 +36,7 @@ import statistics
 import string
 import time
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -178,7 +179,7 @@ def _write_result(name: str, payload: dict) -> Path:
     """Append benchmark output to ``tests/perf/results/{name}-{ts}.json``."""
     out_dir = Path(__file__).parent / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+    ts = utcnow_naive().strftime("%Y%m%dT%H%M%S")
     path = out_dir / f"{name}-{ts}.json"
     path.write_text(json.dumps(payload, indent=2))
     return path

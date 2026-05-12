@@ -38,6 +38,7 @@ Curator simply doesn't claim ``gdrive:`` source_ids in that case.
 from __future__ import annotations
 
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from typing import TYPE_CHECKING, Any, Iterator
 
 from loguru import logger
@@ -132,14 +133,14 @@ def _build_drive_client(config: dict[str, Any]):
 def _parse_drive_datetime(value: str | None) -> datetime:
     """Parse Drive's ISO8601 timestamp ('2026-01-15T12:34:56.789Z')."""
     if not value:
-        return datetime.utcnow()
+        return utcnow_naive()
     # Drive uses 'Z' for UTC; Python's fromisoformat can't handle that
     # directly until 3.11, where it can. Strip the trailing Z to be safe.
     cleaned = value.rstrip("Z")
     try:
         return datetime.fromisoformat(cleaned)
     except ValueError:
-        return datetime.utcnow()
+        return utcnow_naive()
 
 
 def _drive_file_to_file_info(drive_file: Any) -> FileInfo:

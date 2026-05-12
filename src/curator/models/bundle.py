@@ -10,6 +10,7 @@ to multiple bundles. Membership is per-(bundle, file) with role + confidence.
 from __future__ import annotations
 
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -19,7 +20,7 @@ from curator.models.base import CuratorEntity
 
 
 def _utcnow() -> datetime:
-    return datetime.utcnow()
+    return utcnow_naive()
 
 
 # Conventional bundle types. ``plugin:<name>`` is also valid.

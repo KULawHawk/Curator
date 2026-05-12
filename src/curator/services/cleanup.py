@@ -51,6 +51,7 @@ import fnmatch
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from enum import Enum
 from pathlib import Path
 from typing import Iterable
@@ -157,7 +158,7 @@ class CleanupReport:
     kind: CleanupKind
     root: str
     findings: list[CleanupFinding] = field(default_factory=list)
-    started_at: datetime = field(default_factory=datetime.utcnow)
+    started_at: datetime = field(default_factory=utcnow_naive)
     completed_at: datetime | None = None
     errors: list[str] = field(default_factory=list)
 
@@ -197,7 +198,7 @@ class ApplyReport:
     """Result of :meth:`CleanupService.apply`."""
 
     kind: CleanupKind
-    started_at: datetime = field(default_factory=datetime.utcnow)
+    started_at: datetime = field(default_factory=utcnow_naive)
     completed_at: datetime | None = None
     results: list[ApplyResult] = field(default_factory=list)
 
@@ -281,11 +282,11 @@ class CleanupService:
 
         if not root_p.exists():
             report.errors.append(f"root does not exist: {root_p}")
-            report.completed_at = datetime.utcnow()
+            report.completed_at = utcnow_naive()
             return report
         if not root_p.is_dir():
             report.errors.append(f"root is not a directory: {root_p}")
-            report.completed_at = datetime.utcnow()
+            report.completed_at = utcnow_naive()
             return report
 
         # Track which dirs we've already classified as empty so a
@@ -325,7 +326,7 @@ class CleanupService:
         except OSError as e:
             report.errors.append(f"os.walk failed: {e}")
 
-        report.completed_at = datetime.utcnow()
+        report.completed_at = utcnow_naive()
         logger.debug(
             "find_empty_dirs: {n} empty dirs under {r}",
             n=report.count, r=root_p,
@@ -352,7 +353,7 @@ class CleanupService:
 
         if not root_p.exists():
             report.errors.append(f"root does not exist: {root_p}")
-            report.completed_at = datetime.utcnow()
+            report.completed_at = utcnow_naive()
             return report
 
         try:
@@ -384,7 +385,7 @@ class CleanupService:
         except OSError as e:
             report.errors.append(f"os.walk failed: {e}")
 
-        report.completed_at = datetime.utcnow()
+        report.completed_at = utcnow_naive()
         logger.debug(
             "find_broken_symlinks: {n} broken symlinks under {r}",
             n=report.count, r=root_p,
@@ -417,7 +418,7 @@ class CleanupService:
 
         if not root_p.exists():
             report.errors.append(f"root does not exist: {root_p}")
-            report.completed_at = datetime.utcnow()
+            report.completed_at = utcnow_naive()
             return report
 
         try:
@@ -444,7 +445,7 @@ class CleanupService:
         except OSError as e:
             report.errors.append(f"os.walk failed: {e}")
 
-        report.completed_at = datetime.utcnow()
+        report.completed_at = utcnow_naive()
         logger.debug(
             "find_junk_files: {n} junk files ({s} bytes) under {r}",
             n=report.count, s=report.total_size, r=root_p,
@@ -548,7 +549,7 @@ class CleanupService:
             candidates = self.file_repo.query(query)
         except Exception as e:  # noqa: BLE001 — defensive at boundary
             report.errors.append(f"file_repo.query failed: {e}")
-            report.completed_at = datetime.utcnow()
+            report.completed_at = utcnow_naive()
             return report
 
         # Group by xxhash3_128.
@@ -583,7 +584,7 @@ class CleanupService:
                     },
                 ))
 
-        report.completed_at = datetime.utcnow()
+        report.completed_at = utcnow_naive()
         logger.debug(
             "find_duplicates: {n} duplicates ({s} bytes) across {g} groups",
             n=report.count, s=report.total_size,
@@ -630,11 +631,11 @@ class CleanupService:
             candidates = self.file_repo.query(query)
         except Exception as e:  # noqa: BLE001
             report.errors.append(f"file_repo.query failed: {e}")
-            report.completed_at = datetime.utcnow()
+            report.completed_at = utcnow_naive()
             return report
 
         if not candidates:
-            report.completed_at = datetime.utcnow()
+            report.completed_at = utcnow_naive()
             return report
 
         # Build LSH index. FuzzyIndexUnavailableError propagates by design —
@@ -646,7 +647,7 @@ class CleanupService:
             raise
         except Exception as e:  # noqa: BLE001
             report.errors.append(f"FuzzyIndex init failed: {e}")
-            report.completed_at = datetime.utcnow()
+            report.completed_at = utcnow_naive()
             return report
 
         # Map curator_id <-> FileEntity for lookup after queries.
@@ -729,7 +730,7 @@ class CleanupService:
                     },
                 ))
 
-        report.completed_at = datetime.utcnow()
+        report.completed_at = utcnow_naive()
         logger.debug(
             "find_fuzzy_duplicates: {n} fuzzy duplicates ({s} bytes) "
             "across {g} components at threshold {t}",
@@ -813,7 +814,7 @@ class CleanupService:
         """
         out = ApplyReport(
             kind=report.kind,
-            started_at=datetime.utcnow(),
+            started_at=utcnow_naive(),
         )
 
         for finding in report.findings:
@@ -895,7 +896,7 @@ class CleanupService:
                 except Exception as e:  # pragma: no cover — defensive
                     logger.warning("cleanup audit log failed: {e}", e=e)
 
-        out.completed_at = datetime.utcnow()
+        out.completed_at = utcnow_naive()
         logger.info(
             "cleanup apply ({k}): deleted={d} skipped={s} failed={f} in {dur:.2f}s",
             k=report.kind.value,

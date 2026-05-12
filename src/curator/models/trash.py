@@ -11,6 +11,7 @@ memberships at trash time, and flex attrs.
 from __future__ import annotations
 
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from typing import Any
 from uuid import UUID
 
@@ -20,7 +21,7 @@ from curator.models.base import CuratorEntity
 
 
 def _utcnow() -> datetime:
-    return datetime.utcnow()
+    return utcnow_naive()
 
 
 class TrashRecord(CuratorEntity):

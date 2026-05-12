@@ -11,6 +11,7 @@ as the forensic trail Constitution-governed deployments need.
 from __future__ import annotations
 
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from typing import Any
 
 from pydantic import Field
@@ -19,7 +20,7 @@ from curator.models.base import CuratorEntity
 
 
 def _utcnow() -> datetime:
-    return datetime.utcnow()
+    return utcnow_naive()
 
 
 class AuditEntry(CuratorEntity):

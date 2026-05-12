@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from pathlib import Path
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -49,7 +50,7 @@ def _make_file(path: str, size: int = 100, source_id: str = "local") -> FileEnti
         source_id=source_id,
         source_path=path,
         size=size,
-        mtime=datetime.utcnow(),
+        mtime=utcnow_naive(),
     )
 
 
@@ -82,7 +83,7 @@ def _build_plan_with_one_proposal(
         _safe_report(str(src_file)),
         proposed_destination=str(target_root / proposed_relative),
     )
-    plan.completed_at = datetime.utcnow()
+    plan.completed_at = utcnow_naive()
     return plan
 
 
@@ -109,7 +110,7 @@ class TestStageDataclasses:
         assert m.error is None
 
     def test_stage_report_counts_by_outcome(self):
-        r = StageReport(stage_root="/stage", started_at=datetime.utcnow())
+        r = StageReport(stage_root="/stage", started_at=utcnow_naive())
         r.moves = [
             StageMove("1", "/a", "/s/a", StageOutcome.MOVED),
             StageMove("2", "/b", "/s/b", StageOutcome.MOVED),
@@ -122,9 +123,9 @@ class TestStageDataclasses:
         assert r.failed_count == 1
 
     def test_stage_report_duration_none_until_completed(self):
-        r = StageReport(stage_root="/s", started_at=datetime.utcnow())
+        r = StageReport(stage_root="/s", started_at=utcnow_naive())
         assert r.duration_seconds is None
-        r.completed_at = datetime.utcnow()
+        r.completed_at = utcnow_naive()
         assert r.duration_seconds is not None
         assert r.duration_seconds >= 0
 
@@ -137,7 +138,7 @@ class TestRevertDataclasses:
         assert RevertOutcome.FAILED.value == "failed"
 
     def test_revert_report_counts_by_outcome(self):
-        r = RevertReport(stage_root="/s", started_at=datetime.utcnow())
+        r = RevertReport(stage_root="/s", started_at=utcnow_naive())
         r.moves = [
             RevertMove("1", "/a", "/s/a", RevertOutcome.RESTORED),
             RevertMove("2", "/b", "/s/b", RevertOutcome.RESTORED),
@@ -159,7 +160,7 @@ class TestStage:
     def test_raises_if_plan_has_no_target_root(self, tmp_path):
         # A plan from regular plan() (no organize_type) has target_root=None.
         plan = OrganizePlan(source_id="local", root_prefix=None)
-        plan.completed_at = datetime.utcnow()
+        plan.completed_at = utcnow_naive()
         svc = _build_service()
         with pytest.raises(ValueError, match="target_root"):
             svc.stage(plan, stage_root=tmp_path)
@@ -223,7 +224,7 @@ class TestStage:
         )
         fe = _make_file(str(src), size=1)
         plan.safe.add(fe, _safe_report(str(src)))  # no proposal
-        plan.completed_at = datetime.utcnow()
+        plan.completed_at = utcnow_naive()
 
         svc = _build_service()
         report = svc.stage(plan, stage_root=stage_root)
@@ -426,7 +427,7 @@ class TestRevertStage:
                 fe, _safe_report(str(src)),
                 proposed_destination=str(target_root / rel),
             )
-        plan.completed_at = datetime.utcnow()
+        plan.completed_at = utcnow_naive()
 
         svc = _build_service()
         svc.stage(plan, stage_root=stage_root)

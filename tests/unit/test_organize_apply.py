@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from pathlib import Path
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -50,7 +51,7 @@ def _make_file(path: str, size: int = 100) -> FileEntity:
         source_id="local",
         source_path=path,
         size=size,
-        mtime=datetime.utcnow(),
+        mtime=utcnow_naive(),
     )
 
 
@@ -75,7 +76,7 @@ def _build_plan_with_proposal(
         fe, _safe_report(str(src_file)),
         proposed_destination=str(target_root / proposed_relative),
     )
-    plan.completed_at = datetime.utcnow()
+    plan.completed_at = utcnow_naive()
     return plan
 
 
@@ -87,7 +88,7 @@ def _build_plan_with_proposal(
 class TestApply:
     def test_raises_if_plan_has_no_target_root(self):
         plan = OrganizePlan(source_id="local", root_prefix=None)
-        plan.completed_at = datetime.utcnow()
+        plan.completed_at = utcnow_naive()
         svc = _build_service()
         with pytest.raises(ValueError, match="target_root"):
             svc.apply(plan)

@@ -10,6 +10,7 @@ Promoted from the Step 2 14-assertion smoke test.
 from __future__ import annotations
 
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from uuid import UUID
 
 import pytest
@@ -61,7 +62,7 @@ class TestFileRepository:
     def test_insert_then_get(self, repos, local_source):
         f = FileEntity(
             source_id="local", source_path="/tmp/a",
-            size=10, mtime=datetime.utcnow(),
+            size=10, mtime=utcnow_naive(),
         )
         repos.files.insert(f)
         loaded = repos.files.get(f.curator_id)
@@ -71,7 +72,7 @@ class TestFileRepository:
     def test_flex_attrs_round_trip_through_db(self, repos, local_source):
         f = FileEntity(
             source_id="local", source_path="/tmp/a",
-            size=10, mtime=datetime.utcnow(),
+            size=10, mtime=utcnow_naive(),
         )
         f.set_flex("topic", "stats")
         f.set_flex("priority", 5)
@@ -83,7 +84,7 @@ class TestFileRepository:
     def test_find_by_path(self, repos, local_source):
         f = FileEntity(
             source_id="local", source_path="/tmp/x",
-            size=1, mtime=datetime.utcnow(),
+            size=1, mtime=utcnow_naive(),
         )
         repos.files.insert(f)
         found = repos.files.find_by_path("local", "/tmp/x")
@@ -93,9 +94,9 @@ class TestFileRepository:
     def test_find_by_hash_returns_only_active_by_default(self, repos, local_source):
         h = "deadbeef" * 4
         f1 = FileEntity(source_id="local", source_path="/a", size=1,
-                        mtime=datetime.utcnow(), xxhash3_128=h)
+                        mtime=utcnow_naive(), xxhash3_128=h)
         f2 = FileEntity(source_id="local", source_path="/b", size=1,
-                        mtime=datetime.utcnow(), xxhash3_128=h)
+                        mtime=utcnow_naive(), xxhash3_128=h)
         repos.files.insert(f1)
         repos.files.insert(f2)
         repos.files.mark_deleted(f2.curator_id)
@@ -107,14 +108,14 @@ class TestFileRepository:
         assert len(all_files) == 2
 
     def test_find_candidates_by_size_excludes_self(self, repos, local_source):
-        f = FileEntity(source_id="local", source_path="/a", size=100, mtime=datetime.utcnow())
+        f = FileEntity(source_id="local", source_path="/a", size=100, mtime=utcnow_naive())
         repos.files.insert(f)
         cands = repos.files.find_candidates_by_size(100, exclude_curator_id=f.curator_id)
         assert cands == []
 
     def test_count_default_excludes_deleted(self, repos, local_source):
-        f1 = FileEntity(source_id="local", source_path="/a", size=1, mtime=datetime.utcnow())
-        f2 = FileEntity(source_id="local", source_path="/b", size=1, mtime=datetime.utcnow())
+        f1 = FileEntity(source_id="local", source_path="/a", size=1, mtime=utcnow_naive())
+        f2 = FileEntity(source_id="local", source_path="/b", size=1, mtime=utcnow_naive())
         repos.files.insert(f1)
         repos.files.insert(f2)
         repos.files.mark_deleted(f2.curator_id)
@@ -128,8 +129,8 @@ class TestFileRepository:
 
 class TestLineageRepository:
     def test_insert_returns_true_on_first_insert(self, repos, local_source):
-        a = FileEntity(source_id="local", source_path="/a", size=1, mtime=datetime.utcnow())
-        b = FileEntity(source_id="local", source_path="/b", size=1, mtime=datetime.utcnow())
+        a = FileEntity(source_id="local", source_path="/a", size=1, mtime=utcnow_naive())
+        b = FileEntity(source_id="local", source_path="/b", size=1, mtime=utcnow_naive())
         repos.files.insert(a)
         repos.files.insert(b)
         edge = LineageEdge(
@@ -140,8 +141,8 @@ class TestLineageRepository:
         assert repos.lineage.insert(edge) is True
 
     def test_insert_with_on_conflict_ignore_returns_false_on_dup(self, repos, local_source):
-        a = FileEntity(source_id="local", source_path="/a", size=1, mtime=datetime.utcnow())
-        b = FileEntity(source_id="local", source_path="/b", size=1, mtime=datetime.utcnow())
+        a = FileEntity(source_id="local", source_path="/a", size=1, mtime=utcnow_naive())
+        b = FileEntity(source_id="local", source_path="/b", size=1, mtime=utcnow_naive())
         repos.files.insert(a)
         repos.files.insert(b)
         edge = LineageEdge(
@@ -161,8 +162,8 @@ class TestLineageRepository:
         assert repos.lineage.insert(edge2, on_conflict="ignore") is False
 
     def test_get_edges_for_returns_either_direction(self, repos, local_source):
-        a = FileEntity(source_id="local", source_path="/a", size=1, mtime=datetime.utcnow())
-        b = FileEntity(source_id="local", source_path="/b", size=1, mtime=datetime.utcnow())
+        a = FileEntity(source_id="local", source_path="/a", size=1, mtime=utcnow_naive())
+        b = FileEntity(source_id="local", source_path="/b", size=1, mtime=utcnow_naive())
         repos.files.insert(a)
         repos.files.insert(b)
         edge = LineageEdge(
@@ -187,7 +188,7 @@ class TestHashCacheRepository:
             source_id="local", source_path="/a",
             mtime=now, size=100,
             xxhash3_128="abc123", md5=None, fuzzy_hash=None,
-            computed_at=datetime.utcnow(),
+            computed_at=utcnow_naive(),
         ))
         cached = repos.cache.get_if_fresh("local", "/a", mtime=now, size=100)
         assert cached is not None
@@ -200,7 +201,7 @@ class TestHashCacheRepository:
             source_id="local", source_path="/a",
             mtime=now, size=100,
             xxhash3_128="abc123", md5=None, fuzzy_hash=None,
-            computed_at=datetime.utcnow(),
+            computed_at=utcnow_naive(),
         ))
         assert repos.cache.get_if_fresh("local", "/a", mtime=later, size=100) is None
 
@@ -210,7 +211,7 @@ class TestHashCacheRepository:
             source_id="local", source_path="/a",
             mtime=now, size=100,
             xxhash3_128="abc123", md5=None, fuzzy_hash=None,
-            computed_at=datetime.utcnow(),
+            computed_at=utcnow_naive(),
         ))
         assert repos.cache.get_if_fresh("local", "/a", mtime=now, size=101) is None
 
@@ -240,7 +241,7 @@ class TestAuditRepository:
 
 class TestBundleRepository:
     def test_add_membership_then_get(self, repos, local_source):
-        f = FileEntity(source_id="local", source_path="/a", size=1, mtime=datetime.utcnow())
+        f = FileEntity(source_id="local", source_path="/a", size=1, mtime=utcnow_naive())
         repos.files.insert(f)
         b = BundleEntity(bundle_type="manual", name="test")
         repos.bundles.insert(b)
@@ -256,7 +257,7 @@ class TestBundleRepository:
         repos.bundles.insert(b)
         # Insert two files + memberships
         for path in ["/a", "/b"]:
-            f = FileEntity(source_id="local", source_path=path, size=1, mtime=datetime.utcnow())
+            f = FileEntity(source_id="local", source_path=path, size=1, mtime=utcnow_naive())
             repos.files.insert(f)
             repos.bundles.add_membership(BundleMembership(
                 bundle_id=b.bundle_id, curator_id=f.curator_id,
@@ -270,7 +271,7 @@ class TestBundleRepository:
 
 class TestTrashRepository:
     def test_insert_then_get(self, repos, local_source):
-        f = FileEntity(source_id="local", source_path="/a", size=1, mtime=datetime.utcnow())
+        f = FileEntity(source_id="local", source_path="/a", size=1, mtime=utcnow_naive())
         repos.files.insert(f)
         record = TrashRecord(
             curator_id=f.curator_id,
@@ -295,7 +296,7 @@ class TestTrashRepository:
 class TestScanJobRepository:
     def test_insert_then_update_status(self, repos):
         job = ScanJob(source_id="local", root_path="/", status="running",
-                      started_at=datetime.utcnow())
+                      started_at=utcnow_naive())
         repos.jobs.insert(job)
         repos.jobs.update_status(job.job_id, "completed")
         loaded = repos.jobs.get(job.job_id)
@@ -303,7 +304,7 @@ class TestScanJobRepository:
 
     def test_update_counters(self, repos):
         job = ScanJob(source_id="local", root_path="/", status="running",
-                      started_at=datetime.utcnow())
+                      started_at=utcnow_naive())
         repos.jobs.insert(job)
         repos.jobs.update_counters(job.job_id, files_seen=5, files_hashed=3)
         loaded = repos.jobs.get(job.job_id)
@@ -320,7 +321,7 @@ class TestFileQuery:
         for ext, name in [(".py", "/a.py"), (".md", "/b.md"), (".py", "/c.py")]:
             repos.files.insert(FileEntity(
                 source_id="local", source_path=name,
-                size=1, mtime=datetime.utcnow(), extension=ext,
+                size=1, mtime=utcnow_naive(), extension=ext,
             ))
         py_files = repos.files.query(FileQuery(extensions=[".py"]))
         assert len(py_files) == 2
@@ -329,7 +330,7 @@ class TestFileQuery:
         for size, path in [(10, "/a"), (50, "/b"), (200, "/c")]:
             repos.files.insert(FileEntity(
                 source_id="local", source_path=path,
-                size=size, mtime=datetime.utcnow(),
+                size=size, mtime=utcnow_naive(),
             ))
         mid = repos.files.query(FileQuery(min_size=20, max_size=100))
         assert len(mid) == 1

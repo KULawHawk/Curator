@@ -30,6 +30,7 @@ import hashlib
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from typing import Iterator, Optional
 
 import pluggy
@@ -331,7 +332,7 @@ class HashPipeline:
                 xxhash3_128=file.xxhash3_128,
                 md5=file.md5,
                 fuzzy_hash=file.fuzzy_hash,
-                computed_at=datetime.utcnow(),
+                computed_at=utcnow_naive(),
             )
         )
 

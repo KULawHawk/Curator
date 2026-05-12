@@ -15,6 +15,7 @@ Phase Alpha API surface. Methods are organized as:
 from __future__ import annotations
 
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from typing import Iterable
 from uuid import UUID
 
@@ -124,7 +125,7 @@ class FileRepository:
 
     def mark_deleted(self, curator_id: UUID, when: datetime | None = None) -> None:
         """Soft-delete: set ``deleted_at`` to the given time (default: now)."""
-        when = when or datetime.utcnow()
+        when = when or utcnow_naive()
         cid = uuid_to_str(curator_id)
         with self.db.conn() as conn:
             conn.execute(

@@ -9,6 +9,7 @@ visibility. Service mode uses them for async polling endpoints.
 from __future__ import annotations
 
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from uuid import UUID
 
 from curator.models.jobs import ScanJob
@@ -82,12 +83,12 @@ class ScanJobRepository:
                     UPDATE scan_jobs SET status = ?, completed_at = ?, error = ?
                     WHERE job_id = ?
                     """,
-                    (status, datetime.utcnow(), error, uuid_to_str(job_id)),
+                    (status, utcnow_naive(), error, uuid_to_str(job_id)),
                 )
             elif status == "running":
                 conn.execute(
                     "UPDATE scan_jobs SET status = ?, started_at = ? WHERE job_id = ?",
-                    (status, datetime.utcnow(), uuid_to_str(job_id)),
+                    (status, utcnow_naive(), uuid_to_str(job_id)),
                 )
             else:
                 conn.execute(

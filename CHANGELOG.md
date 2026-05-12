@@ -4,6 +4,123 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.47] — 2026-05-11 — `datetime.utcnow()` deprecation cleanup (6037 warnings → 0)
+
+**Headline:** Eliminates ALL `DeprecationWarning: datetime.datetime.utcnow() is deprecated` warnings from the baseline. New `curator._compat.datetime.utcnow_naive()` is a drop-in replacement that produces bit-identical naive-UTC output without the deprecation. 117 call sites across 29 files were mechanically converted. Test baseline dropped from 6037 warnings to **0 warnings**; runtime improved 12% (256s → 225s) from removing the warning-serialization overhead.
+
+### Why this matters
+
+`datetime.datetime.utcnow()` was deprecated in Python 3.12 and is scheduled for removal in Python 3.14. Every call emits a `DeprecationWarning`. The Curator baseline hit `utcnow()` ~6000 times per run — the warnings dominated pytest's output, made grep'ing for real warnings infeasible, and cost ~30s of runtime to format and dispatch. Beyond noise: when Python 3.14 lands, every `utcnow()` call site becomes a runtime error.
+
+The stdlib's recommended replacement is `datetime.now(timezone.utc)`, which returns a **timezone-aware** datetime. That's the modern API and the right long-term direction, but a wholesale audit-and-conversion would touch:
+  * Naive-vs-naive datetime comparisons throughout the codebase
+  * Serialization paths (SQLite TEXT columns assume naive UTC)
+  * Pydantic model fields declared as `datetime`
+  * The GUI's table display formatting
+  * Downstream comparison logic in services (`cleanup`, `migration`, `organize`)
+
+That's a v1.8.x-class architectural ship. v1.7.47 is the **bridge**: silence the warnings now with a drop-in replacement; defer the timezone-aware migration to a planned, scoped future ship.
+
+### What's new
+
+**`src/curator/_compat/datetime.py` (+76 lines, new)**
+
+```python
+def utcnow_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+```
+
+A one-line function with an extensive docstring covering:
+  * Why the helper exists (PEP 695, the 6000-warning baseline noise)
+  * Why we picked naive-output preservation over migrating to aware (scope discipline)
+  * The exact future migration path (4 audit steps) for when the project moves to aware datetimes
+  * That for *new* code, `datetime.now(timezone.utc)` is recommended directly
+
+**`src/curator/_compat/__init__.py` (+10 lines, new)**
+
+Package docstring documenting the `_compat/` module is for stdlib-shim concerns, and that each module here is scoped to a specific deprecation. Sets the pattern for future shims (e.g. Python 3.14's removal of `datetime.utcfromtimestamp()` if we end up using it).
+
+**Mechanical conversion: 117 call sites across 29 files**
+
+A single-pass Python script replaced:
+  * `datetime.utcnow()` (call form, 113 sites) → `utcnow_naive()`
+  * `default_factory=datetime.utcnow` (reference form, 4 sites in dataclass fields) → `default_factory=utcnow_naive`
+  * Added `from curator._compat.datetime import utcnow_naive` to each affected file just after the existing `from datetime import` line
+
+Files touched by category:
+
+| Category | Files | Sites |
+|---|---|---|
+| Models (Pydantic `default_factory`) | audit, bundle, file, lineage, source, trash | 6 |
+| Repositories | audit_repo, file_repo, hash_cache_repo, job_repo, migration_job_repo | 10 |
+| Services | cleanup (17), migration (6), organize (8), scan (5), tier (6), hash_pipeline, metadata_stripper (3) | 46 |
+| CLI | main.py | 4 |
+| Plugins | gdrive_source | 2 |
+| Tests | test_storage (24), test_organize_stage (9), test_models (7), test_organize_apply (3), test_organize (2), 4 other test files | 49 |
+| **Total** | **29 files** | **117 sites** |
+
+**Tests (`tests/unit/test_compat_datetime.py`, +130 lines, 7 new tests)**
+
+  * `test_returns_datetime_instance` -- contract: returns a `datetime`
+  * `test_returned_datetime_is_naive` -- contract: `tzinfo is None` (matches deprecated API)
+  * `test_value_is_approximately_now_in_utc` -- correctness: within 5s of stdlib's `datetime.now(timezone.utc)`
+  * `test_value_is_not_local_time` -- catches the subtle bug where a future refactor accidentally uses `datetime.now()` (local) instead of `datetime.now(timezone.utc)`
+  * `test_two_calls_monotonic_or_equal` -- sanity: time moves forward
+  * `test_does_not_emit_deprecation_warning` -- **the regression test for the whole ship**: if a future Python version starts warning about our replacement implementation, this catches it before users feel the warning spam
+  * `test_exported_in_all` -- `utcnow_naive` is in `__all__`
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `src/curator/_compat/__init__.py` | +10 lines (new package) |
+| `src/curator/_compat/datetime.py` | +76 lines (new module + docstring + helper) |
+| `tests/unit/test_compat_datetime.py` | +130 lines (new, 7 contract tests) |
+| **29 source/test files** | mechanical rewrite: 113 call replacements + 4 reference replacements + 29 import additions |
+| `CHANGELOG.md` | v1.7.47 entry |
+| `docs/releases/v1.7.47.md` | release notes |
+
+### Verification
+
+- **Compat tests**: ✅ 7/7 pass in 0.63s
+- **Full pytest baseline (via detacher)**: ✅ **1554 passed**, 10 skipped, 10 deselected, **0 failed, 0 warnings** in 225.44s
+  - Compare to v1.7.46: `1554 passed, 10 skipped, 10 deselected, 6037 warnings in 256.25s`
+  - **Warning count: 6037 → 0** (full elimination)
+  - **Runtime: -12% (256s → 225s)** from removing warning-serialization overhead
+- **Zero behavior changes**: same test count, same pass/fail, same skip set
+- **Idempotent rewrite**: the conversion script is safe to re-run; it skips files that don't contain `datetime.utcnow` and won't add duplicate imports
+- **Detacher pattern**: sixth consecutive ship; no MCP wedges (poll calls kept to 45s sleeps per lesson #60)
+- **`grep` verification**: zero remaining `datetime.utcnow` references in `src/` and `tests/` outside the `_compat/` module itself (which documents the deprecated API in its docstrings)
+
+### Authoritative-principle catches
+
+**Catch -- the four `default_factory=datetime.utcnow` sites would have been missed by a naive `s/datetime.utcnow()/utcnow_naive()/` regex.** These dataclass fields take a reference to the function (no parens), so the first pass of the rewrite (which only matched the call form with parens) left them behind. A post-pass `grep` caught them; a follow-up pass replaced `default_factory=datetime.utcnow` → `default_factory=utcnow_naive`. Lesson: when doing mechanical rewrites of a deprecated API, audit BOTH the call form AND any places the deprecated symbol is used as a reference (callbacks, default_factory, partial, etc.).
+
+**Catch -- naive-output preservation was the right scope.** The alternative (migrate to `datetime.now(timezone.utc)` aware datetimes everywhere) would have been a much larger ship: tests that compare against `datetime(2026, 1, 1)` (naive) would all need updating; SQLite serialization round-trip would need a tzinfo strategy; pydantic model fields would need explicit `aware` declarations. By choosing naive-preservation, this ship is mechanical, reviewable, and reversible. The timezone-aware migration is queued as a separate v1.8.x ship.
+
+**Catch -- `test_value_is_not_local_time` is the test I almost forgot.** First-draft tests just checked "returns a datetime, is naive, is approximately now". Realized that a subtle refactor could silently change the function to `datetime.now().replace(tzinfo=None)` (local-time-as-naive instead of UTC-as-naive), which would pass all three trivial checks but be deeply wrong. Added the explicit UTC-vs-local discrimination test. This is the test that would catch a future code-style auto-fixer that "simplifies" `datetime.now(timezone.utc).replace(tzinfo=None)` to `datetime.now().replace(tzinfo=None)`.
+
+### Lessons captured
+
+**No new lessons codified.** This is an application of lesson #44 ("mechanical rewrites should be a script, not by-hand") and lesson #50 ("global lint catches what individual file edits miss"). The deprecation cleanup itself is well-established practice; the discipline was in keeping scope tight.
+
+### Limitations
+
+- **`utcnow_naive()` is a temporary helper.** The function name is intentionally non-public-looking (lowercase, in a `_compat` subpackage with a leading underscore). New code should NOT add `utcnow_naive()` calls; use `datetime.now(timezone.utc)` directly when timezone awareness is wanted. When the v1.8.x migration to aware datetimes lands, this helper will be removed.
+- **Behavior is bit-identical, semantics unchanged.** This ship does NOT migrate Curator to timezone-aware datetimes. All existing naive-vs-naive comparisons still work; all SQLite round-trip behavior is preserved. The downside is we still store naive datetimes, which is technically suboptimal for a tool that could be used across timezones.
+- **A few warnings remain in dependencies.** `pytest_qt` and other third-party packages occasionally emit warnings unrelated to `utcnow()`. The baseline now shows zero warnings in the summary because no warning categories fired in the test code itself, but a `--show-warnings` run might still surface stragglers from deps. Out of scope for this ship.
+- **Python 3.14 not yet tested.** Once 3.14 ships, we should add a CI matrix entry to verify the migration actually works. The compat module's `utcnow_naive()` should be 3.14-clean because it uses `datetime.now(timezone.utc)` which is the supported API, but until tested we shouldn't claim it.
+
+### Cumulative arc state (after v1.7.47)
+
+- **47 ships**, all tagged, all baselines green
+- **pytest**: 1554 / 10 / 0 / 0 warnings (was 6037 warnings at v1.7.46)
+- **CI failures resolved**: 4 of 4 from CI run #3 (closed in v1.7.45 + v1.7.46)
+- **Compatibility shims**: 1 (`curator._compat.datetime`) -- new package, sets the pattern for future stdlib shims
+- **Lessons captured**: #46–#61 (unchanged this ship)
+- **Detacher-pattern ships**: 9 (v1.7.39 through v1.7.47)
+- **Backlog item closed**: A3 from the 44-item bulletproof analysis
+
 ## [1.7.46] — 2026-05-11 — Recycle-bin 8.3 short-path expansion (closes CI failure #4)
 
 **Headline:** Adds `_to_long_path` helper to the vendored send2trash recycle-bin reader that calls Win32 `GetLongPathNameW` to expand 8.3 short-path components (e.g. `RUNNER~1` -> `runneradmin`). `_normalize_for_compare` now routes through this helper, so a lookup by short path matches the long-path form stored in `$I` index files. Closes the fourth and final CI failure from v1.7.44's CI run #3 (Class B). After this ship, all four originally-failing CI tests should pass.

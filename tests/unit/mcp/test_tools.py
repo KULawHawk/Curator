@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from typing import Any
 
 import pytest
@@ -348,7 +349,7 @@ def _make_file(
         source_id=source_id,
         source_path=source_path,
         size=size,
-        mtime=datetime.utcnow(),
+        mtime=utcnow_naive(),
         xxhash3_128=xxhash3_128,
         extension=extension,
         file_type=file_type,

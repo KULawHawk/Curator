@@ -45,6 +45,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from curator._compat.datetime import utcnow_naive
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -89,7 +90,7 @@ class TierCriteria:
 
     def cutoff(self) -> datetime:
         """The 'older than this' datetime cutoff for stale-based recipes."""
-        now = self.now or datetime.utcnow()
+        now = self.now or utcnow_naive()
         return now - timedelta(days=self.min_age_days)
 
 
@@ -168,7 +169,7 @@ class TierService:
         report = TierReport(
             recipe=criteria.recipe,
             criteria=criteria,
-            started_at=datetime.utcnow(),
+            started_at=utcnow_naive(),
         )
 
         if criteria.recipe == TierRecipe.COLD:
@@ -185,7 +186,7 @@ class TierService:
 
         report.candidates = candidates
         report.scanned_count = len(candidates)
-        report.completed_at = datetime.utcnow()
+        report.completed_at = utcnow_naive()
         return report
 
     # ------------------------------------------------------------------
@@ -207,7 +208,7 @@ class TierService:
             last = f.last_scanned_at
             if last is None or last >= cutoff:
                 continue
-            days = (criteria.now or datetime.utcnow()) - last
+            days = (criteria.now or utcnow_naive()) - last
             out.append(TierCandidate(
                 file=f,
                 reason=(
@@ -219,7 +220,7 @@ class TierService:
 
     def _scan_expired(self, criteria: TierCriteria) -> list[TierCandidate]:
         """EXPIRED recipe: expires_at IS NOT NULL AND expires_at < now."""
-        now = criteria.now or datetime.utcnow()
+        now = criteria.now or utcnow_naive()
         expired_files = self._file_repo.find_expiring_before(
             when=now,
             source_id=criteria.source_id,
@@ -254,7 +255,7 @@ class TierService:
             last = f.last_scanned_at
             if last is None or last >= cutoff:
                 continue
-            days = (criteria.now or datetime.utcnow()) - last
+            days = (criteria.now or utcnow_naive()) - last
             out.append(TierCandidate(
                 file=f,
                 reason=(

@@ -31,6 +31,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
+from curator._compat.datetime import utcnow_naive
 from pathlib import Path
 from typing import Any, Iterable
 from uuid import UUID
@@ -136,7 +137,7 @@ class ScanService:
             A :class:`ScanReport` with full statistics.
         """
         options = options or {}
-        started = datetime.utcnow()
+        started = utcnow_naive()
 
         # Ensure the source is registered.
         self._ensure_source(source_id)
@@ -183,7 +184,7 @@ class ScanService:
             scan_log("scan.failed", error=str(e), error_type=type(e).__name__)
             raise
         finally:
-            report.completed_at = datetime.utcnow()
+            report.completed_at = utcnow_naive()
 
         return report
 
@@ -224,7 +225,7 @@ class ScanService:
             plus ``files_deleted`` reflecting paths that vanished.
         """
         options = options or {}
-        started = datetime.utcnow()
+        started = utcnow_naive()
 
         # Ensure the source is registered.
         self._ensure_source(source_id)
@@ -273,7 +274,7 @@ class ScanService:
             scan_log("scan.failed", error=str(e), error_type=type(e).__name__)
             raise
         finally:
-            report.completed_at = datetime.utcnow()
+            report.completed_at = utcnow_naive()
 
         return report
 
@@ -505,7 +506,7 @@ class ScanService:
         report.files_seen += 1
 
         existing = self.files.find_by_path(source_id, info.path)
-        now = datetime.utcnow()
+        now = utcnow_naive()
         inode = info.extras.get("inode") if info.extras else None
 
         if existing is None:

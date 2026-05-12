@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from curator._compat.datetime import utcnow_naive
 
 from curator.models.file import FileEntity
 from curator.storage.connection import CuratorDB
@@ -76,7 +77,7 @@ class HashCacheRepository:
                 xxhash3_128=file.xxhash3_128,
                 md5=file.md5,
                 fuzzy_hash=file.fuzzy_hash,
-                computed_at=datetime.utcnow(),
+                computed_at=utcnow_naive(),
             )
         )
 
@@ -98,7 +99,7 @@ class HashCacheRepository:
 
     def purge_older_than(self, *, days: int) -> int:
         """Delete cache entries computed more than N days ago. Returns count deleted."""
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = utcnow_naive() - timedelta(days=days)
         with self.db.conn() as conn:
             cursor = conn.execute(
                 "DELETE FROM hash_cache WHERE computed_at < ?", (cutoff,)
