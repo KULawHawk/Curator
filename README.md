@@ -65,6 +65,57 @@ python -m venv .venv
 pip install -e .[dev]
 ```
 
+## Contributing — dev setup
+
+Curator's CI pipeline runs a 9-cell matrix (`{windows, ubuntu, macos} × {Python 3.11, 3.12, 3.13}`) on every push. To keep that matrix green, the repo carries three project-invariant lints and two git hooks. A one-shot installer wires them up:
+
+```powershell
+.\scripts\setup_dev_hooks.ps1
+```
+
+The installer is idempotent (re-running is safe) and does three things:
+
+1. **Sets `git config core.hooksPath .githooks`** so the per-repo hooks below activate.
+2. **Prompts for a GitHub Personal Access Token** (optional, skip with `-SkipPat`). Stored at `~/.curator/github_pat`. Only `actions:read` scope needed. Used by `ci_diag.ps1` and the pre-push hook.
+3. **Verifies** that both hooks are present and reports a quick-reference for everyday workflows.
+
+### What the hooks do
+
+**`.githooks/pre-commit`** runs three pytest lints in one invocation (~0.5s total). Each blocks commits that would re-introduce a previously-fixed bug class:
+
+| Lint | Scope | Catches |
+|---|---|---|
+| Glyph (v1.7.32) | `src/curator/cli/` outside `util.py` | Literal Unicode glyphs that crash cp1252 capture (lesson #50) |
+| ORDER BY tie-breaker (v1.7.72) | `src/curator/storage/repositories/` | `ORDER BY <timestamp>` without `rowid` or a documented-unique column (caused 20-ship silent CI red arc in lesson #67) |
+| Inline ANSI regex (v1.7.73) | `tests/` outside `conftest.py` | Re-introducing the `re.sub(r"\x1b\[...")` pattern that v1.7.68 hoisted into the shared `strip_ansi` fixture |
+
+Each lint can be exempted on a specific line with an inline comment (`# order-by-lint: <reason>`, `# ansi-lint: <reason>`). For genuine emergencies, the whole hook is bypassable with `git commit --no-verify`.
+
+**`.githooks/pre-push`** queries the GitHub Actions API for the latest CI run. If it returns:
+
+* `completed / success` — silent pass
+* `completed / failure` — loud warning with run URL + bypass instructions (never blocks)
+* `in_progress` — informational note ("previous run still in flight")
+* Anything else (or no token) — silent skip
+
+Bypass with `git push --no-verify`. The hook is a *signal*, not a *gate*: it never blocks pushes, only ensures you can't miss a red dashboard.
+
+### CI diagnostic loop
+
+`.\scripts\ci_diag.ps1` is the one-command CI loop that codifies lesson #67 mitigation #1:
+
+```powershell
+.\scripts\ci_diag.ps1 status      # 9-cell grid of the latest run
+.\scripts\ci_diag.ps1 summary     # Failing-test list across all red cells
+.\scripts\ci_diag.ps1 logs <pat>  # Grep logs for a substring
+```
+
+Token discovery (in order): `$GH_TOKEN`, `$GITHUB_TOKEN`, `~/.curator/github_pat`. The script silently skips if no token is available.
+
+### Automated dependency tracking
+
+`.github/dependabot.yml` watches the GitHub Actions ecosystem. Weekly Monday 08:00 America/Chicago, all bumps grouped into one PR, limit 5 open at a time. CI gates every merge.
+
 ## Quick start
 
 ```powershell

@@ -4,6 +4,121 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.75] — 2026-05-12 — README "Contributing — dev setup" section: surface the hooks/lints/scripts at the top of the repo
+
+**Headline:** Ten ships of hygiene infrastructure (v1.7.65–v1.7.74) added `setup_dev_hooks.ps1`, `ci_diag.ps1`, two git hooks, three project-invariant lints, and Dependabot — but their existence was only documented inline in each file's header comment. **This ship adds a top-level "Contributing — dev setup" section to README.md** that surfaces the entire toolkit in one place, with concrete commands and rationale.
+
+### Why this ship matters
+
+v1.7.70/v1.7.72/v1.7.73/v1.7.74 release notes each ended with "No README documentation for the new ..." as a limitation. New contributors (or Jake himself returning to the repo after a break) would have to scrape together the developer workflow from individual file headers. This ship consolidates everything contributors need to know in one place.
+
+### What's in the new section
+
+The README now includes a `Contributing — dev setup` section after `Install`, covering:
+
+  * **One-command setup** — `.\scripts\setup_dev_hooks.ps1` as the primary entry point
+  * **Three things the installer does** — hooksPath, PAT prompt, verification
+  * **What pre-commit does** — table of the three lints (glyph, ORDER BY, inline ANSI regex) with scope + what each catches
+  * **What pre-push does** — the four CI-status outcomes (success / failure / in_progress / other)
+  * **CI diagnostic loop** — `ci_diag.ps1` modes (`status`, `summary`, `logs`) with sample commands
+  * **Automated dependency tracking** — Dependabot scope and cadence
+  * **Inline exemption syntax** — `# order-by-lint: <reason>` and `# ansi-lint: <reason>` namespaces
+  * **Bypass commands** — `git commit --no-verify` / `git push --no-verify` for emergencies
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `README.md` | +51 | New "Contributing — dev setup" section between Install and Quick start |
+| `CHANGELOG.md` | +N | v1.7.75 entry |
+| `docs/releases/v1.7.75.md` | +N | release notes |
+
+No source, test, workflow, or production-code changes.
+
+### Verification
+
+- **3 lints still pass** locally (README is outside any lint's scope) ✅
+- **Expected CI result**: 9/9 GREEN (doc-only ship)
+
+### What this fix does NOT do
+
+- **Doesn't move documentation OUT of file headers.** The inline comments in each hook/script remain authoritative for that specific component. The README is a synthesis, not a replacement.
+- **Doesn't add a separate `CONTRIBUTING.md`.** Keeping everything in the README's Contributing section avoids forcing contributors to navigate to another file. If the section grows beyond ~100 lines, it can be split out later.
+- **Doesn't document the `run_pytest_detached.ps1` script.** That one is for MCP-tooling-specific scenarios (v1.7.39); not standard developer workflow.
+- **Doesn't add a bash variant** of setup_dev_hooks.ps1. Separate future ship.
+- **Doesn't update USER_GUIDE.md.** USER_GUIDE is for Curator's end-users (people USING the tool); the README dev-setup section is for contributors (people MODIFYING the tool).
+- **Doesn't add badges or shields.io entries** for lint counts or hook status. The existing tests-badge at the top of the README is sufficient.
+
+### Authoritative-principle catches
+
+**Catch -- README section placement.** Inserted between `Install` and `Quick start`. Logical flow: install → (if you're contributing, do this) → use. New contributors who install with `pip install -e .[dev]` naturally see the next section.
+
+**Catch -- table format for the three lints.** Compact, scannable, and consistent. Each row maps directly to a real ship's release notes for deep-dive context.
+
+**Catch -- pre-push behavior shown as state → action table.** Four outcomes, one line each. Reduces the cognitive overhead of "what does this hook actually do?"
+
+**Catch -- explicit bypass commands.** `git commit --no-verify` and `git push --no-verify` are documented prominently. The hook isn't a gate; the README makes that clear.
+
+**Catch -- token-discovery order documented.** Three sources listed in priority order matches the script's actual behavior. Contributors know exactly where to put their PAT.
+
+**Catch -- ci_diag.ps1 commands shown verbatim.** Copy-paste-able. Each mode has a one-line description, not a paragraph.
+
+**Catch -- Dependabot scope is one paragraph, not a subsection.** Most contributors won't interact with Dependabot directly; minimal documentation is appropriate.
+
+**Catch -- ship versions inline in the table.** `Glyph (v1.7.32)`, `ORDER BY tie-breaker (v1.7.72)`, `Inline ANSI regex (v1.7.73)`. Lets contributors find the originating release notes for any lint.
+
+### Lessons captured
+
+**No new lesson codified.** Reinforces:
+  * **Infrastructure ships need documentation ships.** A toolchain is only as useful as its discoverability. Ten ships of hygiene infrastructure became substantially more useful when consolidated into a README section.
+  * **README is the right home for contributor onboarding.** Forcing contributors to find CONTRIBUTING.md or scrape through `.githooks/` and `scripts/` adds friction. The top-level README is the single source of truth for "how do I work on this repo?"
+  * **Documentation should follow tooling, not lead it.** v1.7.65–v1.7.74 each built one piece; v1.7.75 documents the assembled toolkit. Documenting prematurely would have required rewriting as the toolkit evolved.
+
+### Limitations
+
+- **No CONTRIBUTING.md** (intentional; section is in README)
+- **No badge integration** for hook/lint status
+- **No code-of-conduct section**
+- **No PR template** documentation
+- **No issue templates** documentation
+- **No tooling-version compatibility matrix** (Python 3.11/3.12/3.13 + 3 OSes)
+- **No screenshots** of CI dashboard or hook output
+
+### Cumulative arc state (after v1.7.75)
+
+- **75 ships**, all tagged.
+- **pytest local Windows**: 1809 / 10 / 0 (unchanged this ship; doc-only)
+- **pytest CI v1.7.74**: ✅ confirmed 9/9 GREEN. v1.7.75 expected 9/9 GREEN.
+- **Coverage local**: 66.96% (unchanged)
+- **CI matrix**: 9 cells, on Node.js 24 since v1.7.67, watched by Dependabot since v1.7.71. 9/9 GREEN since v1.7.64.
+- **All 4 Tier 3 modules at 94%+ coverage** (v1.7.55–58)
+- **Tier 1**: A1, A3, C1 closed; A2 workaround
+- **Tier 2**: E3, C5, D3, A4, C6 closed
+- **Tier 3 (test coverage)**: ALL 4 CLOSED
+- **CI hygiene + post-arc hardening + modernization + refactor + audit + hook + automation + lint x2 + installer + docs**: 17 ships (v1.7.59–v1.7.75)
+  * v1.7.59–64: arc closure (red → green)
+  * v1.7.65: diagnostic tooling codified (lesson #67 mitigation #1)
+  * v1.7.66: bug-class sweep (ORDER BY rowid hardening)
+  * v1.7.67: Node.js 24 modernization
+  * v1.7.68: DRY refactor (strip_ansi fixture)
+  * v1.7.69: Linux `/var` audit (mirrors v1.7.63)
+  * v1.7.70: pre-push CI verification hook (lesson #67 mitigation #3 — lesson fully mitigated)
+  * v1.7.71: Dependabot automation
+  * v1.7.72: Pre-commit ORDER BY regression lint
+  * v1.7.73: Pre-commit inline ANSI regex lint
+  * v1.7.74: Auto-install dev setup script
+  * v1.7.75: README "Contributing — dev setup" section (this ship)
+- **6+ consecutive verified 9/9 GREEN runs** (v1.7.66, v1.7.67, v1.7.69, v1.7.70, v1.7.73, v1.7.74)
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#67
+- **Detacher-pattern ships**: 19 (unchanged)
+- **Tooling scripts**: `run_pytest_detached.ps1`, `ci_diag.ps1`, `setup_dev_hooks.ps1`
+- **Git hooks**: `.githooks/pre-commit` (3 lints), `.githooks/pre-push` (CI warning)
+- **Shared test helpers**: `strip_ansi` fixture (v1.7.68)
+- **Automated tracking**: Dependabot (v1.7.71)
+- **Project invariant lints**: glyph (v1.7.32/34), ORDER BY (v1.7.72), ANSI regex (v1.7.73)
+- **Top-level documentation**: README "Contributing — dev setup" section (v1.7.75)
+
 ## [1.7.74] — 2026-05-12 — Auto-install dev setup script: codify hooksPath + PAT manual steps
 
 **Headline:** v1.7.70 (pre-push hook) and v1.7.65 (ci_diag.ps1) both rely on per-clone configuration: `git config core.hooksPath .githooks` plus an optional `~/.curator/github_pat` file. Until now, those steps were documented only in inline hook header comments and required manual execution. **This ship adds `scripts/setup_dev_hooks.ps1`**, an idempotent one-stop installer that configures both, with token discovery, prompting, validation, and verification.
