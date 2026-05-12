@@ -1,5 +1,7 @@
 # Curator
 
+[![tests](https://github.com/KULawHawk/Curator/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/KULawHawk/Curator/actions/workflows/test.yml)
+
 A content-aware artifact intelligence layer for files.
 
 **Status:** v1.4.0 stable (released 2026-05-08). v1.0.0rc1 was the stability anchor; v1.1.0 shipped the Migration tool ("Tracer") with persistent resumable jobs, worker-pool concurrency, cross-source migration, and a PySide6 Migrate tab. v1.1.1 → v1.1.2 → v1.1.3 added the plugin ecosystem hookspecs that let third-party plugins enforce constitutional invariants (Atrium Principles 2 & 4) over Curator's plugin surface. v1.2.0 added an optional `[mcp]` extra exposing a Model Context Protocol server (`curator-mcp`) so LLM clients (Claude Desktop, Claude Code, third-party agents) can query Curator's index, audit log, and lineage programmatically. v1.3.0 closed Tracer's two highest-value Phase 2 deferrals: quota-aware retry with exponential backoff for cross-source transient errors (`--max-retries`) and four-mode destination-collision handling (`--on-conflict={skip,fail,overwrite-with-backup,rename-with-suffix}`). v1.4.0 closes the v1.3.0 cross-source simplification: the new `curator_source_rename` hookspec lets `overwrite-with-backup` and `rename-with-suffix` work end-to-end across source boundaries (local↔gdrive); plugins not implementing the new hook automatically retain v1.3.0 degrade-to-skip behavior (strictly additive). See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.

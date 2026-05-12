@@ -1,0 +1,80 @@
+# =============================================================================
+# .github/workflows/test.yml   (v1.7.42)
+#
+# Continuous integration: run the full pytest baseline on every push to main
+# and every pull request targeting main. Catches regressions before they
+# land, so "green baseline" stops being a claim and becomes a fact.
+#
+# Design choices
+# --------------
+# * Windows runner only for v1: Curator is Windows-first; runs-on
+#   windows-latest matches dev environment exactly. Cross-platform matrix
+#   (ubuntu-latest, macos-latest) is a future ship -- adds ~3x runner-minutes
+#   for marginal coverage gain when the project's deployment is Windows.
+#
+# * Single Python version for v1: 3.13 to match dev. pyproject claims
+#   >=3.11; an explicit matrix [3.11, 3.12, 3.13] is a future ship.
+#
+# * Full extras profile [all]: matches what setup_dev_env.py defaults to,
+#   so CI exercises the same install path a real contributor uses.
+#
+# * QT_QPA_PLATFORM=offscreen: lets the GUI test suite (~24 tests) run
+#   headless. Already proven locally; same setting the local detached
+#   pytest uses.
+#
+# * --timeout=120 per-test: catches hangs without killing the whole run
+#   on a single slow test. The flake `test_abort_during_run_marks_cancelled`
+#   may still trip occasionally; CI re-run is the workaround until A1
+#   ships the fix.
+#
+# * 15-minute job timeout: the baseline runs in ~3 min locally; CI runs
+#   are usually a bit slower (cold pip cache first time, cold Qt startup).
+#   15 min has 5x headroom.
+#
+# * Pip cache via setup-python: speeds up repeat runs by re-using the
+#   downloaded wheels from the previous run. Cache key is automatically
+#   keyed on pyproject.toml + lock files.
+# =============================================================================
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel any in-progress run for the same branch when a new push arrives.
+# Saves CI minutes when developers push fix-ups rapidly.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (Windows / Python 3.13)
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+          cache-dependency-path: pyproject.toml
+
+      - name: Install Curator (full extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[all]"
+
+      - name: Run pytest
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONIOENCODING: utf-8
+        run: |
+          pytest tests/ -q --tb=line --timeout=120

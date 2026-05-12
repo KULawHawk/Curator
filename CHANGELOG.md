@@ -4,6 +4,91 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.42] — 2026-05-11 — GitHub Actions CI (C1)
+
+**Headline:** New `.github/workflows/test.yml` runs the full pytest baseline on every push to main and every pull request, on a Windows runner with Python 3.13 + full extras profile + Qt offscreen. Green baseline stops being a claim and becomes an enforced fact. README now shows a live CI status badge.
+
+### Why this matters
+
+For 41 consecutive ships, the only thing standing between "main is green" and "main is broken" was me running pytest locally before pushing. If I skipped that step -- or if a flaky test passed locally but would fail in a clean environment -- main could be broken for an unknown number of commits with no automatic detection.
+
+In the bulletproof-live analysis at v1.7.41, **"no CI"** was identified as the single biggest invisible risk. The user called this out directly: a ~30-line YAML file would convert "I think we're green" to "we're objectively green on every commit." v1.7.42 ships exactly that.
+
+This is the most leveraged ship in the recent arc: tiny implementation, enormous future protection. Every subsequent ship benefits automatically.
+
+### What's new
+
+**`.github/workflows/test.yml` (+78 lines including extensive comments)**
+
+A single-job workflow that on every `push: [main]` and `pull_request: [main]`:
+
+1. Checks out the repository (`actions/checkout@v4`)
+2. Sets up Python 3.13 with pip cache keyed on pyproject.toml (`actions/setup-python@v5`)
+3. Installs Curator with the full extras: `pip install -e ".[all]"`
+4. Runs `pytest tests/ -q --tb=line --timeout=120` with `QT_QPA_PLATFORM=offscreen` and `PYTHONIOENCODING=utf-8`
+
+Key design choices (each documented inline in the YAML):
+
+  * **Windows runner only (`windows-latest`)** for v1. Curator is Windows-first; runs-on windows-latest matches dev environment exactly. Cross-platform matrix (ubuntu-latest, macos-latest) is a future ship -- adds ~3x runner-minutes for marginal coverage gain when the project's deployment is Windows.
+  * **Python 3.13 only** for v1 to match local dev. pyproject claims `>=3.11`; explicit `[3.11, 3.12, 3.13]` matrix is a future ship that catches Python-specific breakage in the supported range.
+  * **Full extras profile** matches what `setup_dev_env.py --profile full` defaults to; CI exercises the same install path a real contributor uses.
+  * **`--timeout=120` per-test** catches hangs without killing the whole run on a single slow test.
+  * **15-minute job timeout** has 5x headroom over the typical 3-min local baseline.
+  * **Concurrency cancel** (`cancel-in-progress: true` on a per-branch group) saves CI minutes when developers push fix-ups rapidly.
+  * **Pip cache** keyed on `pyproject.toml` speeds up repeat runs after the first cache fill.
+
+**README CI badge (+2 lines)**
+
+A standard GitHub Actions badge at the top of the README showing live test status. Green = main is objectively green; red = something broke and the linked workflow page shows what.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `.github/workflows/test.yml` | +78 (new) | CI workflow definition |
+| `README.md` | +2 | tests badge at the top |
+| `CHANGELOG.md` | +N | v1.7.42 entry |
+| `docs/releases/v1.7.42.md` | +N | release notes |
+
+No source code changes. No test changes. Pure infrastructure.
+
+### Verification
+
+- **YAML well-formed**: parsed with PyYAML; 4 steps, correct triggers (push + pull_request on main), Windows runner, 15-min job timeout, pip cache configured
+- **First CI run**: will execute automatically on the v1.7.42 push to main. Status will be visible at https://github.com/KULawHawk/Curator/actions and via the new README badge.
+- **Local baseline**: not re-run for this ship (no code changes that could affect tests; v1.7.41 baseline was 1549 passed in 340s)
+- **Detacher pattern**: not needed -- this ship has no long-running local pytest runs
+
+### Authoritative-principle catches
+
+**Catch -- I'd been doing feature work for 41 ships when infrastructure work was higher-leverage.** The user's pointed question ("why are we not doing this?") surfaced that I was picking shipable-feature work because features have clear end states ("did the dialog work?") while CI requires a one-time foundational decision that I never made. Bad prioritization. Once stated plainly, the right move was to pivot immediately and ship in <30 min.
+
+**Design discipline -- single OS, single Python version for v1.** It's tempting to build a comprehensive matrix on day one (`[ubuntu, windows, macos] x [3.11, 3.12, 3.13] = 9 jobs`), but each cell adds runner-minutes and complexity. The 80/20 rule says: cover the dev environment first (windows-latest + 3.13), then expand only when a specific gap proves it's needed. Documented in the workflow YAML so future contributors know it's intentional, not oversight.
+
+### Lessons captured
+
+* **#61: Infrastructure ships beat feature ships when missing.** Spending 30 minutes on a YAML file that protects every subsequent ship is dramatically higher-leverage than 30 minutes on another feature. The signal that infrastructure is missing: "green baseline" is a claim that depends on a single human running a single command consistently. When you notice that, drop the feature and ship the infrastructure. The user surfacing this directly was the prompt; the lesson is to look for it pre-prompt next time.
+
+### Limitations
+
+- **No Linux/macOS coverage.** v1 is Windows-only. If a refactor breaks cross-platform path handling, CI won't catch it until a manual test on Linux/macOS or a future cross-platform matrix ship.
+- **No matrix on Python 3.11 / 3.12.** pyproject claims `>=3.11` but only 3.13 is exercised. A future matrix ship would catch Python-version-specific regressions in the supported range.
+- **No coverage reporting.** We know how many tests pass, not what fraction of source lines they exercise. `pytest-cov` + `codecov` integration is a future ship.
+- **Flaky migration test will occasionally fail CI.** `test_abort_during_run_marks_cancelled` (lesson #59 limitation; pre-existing threading flake) will fail in CI at the same rate it fails locally (~5-10%). Workaround: manual CI re-run. Real fix: A1 from the bulletproof-live backlog.
+- **No CI-side lint enforcement.** The lesson #50 lint is already in the pre-commit hook (`.githooks/pre-commit`); the hook is the source of truth. CI runs pytest which includes the lesson #50 test (defense in depth). A separate explicit lint step on every push would be more visible but is redundant.
+- **No release artifact builds.** `git tag v1.7.42` doesn't publish a wheel/sdist to PyPI. Users installing Curator still need to clone the repo. Release engineering is a future ship.
+- **CI runner minutes are billed.** Free tier for public repos is 2000 min/month. Each CI run is ~3-5 min, so ~400 pushes/month before hitting the limit. Curator's current pace is well under that.
+
+### Cumulative arc state (after v1.7.42)
+
+- **42 ships**, all tagged, all baselines green
+- **pytest**: 1549 / 9 / 0 (unchanged from v1.7.41)
+- **CI workflows**: 1 (`test.yml`) -- NEW
+- **Workflow scripts**: 2 (`run_pytest_detached.ps1`, `setup_dev_env.py`)
+- **Lessons captured**: #46–#61 (+1 this ship)
+- **Bulletproof-live backlog item C1**: closed (CI exists)
+- **First infrastructure ship** in the recent arc; sets the precedent for shipping infrastructure when it's missing
+
 ## [1.7.41] — 2026-05-11 — One-shot dev environment setup script
 
 **Headline:** New `scripts/setup_dev_env.py` takes a fresh clone to a working dev install + smoke-tested baseline in one command. Three profiles (minimal / standard / full) cover most contributor needs; `--dry-run`, `--force`, and `--no-smoke` flags handle edge cases. Closes the dev-onboarding friction and codifies what was previously tribal knowledge (correct Python version, right extras to install, how to verify the install).
