@@ -1170,7 +1170,7 @@ class CuratorMainWindow(QMainWindow):
             )
 
     def _slot_source_context_menu(self, pos: QPoint) -> None:
-        """Right-click menu on sources table: enable/disable/remove."""
+        """Right-click menu on sources table: properties / enable / disable / remove."""
         item = self._tbl_sources.itemAt(pos)
         if item is None:
             return
@@ -1184,6 +1184,16 @@ class CuratorMainWindow(QMainWindow):
         currently_enabled = (enabled_cell is not None and enabled_cell.text() == "yes")
 
         menu = QMenu(self)
+
+        # v1.7.40: Properties... opens SourceAddDialog in edit mode
+        act_props = QAction("Properties...", self)
+        act_props.triggered.connect(
+            lambda checked=False, sid=source_id: self._slot_source_edit_properties(sid)
+        )
+        menu.addAction(act_props)
+
+        menu.addSeparator()
+
         act_toggle = QAction(
             "Disable" if currently_enabled else "Enable", self,
         )
@@ -1202,6 +1212,51 @@ class CuratorMainWindow(QMainWindow):
         menu.addAction(act_remove)
 
         menu.exec(self._tbl_sources.viewport().mapToGlobal(pos))
+
+    def _slot_source_edit_properties(self, source_id: str) -> None:
+        """v1.7.40: open SourceAddDialog in edit mode for an existing source.
+
+        Loads the SourceConfig from source_repo, opens the dialog with
+        ``editing_source=existing``, refreshes the table on successful
+        save. Logs/surfaces errors loudly (the user explicitly invoked
+        the action via right-click).
+        """
+        try:
+            existing = self.runtime.source_repo.get(source_id)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "Source load failed",
+                f"Could not load source <b>{source_id}</b>:<br>"
+                f"{type(e).__name__}: {e}",
+            )
+            return
+        if existing is None:
+            QMessageBox.warning(
+                self, "Source not found",
+                f"Source <b>{source_id}</b> not found in the database. "
+                f"It may have been removed in another shell. Try Refresh.",
+            )
+            self._refresh_sources_table()
+            return
+
+        try:
+            from curator.gui.dialogs import SourceAddDialog
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "Source edit unavailable",
+                f"Could not import SourceAddDialog: {e}",
+            )
+            return
+
+        dlg = SourceAddDialog(self.runtime, self, editing_source=existing)
+        from PySide6.QtWidgets import QDialog as _QDialog
+        result = dlg.exec()
+        if result == _QDialog.DialogCode.Accepted and dlg.saved_source_id:
+            self._refresh_sources_table()
+            QMessageBox.information(
+                self, "Source updated",
+                f"Source <b>{dlg.saved_source_id}</b> has been updated.",
+            )
 
     def _toggle_source_enabled(self, source_id: str, enabled: bool) -> None:
         try:

@@ -4,6 +4,88 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.40] — 2026-05-11 — GUI source-edit dialog (closes v1.7.39 limitation 1)
+
+**Headline:** Right-click a row in the Sources tab → **Properties...** now opens `SourceAddDialog` in edit mode. Users can change `share_visibility`, `display_name`, `enabled`, and any plugin config field on an existing source via the GUI — no more CLI fallback. The class supports both add + edit modes via a single optional `editing_source` constructor parameter (DRY).
+
+### Why this matters
+
+v1.7.39 shipped `share_visibility` as a dropdown in `SourceAddDialog`, but only on creation. Changing an EXISTING source's visibility still required `curator sources config <id> --share-visibility X` from the CLI. v1.7.39 explicitly listed this as a limitation. v1.7.40 closes it with a small, focused ship that doesn't introduce a parallel dialog class — instead it teaches the existing `SourceAddDialog` to do both jobs.
+
+Design choice: one class, two modes. The alternative (a separate `SourceEditDialog`) would have duplicated ~150 lines of dynamic plugin-config rendering for marginal separation benefit. The single-class approach with mode flags is the standard "create-or-update form" pattern; the new branches are tiny and well-documented inline.
+
+### What's new
+
+**`SourceAddDialog` extensions (`src/curator/gui/dialogs.py`, +130 lines)**
+
+  * New `editing_source: SourceConfig | None = None` keyword parameter on `__init__`. When provided, the dialog enters edit mode.
+  * New `is_edit_mode` property exposes the mode for tests and callers.
+  * New `saved_source_id` property as a semantic alias for `created_source_id` (the latter is misleading when the dialog updated rather than inserted). Both return the same value.
+  * New `_prefill_from_source(src)` helper populates every widget from an existing SourceConfig:
+    - source_id text + set read-only with tooltip explaining immutability
+    - source_type combobox set + disabled (changing type would invalidate the existing config schema)
+    - Plugin config widgets (rebuilt for the locked source_type, then filled from `src.config` by field name; arrays joined with newlines, booleans -> checkbox state, scalars -> line edit)
+    - display_name, enabled checkbox, share_visibility dropdown
+  * Window title switches to `Curator - Edit source: <source_id>` in edit mode.
+  * `_on_ok_clicked` now switches between `source_repo.insert()` (add mode) and `source_repo.update()` (edit mode). `created_at` is preserved from the existing source on edit — it is NOT reset to `datetime.now()`, so sorting/filtering by creation date stays accurate. Error message verb switches from "insert" to "update" in edit mode.
+
+**`CuratorMainWindow` wiring (`src/curator/gui/main_window.py`, +55 lines)**
+
+  * New "Properties..." entry at the TOP of the sources right-click context menu, with a separator before the existing Enable/Disable. Properties is the most discoverable spot for the new feature.
+  * New `_slot_source_edit_properties(source_id)` method: loads `source_repo.get(source_id)`, surfaces a clean error if the source vanished between right-click and click, opens `SourceAddDialog` with `editing_source=existing`, refreshes the sources table on accept + shows a confirmation dialog. All failure paths use `QMessageBox` with descriptive error text rather than silent log writes.
+
+**Tests (`tests/gui/test_gui_source_edit.py`, +280 lines, 15 new tests)**
+
+  * Mode detection (2): edit-mode flag set when constructed with `editing_source`; cleared in add mode
+  * Window title (1): includes the source_id being edited
+  * Prefill (6): source_id (read-only), source_type (disabled), display_name, enabled, share_visibility, plugin config array field
+  * Save path (5): share_visibility change persists; created_at preserved; saved_source_id alias works; enabled toggle persists; config field edit persists
+  * Back-compat regression (1): add mode still works with v1.7.39 behavior
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `src/curator/gui/dialogs.py` | +130 | editing_source param + `_prefill_from_source` + saved_source_id/is_edit_mode props + insert/update switch in `_on_ok_clicked` |
+| `src/curator/gui/main_window.py` | +55 | Properties... menu entry + `_slot_source_edit_properties` |
+| `tests/gui/test_gui_source_edit.py` | +280 (new) | 15 edit-mode tests including back-compat regression |
+| `CHANGELOG.md` | +N | v1.7.40 entry |
+| `docs/releases/v1.7.40.md` | +N | release notes |
+
+### Verification
+
+- **GUI edit tests**: 15/15 pass in 2.31s (`tests/gui/test_gui_source_edit.py`)
+- **GUI parity tests from v1.7.39**: 9/9 still pass (no regression to the add-mode path)
+- **Full pytest baseline (via detacher)**: ✅ **1529 passed**, 9 skipped, 9 deselected, 0 failed in 175.26s (was 1514 at v1.7.39; +15 new tests, all passing)
+- **Smoke test**: programmatically constructed an edit-mode dialog against a real DB; verified title, mode flag, all prefilled widgets, immutability locks all read correctly
+- **Detacher pattern**: full baseline ran via `scripts/run_pytest_detached.ps1` with zero MCP wedges and zero hangs (third consecutive ship using the detacher; pattern is now proven)
+- **Lesson #50 lint**: still passing on every commit
+
+### Authoritative-principle catches
+
+**Catch — `_prefill_from_source` must run AFTER `_on_source_type_changed`.** Initial draft prefilled before the plugin widgets existed; tests would have caught this but designed the dialog flow correctly upfront: __init__ calls `_on_source_type_changed()` first (which builds widgets for the alphabetically-first plugin), then in edit mode `_prefill_from_source` runs which sets source_type to the actual stored type and calls `_on_source_type_changed` again to rebuild widgets for the right plugin. The double call is cheap and keeps the code path linear.
+
+**Design note — source_type is mutable in SQL but immutable in GUI.** `SourceRepository.update()` will happily UPDATE `source_type` if you pass a different value, but doing so would invalidate the existing `config_json` (which was validated against a different plugin's schema). The GUI enforces immutability via a disabled combobox + tooltip. The CLI could in principle allow it, but currently has no flag for it either. Documented in dialog tooltip and in this changelog.
+
+**No new lesson codified.** The patterns used here (create-or-update form, prefill-after-build sequencing, mode flags) are well-established UI patterns. The interesting catches were design choices, not surprises.
+
+### Limitations
+
+- **No "Cancel changes" preview.** Once OK is clicked, the update is final. Users wanting to compare before/after can use `git log` on the DB or `curator audit` (the v1.7.31 audit-export records source-config mutations).
+- **No bulk edit.** Right-click on multiple selected rows shows the context menu for the first selection only. Bulk source-property editing (e.g., "make these 5 sources public") is a future ship.
+- **source_type immutability is GUI-only.** The CLI's `curator sources config` doesn't expose a `--source-type` flag, but `SourceRepository.update()` accepts changes at the API level. A future hardening could add validation at the repository layer that rejects source_type changes outright.
+- **Edit mode doesn't validate config field types on re-save.** If a user manually edits the DB and breaks a config field, the dialog will prefill with the broken value and re-save it. The CLI's plugin-schema validation could be invoked here for extra defense, but the dialog already calls `_collect_config` which catches most issues.
+
+### Cumulative arc state (after v1.7.40)
+
+- **40 ships**, all tagged, all baselines green
+- **pytest**: 1529 / 9 / 0 (+15 from v1.7.39)
+- **GUI dialogs supporting create + edit modes**: 1 (SourceAddDialog) — NEW
+- **GUI parity for CLI features**: 3 (share_visibility, no_autostrip, source-config editing)
+- **Lessons captured**: #46–#59 (unchanged; no new this ship)
+- **v1.7.39 limitation 1 (GUI source-edit)**: closed
+- **Detacher-pattern ships**: 2 (v1.7.39 + v1.7.40) — zero MCP wedges
+
 ## [1.7.39] — 2026-05-11 — GUI parity for v1.7.29 + v1.7.35; streaming audit-export; detached-pytest workflow
 
 **Headline:** Combined ship covering three threads: (1) GUI parity for two prior CLI features (`share_visibility` dropdown in `SourceAddDialog`, Keep-metadata checkbox in `TierDialog`); (2) streaming audit-export via new `AuditRepository.iter_query()` so multi-hundred-thousand-row exports stay memory-bounded; (3) a workflow fix — `scripts/run_pytest_detached.ps1` — that lets long pytest runs complete without wedging MCP servers via held stdio pipes (a problem encountered repeatedly in autonomous-mode sessions).

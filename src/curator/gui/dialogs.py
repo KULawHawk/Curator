@@ -2652,19 +2652,48 @@ class SourceAddDialog(QDialog):
     config keys.
     """
 
-    def __init__(self, runtime: "CuratorRuntime", parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        runtime: "CuratorRuntime",
+        parent: QWidget | None = None,
+        *,
+        editing_source: "SourceConfig | None" = None,
+    ) -> None:
+        """Construct the dialog.
+
+        v1.7.40: when ``editing_source`` is provided, the dialog enters
+        edit mode -- prefills all widgets from the existing source,
+        disables the immutable identity fields (source_id, source_type),
+        relabels the window/buttons, and switches the submit path from
+        ``source_repo.insert()`` to ``source_repo.update()``. The created_at
+        timestamp is preserved across the edit (not reset to now()).
+        """
         super().__init__(parent)
         self.runtime = runtime
         self._registered_types: dict[str, dict] = {}  # source_type -> metadata
         self._config_widgets: dict[str, Any] = {}     # field_name -> widget
-        self._created_source_id: str | None = None    # set on successful insert
+        self._created_source_id: str | None = None    # set on successful insert/update
 
-        self.setWindowTitle("Curator - Add source")
+        # v1.7.40: edit mode plumbing
+        self._editing_source = editing_source
+        self._is_edit_mode = editing_source is not None
+
+        if self._is_edit_mode:
+            self.setWindowTitle(
+                f"Curator - Edit source: {editing_source.source_id}"
+            )
+        else:
+            self.setWindowTitle("Curator - Add source")
         self.setMinimumWidth(560)
         self.resize(620, 540)
         self._discover_plugins()
         self._build_ui()
         self._on_source_type_changed()  # populate fields for default type
+
+        # v1.7.40: in edit mode, prefill from the existing source AFTER
+        # _on_source_type_changed has built the plugin config widgets.
+        if self._is_edit_mode:
+            self._prefill_from_source(editing_source)
 
     # ------------------------------------------------------------------
     # Plugin discovery
@@ -2968,7 +2997,15 @@ class SourceAddDialog(QDialog):
         # v1.7.39: read share_visibility from the new dropdown
         share_visibility = self._cb_share_visibility.currentData() or "private"
 
-        # Build SourceConfig + insert
+        # v1.7.40: in edit mode, preserve the existing source's created_at
+        # so the timestamp isn't reset to "now" on every edit. Insert mode
+        # always uses datetime.now() (per v1.7.x behavior).
+        if self._is_edit_mode and self._editing_source is not None:
+            created_at = self._editing_source.created_at or datetime.now()
+        else:
+            created_at = datetime.now()
+
+        # Build SourceConfig + persist (insert in add mode, update in edit mode)
         try:
             src = SourceConfig(
                 source_id=sid,
@@ -2976,15 +3013,23 @@ class SourceAddDialog(QDialog):
                 display_name=display_name,
                 config=config,
                 enabled=enabled,
-                created_at=datetime.now(),
+                created_at=created_at,
                 share_visibility=share_visibility,
             )
-            self.runtime.source_repo.insert(src)
+            if self._is_edit_mode:
+                # v1.7.40: edit mode -> update() instead of insert(). The
+                # source_id is already locked + read-only in this mode,
+                # so we know the row exists.
+                self.runtime.source_repo.update(src)
+            else:
+                self.runtime.source_repo.insert(src)
         except Exception as e:  # noqa: BLE001
-            # Most likely IntegrityError (duplicate source_id) but could be
-            # validation or DB connection issue. Surface inline; don't close.
+            # Most likely IntegrityError (duplicate source_id) in add mode
+            # or DB connection issue in either mode. Surface inline; don't
+            # close.
+            verb = "update" if self._is_edit_mode else "insert"
             self._lbl_status.setText(
-                f"<span style='color: #C62828;'><b>Failed to insert:</b>"
+                f"<span style='color: #C62828;'><b>Failed to {verb}:</b>"
                 f" {type(e).__name__}: {e}</span>"
             )
             return
@@ -2998,13 +3043,103 @@ class SourceAddDialog(QDialog):
 
     @property
     def created_source_id(self) -> str | None:
-        """The source_id of the source that was just inserted, or None."""
+        """The source_id of the source that was just inserted, or None.
+
+        v1.7.40: in edit mode this is the source_id of the source that
+        was successfully UPDATED (slight name mismatch but kept for
+        back-compat with v1.7.x callers). New code can use the
+        equivalent :attr:`saved_source_id` alias.
+        """
         return self._created_source_id
+
+    @property
+    def saved_source_id(self) -> str | None:
+        """v1.7.40: alias for :attr:`created_source_id` -- name reflects
+        that it covers both insert and update paths."""
+        return self._created_source_id
+
+    @property
+    def is_edit_mode(self) -> bool:
+        """v1.7.40: True if the dialog was constructed with editing_source."""
+        return self._is_edit_mode
 
     @property
     def registered_types(self) -> dict[str, dict]:
         """Dict of source_type -> metadata for all registered plugins."""
         return self._registered_types
+
+    # ------------------------------------------------------------------
+    # v1.7.40: edit-mode prefill
+    # ------------------------------------------------------------------
+
+    def _prefill_from_source(self, src) -> None:
+        """v1.7.40: populate widgets from an existing SourceConfig.
+
+        Called in __init__ AFTER _on_source_type_changed has built the
+        plugin's config widgets for the default source_type. Steps:
+
+        1. Set + lock source_id (immutable -- the DB row's primary key).
+        2. Set + lock source_type. Changing source_type would invalidate
+           the config schema for the existing config_json, so we refuse.
+        3. _on_source_type_changed reruns with the (possibly different)
+           source_type -- this rebuilds the plugin widgets for the right
+           plugin if the existing source is not of the alphabetically-
+           first type.
+        4. Fill plugin config widgets from src.config (each key by name).
+        5. Fill display_name, enabled, share_visibility.
+
+        Read-only feedback (locked widgets, tooltip explaining why)
+        rather than hiding them -- users learn what the dialog knows
+        about by seeing all fields, even immutable ones.
+        """
+        from PySide6.QtWidgets import QLineEdit, QPlainTextEdit, QCheckBox
+
+        # Step 1: source_id (always a QLineEdit)
+        self._le_source_id.setText(src.source_id)
+        self._le_source_id.setReadOnly(True)
+        self._le_source_id.setToolTip(
+            "Source ID is immutable. Remove the source and re-add if you "
+            "need to rename."
+        )
+
+        # Step 2: source_type
+        idx = self._cb_source_type.findData(src.source_type)
+        if idx >= 0:
+            self._cb_source_type.setCurrentIndex(idx)
+        self._cb_source_type.setEnabled(False)
+        self._cb_source_type.setToolTip(
+            "Source type is immutable in edit mode. Changing it would "
+            "invalidate the existing config schema. Remove the source "
+            "and re-add if you need to switch plugin types."
+        )
+
+        # Step 3: rebuild plugin widgets to match the locked source_type
+        # (no-op if we were already on the right type, but cheap to redo).
+        self._on_source_type_changed()
+
+        # Step 4: fill plugin config widgets
+        for field_name, value in (src.config or {}).items():
+            w = self._config_widgets.get(field_name)
+            if w is None:
+                continue  # field not in current schema -- skip silently
+            if isinstance(w, QCheckBox):
+                w.setChecked(bool(value))
+            elif isinstance(w, QPlainTextEdit):
+                # array fields -- join list into newline-separated text
+                if isinstance(value, list):
+                    w.setPlainText("\n".join(str(v) for v in value))
+                else:
+                    w.setPlainText(str(value))
+            elif isinstance(w, QLineEdit):
+                w.setText(str(value) if value is not None else "")
+
+        # Step 5: identity fields
+        if src.display_name:
+            self._le_display_name.setText(src.display_name)
+        self._cb_enabled.setChecked(bool(src.enabled))
+        sv_idx = self._cb_share_visibility.findData(src.share_visibility or "private")
+        if sv_idx >= 0:
+            self._cb_share_visibility.setCurrentIndex(sv_idx)
 
 
 # ---------------------------------------------------------------------------
