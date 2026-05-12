@@ -4,6 +4,65 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.85] — 2026-05-12 — Phase Gamma: `storage/queries.py` to 100% (47 tests, one pass)
+
+Fourth Phase Gamma module at the apex-accuracy standard. `storage/queries.py` reaches **100.00% line + branch coverage** in a single pass with 47 focused tests and no stubs needed.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `storage/queries.py` | 21.17% | **100.00%** |
+
+### What landed
+
+- `tests/unit/test_queries.py` (NEW, ~320 lines, 47 tests, 13 test classes)
+- All branches of `build_where()` exercised: source_ids, extensions, file_types, source_path_starts_with (with SQL LIKE escape testing for `\`, `%`, `_`), min/max size (including min_size=0 to catch the "None vs 0" subtle branch), hash presence (xxhash/md5/fuzzy), hash equality, time ranges (seen_after/seen_before/mtime_after/mtime_before), deleted three-state (True/False/None)
+- All branches of `build_sql()` exercised: empty query, custom base, default ORDER BY, custom ORDER BY, empty/None ORDER BY (omitted clause), LIMIT without OFFSET, LIMIT with offset=0 (no OFFSET appended), LIMIT with non-zero offset, OFFSET without LIMIT (ignored), and a full real-world combined query
+
+### Lessons captured
+
+**Lesson #79 — Pure modules ship fast at 100%. The shape of the module determines the ship cost.** `storage/queries.py` is pure SQL+params construction: no I/O, no pluggy, no platform branches, no integration. The result: 47 tests, no stubs, 0.64s runtime, 100% in one pass. Compare to:
+- `safety.py` (v1.7.84) — platform branches + psutil mocking + pragma decision: 2 passes + extensive monkeypatching
+- `lineage.py` (v1.7.82–83) — pluggy + multiple finder paths + source refactor: 2 passes + dead-code removal
+- `tier.py` (v1.7.81, 83) — nearly pure but 1 missed line on first pass
+
+**The rule: pure modules earn fast-ship status. When picking the next Phase Gamma target, prefer the pure ones first to build pattern momentum, then tackle the entangled ones with the rhythm established.** This is genuinely a strategic insight, not just a per-ship observation — it affects how to plan a Phase Gamma arc.
+
+**Lesson #80 — Subtle default values can silently disable filters in tests.** `FileQuery()` defaults to `deleted=False` (filter to active only). My first instinct was to use `FileQuery()` for the "empty query" test, but that would have asserted `where == "1"` and FAILED because the default actually produces `where == "deleted_at IS NULL"`. The fix: use `FileQuery(deleted=None)` for the genuinely-empty case, and add a separate test asserting the default behavior explicitly. **General rule: when testing a module with non-trivial defaults, write one test for the empty/disabled state AND one test for the default state — they're different tests with different assertions.**
+
+**Lesson #81 — `is not None` vs falsy distinction is a real branch class.** `build_where()` uses `if self.min_size is not None:` (truthy test on existence) but the size filter applies for `min_size=0` (a valid filter that means "any size"). I almost wrote a single test for min_size that used a positive value, which would have left the "min_size=0 IS applied" branch implicit. The explicit `test_min_size_zero_is_applied` test calls this out as a real behavior contract: 0 is not None, so the filter fires. **Rule: when a numeric filter uses `is not None`, write a test with value=0 specifically. This catches future refactors that might change to `if self.min_size:` (which would silently break the zero case).**
+
+### Files changed
+
+| File | Lines |
+|---|---|
+| `tests/unit/test_queries.py` | +320 (new) |
+| `CHANGELOG.md` | this entry |
+| `docs/releases/v1.7.85.md` | release notes |
+
+No source code changes. Test count: 1925 → 1972 (+47).
+
+### Arc state
+
+- 85 ships, all tagged
+- pytest (4 Phase Gamma modules + audit): clean
+- Four Phase Gamma modules at 100% line + branch (tier, lineage, safety, queries)
+- Combined: 422 + 95 = **517 stmts, 208 branches → 100.00%**
+- 3 new lessons (#79, #80, #81)
+
+### Next
+
+Phase Gamma continues. Remaining non-GUI candidates (under 100%):
+
+| Module | Coverage | Notes |
+|---|---|---|
+| `services/migration.py` | 67% | 1031 stmts — huge; will need a multi-ship arc scope plan |
+| `services/bundle.py` | 53% | Smaller; pluggy overhead similar to lineage |
+| `services/scan.py` | 85% | Small gap; possibly quick |
+
+Also outstanding: the pre-existing `send2trash` recycle-bin enumeration test hangs the full suite locally (flagged in v1.7.84). Could be a small parallel ship to fix or skip-mark that test.
+
 ## [1.7.84] — 2026-05-12 — LANDMARK: Windows-only scope + safety.py to 100% + doctrine amendment
 
 **Landmark ship.** Three structural changes land together: (1) scope narrowing from cross-platform to Windows-only, (2) `services/safety.py` reaches 100.00% line + branch coverage, (3) the apex-accuracy coverage standard is codified into the Engineering Doctrine. This ship earns full ceremony per the trimmed/landmark rule — it's a doctrine amendment plus a major scope decision plus the third consecutive Phase Gamma 100% module.
