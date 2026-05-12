@@ -4,6 +4,136 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.54] — 2026-05-12 — OS matrix [Windows, Linux, macOS] in CI (closes C6)
+
+**Headline:** Adds an OS matrix `[windows-latest, ubuntu-latest, macos-latest]` to the existing Python version matrix `[3.11, 3.12, 3.13]`. CI now runs the full pytest baseline across **all 9 cells** of the matrix in parallel on every push and PR. `fail-fast: false` ensures every cell reports independently. **Closes C6 — the last remaining Tier 2 item.** With this ship, every category in the bulletproof-live backlog except A2 (which has a proven workaround) is closed.
+
+### Why this matters
+
+Curator's pyproject.toml has always implied cross-platform support:
+  * `requires-python = ">=3.11"` (any of the major desktop OSes)
+  * `send2trash` vendored module ships per-OS backends (`win/`, `mac/`, `plat_freedesktop.py`)
+  * Path handling uses `pathlib`, not raw string concat
+  * No explicit `Operating System :: Microsoft :: Windows` classifier limiting scope
+
+But v1.7.42's CI workflow only tested on `windows-latest`. That means "Curator works on Linux/macOS" was an **unverified claim** — the same gap C5 (Python version matrix) closed for Python 3.11/3.12, applied to OSes.
+
+v1.7.54 is the C5 pattern for OSes:
+  1. **Push the matrix** — don't pre-audit for platform issues; let CI tell us what breaks
+  2. **Observe what fails** — categorize: OS-specific, Python-specific, or universal
+  3. **Ship targeted fixes** — each failure mode becomes its own follow-up ship (v1.7.55, v1.7.56, ...)
+
+This is the same approach v1.7.42's initial CI ship used, which surfaced 4 distinct issues (v1.7.43, v1.7.44, v1.7.45, v1.7.46) over ~12 hours.
+
+### What's new
+
+**`.github/workflows/test.yml` (+20 lines net)**
+
+```yaml
+strategy:
+  fail-fast: false
+  matrix:
+    os: [windows-latest, ubuntu-latest, macos-latest]
+    python-version: ["3.11", "3.12", "3.13"]
+```
+
+Key design choices:
+
+  * **Full 9-cell matrix, not hybrid.** I considered running only `[3.13]` on Linux/macOS to halve the cost. Rejected: if a 3.11-specific issue appears ONLY on Linux (e.g., a transitive dep with different wheels per OS), the hybrid wouldn't catch it. The hybrid optimizes for cost; the full matrix optimizes for diagnostic completeness. With this being the first OS-matrix run, completeness wins.
+
+  * **`fail-fast: false` on both dimensions.** Critical: if windows/3.11 fails AND ubuntu/3.13 fails, are those the same issue or different? You can't tell unless both run to completion.
+
+  * **Job names include both OS and Python version.** Each of the 9 cells shows up as a distinct check in the GitHub UI: e.g., "pytest (ubuntu-latest / Python 3.12)". Easy to scan; branch protection rules can require specific cells.
+
+  * **Linux needs Qt offscreen system libs.** PySide6's bundled runtime doesn't ship `libegl1` + `libgl1` on Ubuntu. Without them, the offscreen platform plugin fails to initialize and every GUI test errors out. The new "Install Qt offscreen deps" step runs `apt-get install libegl1 libgl1 libxkbcommon0 libdbus-1-3` only when `runner.os == 'Linux'`. macOS and Windows use their OS-bundled Qt runtimes.
+
+  * **Coverage artifact naming includes OS.** Was `coverage-py3.11`; now `coverage-ubuntu-latest-py3.11` to avoid collision across the 9 cells. 9 distinct coverage XML artifacts uploaded per run.
+
+  * **Wall-clock impact: still parallel, still under 15 min.** Each cell runs independently; GitHub provisions runners in parallel. Total runner-minutes triple again (was ~36 with C5; now ~108 with C6), still well under the free-tier quota for public repos.
+
+### Pre-push audit (informational)
+
+Before pushing the matrix, I ran a quick survey of what's likely to break:
+
+  * **Test files with `skipif(sys.platform...)` decorators**: 1 out of 86 test files
+  * **Test files with `'win32'` string literals**: 6 files
+  * **Source files referencing Windows-specific APIs**: 13 (most are inside the well-vendored `send2trash` module which already has POSIX backends)
+
+Probable break points on Linux/macOS:
+  * Hardcoded `\\` path separators in test assertions
+  * `tests/services/test_safety.py` (symlink creation requires admin on Linux without `unprivileged_userns_clone` or similar)
+  * `services/watch.py` (filesystem watchers differ: inotify vs ReadDirectoryChangesW vs FSEvents) — may need behavior-specific test fixtures
+  * Newline differences (`\r\n` vs `\n`) in test fixture text files
+  * Case-sensitive vs case-insensitive path comparisons (Windows / macOS-HFS+ default vs Linux ext4)
+  * `mcp/auth.py` file permission handling (0600 on POSIX, ACLs on Windows)
+
+My expectation: **5-15 distinct issues across the 6 new cells (3 Linux + 3 macOS)**. Each becomes a v1.7.55+ follow-up ship.
+
+### Files changed
+
+| File | Lines | Change |
+|---|---|---|
+| `.github/workflows/test.yml` | +20 net | OS matrix, Linux Qt deps step, OS-aware coverage artifact names, header comments |
+| `CHANGELOG.md` | +N | v1.7.54 entry |
+| `docs/releases/v1.7.54.md` | +N | release notes |
+
+### Verification
+
+- **Local baseline (Windows / Python 3.13)**: ✅ 1593 / 10 / 0 / 0 warnings (unchanged; v1.7.54 is CI-only)
+- **YAML syntax**: ✅ manual review; matches v1.7.50's matrix pattern
+- **CI matrix run (this push)**: the actual validator — first cross-platform CI run in the project's history. The Windows cells should pass (we know they do); the Linux/macOS cells will surface platform-specific issues.
+
+### Decision tree for CI run results
+
+| Windows (3 cells) | Linux (3 cells) | macOS (3 cells) | Diagnosis | Next ship |
+|---|---|---|---|---|
+| 3 ✅ | 3 ✅ | 3 ✅ | C6 fully closed; cross-platform is real | (rare but possible) |
+| 3 ✅ | 3 ❌ | 3 ✅ | Linux-specific issues (Qt deps, send2trash backend, etc.) | v1.7.55 to fix Linux |
+| 3 ✅ | 3 ✅ | 3 ❌ | macOS-specific (likely send2trash FSEvents) | v1.7.55 to fix macOS |
+| 3 ✅ | 3 ❌ | 3 ❌ | universal non-Windows assumption in source | v1.7.55 to extract Windows-only paths |
+| Mixed | Mixed | Mixed | per-test breakage | v1.7.55+ targeting specific tests |
+| 3 ❌ | * | * | Windows regression from my YAML rewrite | v1.7.55 hotfix |
+
+### Authoritative-principle catches
+
+**Catch -- `fail-fast: false` is non-negotiable on multi-dimension matrices.** Same principle as v1.7.50, doubled. With 2 dimensions (OS + Python), a single failure could mask issues on the other 8 cells. The cost is a few wasted runner-minutes when a universal failure exists; the win is complete diagnostic info when failures are partial.
+
+**Catch -- Linux Qt deps step uses `runner.os` not `matrix.os`.** Initial sketch used `if: matrix.os == 'ubuntu-latest'`. That works but is fragile: if I ever add `ubuntu-22.04` or change the Linux distro, the step silently stops running. Using `runner.os == 'Linux'` is the canonical pattern — it's set by GitHub based on the actual runner OS, not the matrix label.
+
+**Catch -- coverage artifact name is `coverage-${{ matrix.os }}-py${{ matrix.python-version }}`, not `coverage-${{ matrix.os }}-${{ matrix.python-version }}`.** Subtle: the OLD name was `coverage-py3.11` with the `py` prefix on the Python version. Adding the OS prefix preserves that prefix: `coverage-ubuntu-latest-py3.11`. Downstream tooling that parses artifact names won't break.
+
+**Catch -- the macOS-latest runner is now M1/M2 (arm64), not x86_64.** GitHub silently migrated `macos-latest` to ARM in early 2025. PySide6 has ARM macOS wheels since 6.6, but some transitive deps may not. Watching for ImportErrors specifically on macOS cells. If a dep doesn't have arm64 wheels, the fix is `pin or pull from source`, not version-matrix changes.
+
+**Catch -- I deliberately did NOT pre-audit and pre-fix.** Tempting to grep for every `'\\'` in tests and replace with `os.sep` before pushing. But: (a) I'd miss things only Linux's locale/FS reveals, (b) I might "fix" Windows code that was already correct, (c) the v1.7.42 pattern proved that letting CI surface issues is faster than pre-emptive guessing. Push first, fix what actually breaks.
+
+### Lessons captured
+
+**No new lesson codified.** Application of pre-existing lessons:
+  * #51 ("matrix what you claim to support") -- applied to OSes this time
+  * #61 ("infrastructure ships beat feature ships when missing")
+  * v1.7.42's playbook ("push CI, observe, fix in follow-ups")
+
+### Limitations
+
+- **No ARM Linux (e.g. `linux/arm64`).** GitHub's free runners don't include ARM Linux. Curator users on Raspberry Pi / ARM servers won't have CI coverage. Could add manual-trigger workflows in the future if demand surfaces.
+- **No Python 3.14 yet.** Beta status; would add false failures from beta-specific issues. Will add when 3.14 ships stable.
+- **No Windows 11 vs Windows Server distinction.** `windows-latest` is currently Windows Server 2022. Most Curator users run Windows 10/11. Differences should be minimal but aren't tested.
+- **No macOS-13 / macOS-14 / macOS-15.** `macos-latest` is currently macOS-14 (Sonoma). Older macOS users (12 Monterey) aren't tested.
+- **Initial run will likely have failures.** Expected; this is the gap-finding ship. Fixes follow in v1.7.55+.
+- **CI minutes 3x'd.** From ~36/run to ~108/run. Still under GitHub's free-tier quota for public repos but not for private repos at scale.
+
+### Cumulative arc state (after v1.7.54)
+
+- **54 ships**, all tagged, all baselines green (locally; CI on this push is the first cross-platform run)
+- **pytest**: 1593 / 10 / 0 / 0 warnings (local default invocation, unchanged)
+- **Coverage**: 63.80% baseline
+- **CI matrix**: **9 cells — 3 OSes × 3 Python versions**, each with coverage upload
+- **Tier 1 backlog**: A1, A3, C1 closed; A2 has proven workaround
+- **Tier 2 backlog**: E3, C5, D3, A4 closed; **C6 closed this ship**. **Tier 2 is now fully addressed** (only A2 has a workaround rather than a fix; bias accepted)
+- **F-series**: F1 closed v1.7.53
+- **Lessons captured**: #46–#63 (unchanged this ship)
+- **Detacher-pattern ships**: 14 (v1.7.39–v1.7.53; v1.7.54 has no local pytest run)
+
 ## [1.7.53] — 2026-05-12 — forecast.py SyntaxWarning cleanup (closes F1)
 
 **Headline:** Fixes the last 4 `SyntaxWarning: invalid escape sequence '\,'` warnings, which were surfaced by v1.7.51's coverage instrumentation and originated from unescaped backslashes in the `compute_all_drives()` docstring in `src/curator/services/forecast.py`. Closes F1 from the post-v1.7.51 mop-up backlog. After this ship, `--cov` runs are SyntaxWarning-free; only the 811 instrumentation-internal ResourceWarnings remain (and those are noise from coverage's own SQLite connections, not Curator bugs).

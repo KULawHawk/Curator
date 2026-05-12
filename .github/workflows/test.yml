@@ -1,5 +1,5 @@
 # =============================================================================
-# .github/workflows/test.yml   (v1.7.50)
+# .github/workflows/test.yml   (v1.7.54)
 #
 # Continuous integration: run the full pytest baseline on every push to main
 # and every pull request targeting main. Catches regressions before they
@@ -7,38 +7,48 @@
 #
 # Design choices
 # --------------
-# * Windows runner only for v1: Curator is Windows-first; runs-on
-#   windows-latest matches dev environment exactly. Cross-platform matrix
-#   (ubuntu-latest, macos-latest) is a future ship -- adds ~3x runner-minutes
-#   for marginal coverage gain when the project's deployment is Windows.
+# * **OS matrix [windows-latest, ubuntu-latest, macos-latest] (v1.7.54)**:
+#   Curator was Windows-first but pyproject.toml has always implied cross-
+#   platform support (e.g. ``send2trash`` plugin selects backend per OS;
+#   path handling uses pathlib; etc.). v1.7.42 only validated Windows;
+#   v1.7.54 closes that gap by running the full pytest baseline on all
+#   three major desktop OSes. This is C6 from the bulletproof-live backlog
+#   and the **last open Tier 2 item**.
 #
 # * Python version matrix [3.11, 3.12, 3.13] (v1.7.50): pyproject.toml
-#   claims requires-python = ">=3.11", but we'd only been testing on 3.13.
-#   The matrix runs three parallel jobs -- one per Python version -- so
-#   any 3.11- or 3.12-specific breakage surfaces immediately in CI, not
-#   after a user files an issue. ``fail-fast: false`` is critical: if
-#   3.11 breaks, we still want to know whether 3.12 also breaks
-#   (might be the same issue, might be different).
+#   claims requires-python = ">=3.11". The matrix runs in parallel; any
+#   version-specific breakage surfaces immediately.
+#
+# * **Combined matrix is 3 OS x 3 Python = 9 jobs**. ``fail-fast: false``
+#   is critical for both dimensions: if one cell fails, the others still
+#   complete so we can diagnose whether it's version-specific, OS-specific,
+#   or universal. Wall-clock stays parallel; runner-minutes triple again
+#   (~36 -> ~108 min), still well under GitHub's free-tier quota for
+#   public repos.
 #
 # * Full extras profile [all]: matches what setup_dev_env.py defaults to,
 #   so CI exercises the same install path a real contributor uses.
 #
+# * **Linux requires Qt offscreen deps (v1.7.54)**: PySide6's offscreen
+#   platform plugin needs libegl1 + libgl1 on Ubuntu. macOS and Windows
+#   ship these via Qt's bundled runtime. The "Install Qt offscreen deps"
+#   step runs only on Linux via ``if: runner.os == 'Linux'``.
+#
 # * QT_QPA_PLATFORM=offscreen: lets the GUI test suite (~24 tests) run
-#   headless. Already proven locally; same setting the local detached
-#   pytest uses.
+#   headless on all three platforms.
 #
 # * --timeout=120 per-test: catches hangs without killing the whole run
 #   on a single slow test.
 #
 # * 15-minute job timeout: the baseline runs in ~3-4 min locally; CI runs
 #   are usually a bit slower (cold pip cache first time, cold Qt startup).
-#   15 min has 5x headroom. With the matrix, each Python version runs in
-#   parallel so wall-clock stays under 15 min even with 3 versions.
+#   15 min has 5x headroom. Each matrix entry runs independently in
+#   parallel, so wall-clock stays under 15 min even with 9 entries.
 #
 # * Pip cache via setup-python: speeds up repeat runs by re-using the
 #   downloaded wheels from the previous run. ``actions/setup-python``
-#   automatically keys the cache by Python version, so each matrix entry
-#   gets its own cache without manual key construction.
+#   automatically keys the cache by Python version AND runner OS, so
+#   each matrix cell gets its own cache without manual key construction.
 #
 # * NO_COLOR=1 (v1.7.45): forces Rich/Typer to emit plain-text help
 #   output in CI. Without this, Rich wraps option names like ``--apply``
@@ -55,24 +65,26 @@ on:
 
 # Cancel any in-progress run for the same branch when a new push arrives.
 # Saves CI minutes when developers push fix-ups rapidly. The matrix entries
-# share this group, so a new push cancels ALL in-progress Python-version
-# jobs together (correct: they're all stale once a new commit lands).
+# share this group, so a new push cancels ALL in-progress jobs together
+# (correct: they're all stale once a new commit lands).
 concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   test:
-    name: pytest (Windows / Python ${{ matrix.python-version }})
-    runs-on: windows-latest
+    name: pytest (${{ matrix.os }} / Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
 
-    # v1.7.50: matrix on Python version. fail-fast: false lets all three
-    # versions complete even if one fails -- critical for diagnosing
-    # whether a failure is version-specific or universal.
+    # v1.7.54: full OS x Python matrix. fail-fast: false ensures every
+    # cell completes independently -- diagnosing OS-specific vs
+    # version-specific vs universal failure modes requires seeing all
+    # nine results, not just the first failure.
     strategy:
       fail-fast: false
       matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
         python-version: ["3.11", "3.12", "3.13"]
 
     steps:
@@ -85,6 +97,17 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
           cache-dependency-path: pyproject.toml
+
+      # v1.7.54: Linux needs system Qt offscreen libraries. PySide6's
+      # bundled runtime doesn't ship libegl/libgl on Ubuntu; without
+      # these the offscreen platform plugin fails to initialize and
+      # every GUI test errors. macOS and Windows have these via their
+      # OS-bundled Qt runtimes.
+      - name: Install Qt offscreen deps (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libdbus-1-3
 
       - name: Install Curator (full extras)
         run: |
@@ -100,18 +123,16 @@ jobs:
           pytest tests/ -q --tb=line --timeout=120 --cov=curator --cov-report=term --cov-report=xml
 
       # v1.7.51: upload coverage.xml as a CI artifact so it's downloadable
-      # from the run summary page. The matrix produces one artifact per
-      # Python version (3.11, 3.12, 3.13); the artifact name includes the
-      # version to avoid collision. Codecov upload is intentionally not
-      # wired up here -- it requires repo-level secret setup and isn't
-      # strictly needed for the coverage signal (the term output in the
-      # workflow log shows the % and the XML artifact has the per-file
-      # detail).
+      # from the run summary page. v1.7.54: artifact name includes BOTH
+      # Python version AND OS to avoid collision across the 9 matrix cells.
+      # Codecov upload is intentionally not wired up here -- requires
+      # repo-level secret setup and isn't strictly needed for the basic
+      # coverage signal.
       - name: Upload coverage report
         if: always()  # upload even when tests fail -- coverage diagnoses
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-py${{ matrix.python-version }}
+          name: coverage-${{ matrix.os }}-py${{ matrix.python-version }}
           path: coverage.xml
           if-no-files-found: warn
           retention-days: 30
