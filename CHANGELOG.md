@@ -4,6 +4,37 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.149] — 2026-05-13 — Round 3 Tier 1 ship 4: Constellation docs update (Curator section)
+
+Doc-only ship updating the Ad Astra constellation reference's Curator row from v1.6.2 (2026-05-09) to v1.7.148 (today). Mirrors the v1.7.88 / v1.7.94 doc-only ship precedent.
+
+### What landed
+
+`docs/AD_ASTRA_CONSTELLATION.md` (Curator-repo copy) and `..\AD_ASTRA_CONSTELLATION.md` (authoritative source) — Curator section in the pillar table updated to reflect:
+- Status: v1.7.148 mature, approaching v2.0-RC
+- 148 versioned releases (up from v1.6.2)
+- 55 modules at 100% line + branch coverage under the apex-accuracy doctrine
+- 5 multi-ship engineering arcs closed in May 2026, listed by name + version range
+- Round 3 in progress (stabilization + CLI Coverage Arc)
+- The v1.6+ user-facing features paragraph trimmed but preserved (still current)
+- Pointer to CLAUDE.md as the doctrine + lesson library artifact, plus the three `# pragma` annotations as Lesson #91 evidence
+
+No source changes. No test changes. No code changes.
+
+### Lesson captured
+
+No new lesson.
+
+### Files
+
+- `docs/AD_ASTRA_CONSTELLATION.md` (Curator-repo copy, Curator row rewritten)
+- `..\AD_ASTRA_CONSTELLATION.md` (authoritative source, Curator row rewritten — committed via Curator repo only since this ship is the Curator-perspective update)
+- `docs/releases/v1.7.149.md` (NEW)
+
+### Next
+
+**v1.7.150** — Mutation testing spot-check on `services/migration.py`.
+
 ## [1.7.148] — 2026-05-13 — Round 3 Tier 1 ship 3: Dependabot pip ecosystem expansion
 
 Completes the deferred Round 1 item ("add pip ecosystem when we have CI signal stable enough to absorb dependabot PR churn"). The deferral rationale at v1.7.71 was 25 ships from now; we are at 148 ships, 55 modules at 100%, 5 arcs closed.
