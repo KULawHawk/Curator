@@ -184,11 +184,21 @@ def _err_console(rt: CuratorRuntime) -> Console:
     return Console(no_color=rt.no_color, stderr=True)
 
 
-def _resolve_file(rt: CuratorRuntime, identifier: str):
+def _resolve_file(rt: CuratorRuntime, identifier: str):  # pragma: no cover -- shadowed by duplicate definition at line 3711+
     """Resolve a CLI identifier to a FileEntity.
 
-    Accepts: a curator_id (UUID), an absolute path, or a substring of a path
-    (if exactly one match).
+    DEAD CODE — shadowed by the second ``_resolve_file`` definition at
+    line 3711+. v1.7.155 discovered this: at module load time, Python
+    binds ``_resolve_file`` to whichever definition appears last (line
+    3711), so the substring-match feature advertised here is never
+    actually invoked. Callers (``inspect``, ``status_*``, etc.) hit the
+    simpler line-3711 version which only supports UUID + exact path.
+
+    Left as ``# pragma: no cover`` rather than removed pending Jake's
+    decision: (a) delete this dead definition, or (b) merge the
+    substring-match feature into the line-3711 version so it works.
+    Either is a real source change with user-visible behavior
+    implications; surfaced in v1.7.155 release notes for review.
     """
     # Try UUID first.
     try:

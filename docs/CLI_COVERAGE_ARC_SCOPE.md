@@ -169,7 +169,7 @@ Restart prompt: *"Resume CLI Coverage Arc. Open docs/CLI_COVERAGE_ARC_SCOPE.md, 
 | v1.7.154 | ✅ Closed | `cli/mcp_orphans.py` | **100.00%** (was 64.84%) | 2026-05-13 |
 
 **Tier 2 CLOSE.** All 3 Tier 2 ships landed. Ready for Tier 3 (cli/main.py decomposition).
-| v1.7.155 | ⏳ Pending | Top-level setup + `inspect` | TBD | TBD |
+| v1.7.155 | ✅ Closed | Top-level setup + helpers + `inspect` (+ found dead `_resolve_file` duplicate; pragma'd) | cli/main.py: 10.73% → 14.05% | 2026-05-13 |
 | v1.7.156 | ⏳ Pending | `scan` + `group` + `lineage` | TBD | TBD |
 | v1.7.157 | ⏳ Pending | `bundles_app` | TBD | TBD |
 | v1.7.158 | ⏳ Pending — possible split | `sources_app` | TBD | TBD |

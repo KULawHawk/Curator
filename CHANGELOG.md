@@ -4,6 +4,61 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.155] — 2026-05-13 — Round 3 Tier 3 ship 1: `cli/main.py` top-level setup + helpers + `inspect`
+
+First Tier 3 sub-ship of the CLI Coverage Arc. Closes ~75 uncovered lines + finds and pragma's a real bug.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 10.73% (1881 stmts) | **14.05%** (1863 stmts, +3.32%) |
+
+The statement count dropped by 18 because the dead `_resolve_file` duplicate (lines 187-215) was annotated `# pragma: no cover` and is no longer counted as uncovered surface.
+
+### What landed
+
+`tests/unit/test_cli_setup_inspect_coverage.py` (NEW, 9 tests):
+- `--version` flag (`_version_callback` lines 119-120)
+- `_check_csv_dialect` invalid + valid (lines 251-255)
+- `_err_exit` incidentally exercised by inspect no-match path (lines 225-226)
+- `_emit_json` incidentally exercised by inspect JSON path (line 220)
+- `inspect` command full surface (lines 263-338):
+  - no-match returns error
+  - JSON output with all metadata
+  - human output via path resolution
+  - deleted_at + flex attrs rendered
+  - lineage edges in both directions
+  - bundle memberships rendered
+
+### Bug found and surfaced (per partnership directive)
+
+Reading the code per Lesson #90 caught a real bug: **two `_resolve_file` functions exist** in `cli/main.py` at lines 187 and 3711. The second definition shadows the first at module load time (Python rebinds the global name). The first version's substring-match feature (claimed in its docstring) is **dead code** — `inspect` advertises substring path matching but never actually performs it; callers hit the simpler line-3711 version which only supports UUID + exact path.
+
+**Conservative action for this ship:** added `# pragma: no cover` to the first definition (lines 187-216) with a documented justification block explaining the shadowing + a TODO surfaced in the docstring. **No behavior change**; the bug is unchanged.
+
+**Decision deferred to Jake:**
+- (a) Delete the dead first definition (cleanup only)
+- (b) Merge the substring-match feature into the line-3711 version (restore the advertised feature)
+- (c) Update `inspect`'s help text to remove the substring claim (truthful documentation)
+
+Either (a) or (b) is a real source change with user-visible implications; (c) is doc-only. Not appropriate to decide unilaterally within a coverage ship — surfacing for review.
+
+### Lesson captured
+
+No new lesson. The Lesson #91 pragma pattern with documented justification is the textbook tool for this exact situation. The bug discovery via Lesson #90 (read code thoroughly before writing tests) is also doctrine-in-action.
+
+### Files
+
+- `tests/unit/test_cli_setup_inspect_coverage.py` (+~245, new, 9 tests)
+- `src/curator/cli/main.py` (+~14 lines: pragma annotation + justification docstring on dead `_resolve_file`)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.155.md`
+
+### Next
+
+**v1.7.156** — `scan` + `group` + `lineage` commands (~170 lines predicted).
+
 ## [1.7.154] — 2026-05-13 — Round 3 Tier 2 ship 3 (FINAL): `cli/mcp_orphans.py` to 100%
 
 Final Tier 2 ship — CLI Coverage Arc kickoff complete. Closes 54 uncovered lines + 2 partial branches.
