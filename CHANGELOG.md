@@ -4,6 +4,51 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.189] — 2026-05-13 — Round 4 Tier 2 ship 5: `gui/models.py` Part 2 (AuditLog + Config models)
+
+Closes `AuditLogTableModel` (with its filter state, `_format_entity`, `_format_details`) and `ConfigTableModel` (with `_flatten` + `_format_value`). The 4 remaining models go in Part 3.
+
+### Coverage delta
+
+| Module | Before (after Part 1) | After Part 2 |
+|---|---|---|
+| `gui/models.py` | 39.77% | **63.26%** (508 stmts covered, 0 partial branches, 266 stmts remaining) |
+
++173 new statements covered. The 266 missing lines are exactly the 4 remaining models (ScanJob / PendingReview / MigrationJob / MigrationProgress) + `_format_duration`.
+
+### What landed
+
+`tests/unit/test_gui_models_part2_coverage.py` (NEW, 52 tests):
+
+- **`TestAuditLogTableModelInit`** (4) — default limit (1000); custom limit propagates; init exception → empty fallback; `entry_at` in/out of range
+- **`TestAuditLogTableModelFilter`** (4) — `set_filter` with all 6 kwargs (since/until/actor/action/entity_type/entity_id); empty strings omitted; None values omitted; partial filter; refresh applies filter
+- **`TestAuditLogTableModelProtocol`** (10) — full Qt protocol (rowCount/columnCount, headerData, data DisplayRole all 5 cols, ToolTipRole on Details column, invalid index, row out of range, unsupported role, column fallback, sort each column + None values)
+- **`TestAuditLogFormatters`** (8) — `_format_entity` (both empty, no-type, long-UUID truncated, short-id kept); `_format_details` (empty {}/None, truncate on/off, JSON serialization failure → str fallback)
+- **`TestConfigTableModelInit`** (4) — basic init; config exception → empty; setting_at; `set_config` re-points and refreshes
+- **`TestConfigTableModelProtocol`** (8) — full Qt protocol (counts, headerData, data + tooltip, unsupported role, invalid index, row out of range, column fallback, sort with 99-column fallback)
+- **`TestConfigFlatten`** (14) — `_flatten` (simple dict, nested, list, tuple, scalar-at-root); `_format_value` (None, bool, int, string, list, tuple, dict, list/dict JSON failure → str fallback)
+
+### Notable coverage paths
+
+- **Empty filter strings** — `set_filter(actor="")` ≠ "set actor to empty string"; the implementation skips empty values via the `if actor:` truthy guard. Tested explicitly.
+- **JSON serialization fallback** — monkeypatched `json.dumps` to raise, verified the `str(...)` fallback fires (covers lines 595-596 in `_format_details` + 725-733 in `_format_value`)
+- **`_flatten` scalar-at-root** — emits a single `("", scalar_str)` tuple; covers the non-dict, non-list/tuple branch
+
+### Pattern reuse
+
+Part 1's canonical pattern (stub-repo + `createIndex` + role-parameterized `data` + sort with None values + 99-column fallback) ported cleanly. Stub factories from Part 1 are imported here rather than duplicated (Lesson #84).
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_gui_models_part2_coverage.py` (NEW, 52 tests, +~430 lines)
+- `docs/releases/v1.7.189.md`
+
+### Next
+
+**v1.7.190** — `gui/models.py` Part 3 + pragma audit close. 4 remaining models (`ScanJobTableModel`, `PendingReviewTableModel`, `MigrationJobTableModel`, `MigrationProgressTableModel`) + `_format_duration` helper. Target: 100% line + branch.
+
 ## [1.7.188] — 2026-05-13 — Round 4 Tier 2 ship 4: `gui/models.py` Part 1 (helpers + 3 simplest models)
 
 Closes the 2 module-level helpers + 3 of the 9 Qt table models in `gui/models.py`: `_format_size`, `_format_dt`, `FileTableModel`, `BundleTableModel`, `TrashTableModel`. Parts 2 + 3 cover the remaining 6 models + `_format_duration`.
