@@ -88,7 +88,7 @@ If picking this up in a new session, the restart prompt is: *"Resume Coverage Sw
 | v1.7.95 | ✅ Closed | `services/forecast.py` | **100.00%** (was 98.45%) | 2026-05-13 |
 | v1.7.96 | ✅ Closed | `services/fuzzy_index.py` | **100.00%** (was 98.02%) | 2026-05-13 |
 | v1.7.97 | ✅ Closed | `services/watch.py` | **100.00%** (was 97.77%) | 2026-05-13 |
-| v1.7.98 | ⏳ Pending | `services/audit.py` | TBD | TBD |
+| v1.7.98 | ✅ Closed | `services/audit.py` | **100.00%** (was 89.66%) | 2026-05-13 |
 | v1.7.99 | ⏳ Pending | `services/pii_scanner.py` | TBD | TBD |
 | v1.7.100 | ⏳ Pending — 🎉 milestone | `services/music.py` | TBD | TBD |
 | v1.7.101 | ⏳ Pending | `services/metadata_stripper.py` | TBD | TBD |

@@ -4,6 +4,37 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.98] — 2026-05-13 — Coverage Sweep 4/12: `services/audit.py` to 100%
+
+Sub-ship 4 of the Coverage Sweep arc. Closes lines 83-87 in `services/audit.py` — the entire body of `AuditService.insert(entry)`, an alternate API path for pre-built `AuditEntry` instances that no existing test exercised.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/audit.py` | 89.66% | **100.00%** (+10.34%) |
+
+29 statements, 0 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_audit_coverage.py` (NEW, 1 test) — constructs an `AuditService` with a `_StubAuditRepo`, calls `service.insert(AuditEntry(...))`, verifies the entry was passed to the repo and the returned audit_id matches.
+
+No source changes.
+
+### Lesson captured
+
+No new lesson this ship. The `insert()` API was an orphaned code path — present in source for completeness with `log()`, but never called by any consumer test. Now covered. Honest logging.
+
+### Files
+
+- `tests/unit/test_audit_coverage.py` (+~55, new, 1 test)
+- `docs/COVERAGE_SWEEP_SCOPE.md` (+1 line)
+
+### Next
+
+**v1.7.99** — `services/pii_scanner.py`. Handoff predicts ~15 min, 5 lines.
+
 ## [1.7.97] — 2026-05-13 — Coverage Sweep 3/12: `services/watch.py` to 100%
 
 Sub-ship 3 of the Coverage Sweep arc. Closes the three uncovered lines + one partial branch in `services/watch.py`.
