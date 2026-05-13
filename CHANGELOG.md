@@ -4,6 +4,61 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.195] — 2026-05-13 — Round 4 Tier 3 ship 5 (FINAL): `gui/main_window.py` close → **100%**
+
+**`gui/main_window.py` closed at 100% line + branch.** Zero new pragmas added — every partial branch surfaced at the end of Part 4 was reachable in principle and closed with real tests rather than pragmas (apex-accuracy doctrine: prefer tests to pragmas where reachable).
+
+### Coverage delta
+
+| Module | Before (Part 4) | After Part 5 |
+|---|---|---|
+| `gui/main_window.py` | 99.54% (0 missing, 6 partial) | **100.00%** (1089 stmts, 206 br, 0 missing, **0 partials**) |
+
+### What landed
+
+`tests/unit/test_gui_main_window_part5_coverage.py` (NEW, 7 tests):
+
+- **`TestRefreshLoopsWithoutFinding`** (1) — branch 490→488: `_slot_migrate_refresh` loop iterates a row where `j.job_id != current_job_id`, falls through to fallback refresh
+- **`TestContextMenuDismissedBranches`** (3) — branches 547→exit, 1647→exit, 1657→exit: user right-clicks then dismisses without picking an action (migrate / browser / trash menus)
+- **`TestAuditDropdownsSelectionNotFound`** (1) — branch 974→976: previously-selected dropdown value is gone after rebuild; `findData(...)` returns -1; selection silently lost
+- **`TestRefreshAllNoLineageViewAttr`** (2) — branches in `refresh_all`: `not hasattr("_lineage_view")` defensive (1610's `and` short-circuit); `not hasattr("_migrate_jobs_model")` defensive (1613→1617)
+
+### Pragma audit outcome (Lesson #99 / Doctrine #17)
+
+Predicted pragma budget: **10-12** (Lesson #101 / Doctrine #19 — main_window is a 1089-stmt application shell). Actual: **0** new pragmas added.
+
+This is the **fourth module in a row** (after Round 3 Tier 4's signal modules collectively, then `lineage_view.py`, then `models.py`) to close at 100% with zero new pragmas. The pattern continues to hold: **GUI code in Curator is pragma-light when written with consistent decomposition + testability seams.**
+
+The 0-pragma outcome is a **significant downward revision of the Lesson #101 estimate** for GUI code. The original estimate (1 pragma per 150-200 statements for mature application code) was a conservative scope-planning heuristic; in practice for Curator's GUI, the figure is closer to 0 per 1000+ statements. Recording inline rather than as a new numbered lesson because it's a refinement on existing #101, not a new rule.
+
+### Tier 3 closed
+
+| Ship | Title | Result |
+|---|---|---|
+| v1.7.191 | Part 1 (construction + helpers) | 7.57% → 45.87% |
+| v1.7.192 | Part 2 (action handlers) | 45.87% → 61.54% |
+| v1.7.193 | Part 3 (migrate + sources) + 🐛 QDialog bug fix | 61.54% → 78.53% |
+| v1.7.194 | Part 4 (context menus + remaining slots) | 78.53% → 99.54% |
+| v1.7.195 | Part 5 close | 99.54% → **100.00%** (0 pragmas) |
+
+**Tier 3 outcome: `gui/main_window.py` closed at 100% line + branch.** Exactly 5 ships scoped at v1.7.185. **Zero new pragmas across the 1089-statement module.** **One real bug surfaced and fixed** (QDialog missing import).
+
+### Test count
+
+**202 tests** total across Parts 1-5 (27 + 52 + 51 + 65 + 7), all pass in ~7s.
+
+### Files
+
+- `tests/unit/test_gui_main_window_part5_coverage.py` (NEW, 7 tests, +~155 lines)
+- `docs/GUI_COVERAGE_ARC_SCOPE.md` (status tracker)
+- `docs/releases/v1.7.195.md`
+
+No source changes. No new numbered lesson — refinement on Lesson #101 captured inline.
+
+### Next
+
+**Tier 3 status report → Jake.** Tier 4 (`gui/dialogs.py`, 2234 stmts) is the final tier. Per the handoff, Tier 4 **defaults to Round 5** unless Jake's signoff comes for it. Awaiting direction.
+
 ## [1.7.194] — 2026-05-13 — Round 4 Tier 3 ship 4: `gui/main_window.py` Part 4 (context menus + trash/restore/bundle slots)
 
 Covers the remaining slot surface: context menus + their dispatches; `_slot_trash/restore/dissolve/inspect/bundle_*` slots; `_perform_*` helpers; bundle create/edit + `_reset_primary`; `_show_result_dialog`.

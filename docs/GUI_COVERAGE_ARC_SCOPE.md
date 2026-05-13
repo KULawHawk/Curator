@@ -152,7 +152,7 @@ Each sub-ship's release notes will document this disclosure until DEFERRED_DECIS
 | v1.7.192 | main_window Part 2 (action handlers) | ✅ closed | 45.87% → 61.54% |
 | v1.7.193 | main_window Part 3 (migrate + sources) + bug fix | ✅ closed | 61.54% → 78.53% |
 | v1.7.194 | main_window Part 4 (trash/restore/bundle slots + context menus) | ✅ closed | 78.53% → 99.54% (0 missing lines, 6 partial branches) |
-| v1.7.195 | main_window pragma audit + close | pending | 100% target |
+| v1.7.195 | main_window pragma audit + close | ✅ closed | 99.54% → **100%** (0 new pragmas, 7 tests closed all 6 partials) |
 | v1.7.196+ | dialogs.py (default Round 5) | deferred | — |
 
 ## See also
