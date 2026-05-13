@@ -2,7 +2,7 @@
 
 This file is read automatically by Claude Code at session start. It encodes the project conventions Claude must respect without being re-asked every session.
 
-**Owner:** Jake Leese · **Updated:** 2026-05-13
+**Owner:** Jake Leese · **Updated:** 2026-05-13 (post-Round 3 lessons retrospective)
 
 ---
 
@@ -83,7 +83,7 @@ Claude should *proactively recommend* moving work to a different tool when:
 
 ## Doctrine
 
-These are non-negotiable. Read once, apply always. Lessons #79–95 below; check CHANGELOG for #96+.
+These are non-negotiable. Read once, apply always. Lessons #79–101 below (#96–101 captured retroactively from Round 3 implicit patterns); check CHANGELOG for #102+.
 
 ### 1. APEX PRINCIPLE — ACCURACY
 
@@ -148,7 +148,7 @@ When a production class uses `concurrent.futures.ThreadPoolExecutor` internally,
 
 **How to apply:** make the shim available via a pytest fixture (`@pytest.fixture def sync_executor(monkeypatch): ...`) and require it in any test that exercises threaded production code. Carries forward to other threaded code (Qt signal/slot in GUI tests, click.testing.CliRunner callbacks, async work eventually).
 
-### 13. Pydantic validate_assignment bypass for defensive-boundary testing (Lesson #95 — new)
+### 13. Pydantic validate_assignment bypass for defensive-boundary testing (Lesson #95)
 
 Curator's models use pydantic v2 with `validate_assignment=True` (inherited from `CuratorEntity`). To test `except (AttributeError, TypeError):` clauses that catch type-incorrect field values at runtime, you can't inject the bad value via attribute assignment — pydantic rejects it.
 
@@ -157,6 +157,100 @@ Curator's models use pydantic v2 with `validate_assignment=True` (inherited from
 **Discovery in v1.7.93b:** to test `run_job`'s `except (AttributeError, TypeError):` around `job.options.get("max_retries")` (which catches malformed options not being a dict), I tried `job.options = SimpleNamespace()` → `pydantic_core.ValidationError`. Fix: `job.__dict__["options"] = SimpleNamespace()`. Then `.get("max_retries")` raises AttributeError (no such method on SimpleNamespace) and the defensive except catches it.
 
 **How to apply:** specifically for testing the "field has the wrong type at runtime" failure mode in pydantic-v2 models with `validate_assignment=True`. NOT a workaround to silently break model invariants in production code — only use in unit tests targeting specific defensive boundaries.
+
+### 14. Coverage measurement varies with test selection (Lesson #96 — new from Round 3 retrospective)
+
+When reporting "module X is at 100%", the number is conditional on which tests were run. Running `pytest tests/unit/test_migration_*.py --cov=curator.services.migration` may show 100%, while `pytest tests/ --cov=curator.services.migration` (with integration tests) may show 99.71%. The difference is integration-test-only paths that unit tests don't exercise.
+
+**Discovery in v1.7.146:** Round 3 Tier 1's stabilization sprint investigated a coverage discrepancy on migration.py (reported 100% at v1.7.93b close, then 99.71% on a later measurement). Root cause: different pytest invocations covered different code paths. Lines 984-988 + branch 505→509 were integration-test-only paths.
+
+**Rule:** when shipping a module to 100% under apex-accuracy, run the SAME pytest invocation your CI uses, not a narrower one. If unit tests alone produce 100% but the full suite produces less, the gap is either (a) integration-only lines (acceptable, but document) or (b) actual regression (close before ship). Document the invocation in release notes when it matters.
+
+**Practical implementation:** the standard "shipping" invocation is `pytest tests/ --cov=curator.<module> --cov-report=term-missing --cov-branch`. Anything narrower is a fast-iteration tool, not a ship-quality measurement.
+
+### 15. Mutation testing is its own arc, not a stabilization sub-task (Lesson #97 — new from Round 3 retrospective)
+
+Mutation testing tools (mutmut, cosmic-ray) generate hundreds to thousands of code mutants per module and run the test suite against each one. For Curator-scale modules, this is **8-50+ hours of CPU time per module**, not minutes.
+
+**Discovery in v1.7.150:** a Round 3 Tier 1 stabilization ship attempted mutmut on `services/migration.py` as a "spot-check". mutmut found 1092 mutants. Even with a focused test runner, that's 8-50 hours. Code killed the run honestly per the partnership directive (Lesson #92 — pre-commit to ship boundaries you can complete) and reported the budget overrun.
+
+**Rule:** mutation testing is **never** a single-ship activity. It requires:
+- A dedicated scope plan (per Lesson #88)
+- Module-by-module batching (one module's mutmut run per ship at minimum)
+- A triage protocol for survived mutations (categorize: actually-weak-test vs. equivalent-mutation vs. unreachable-code)
+- Multi-day or multi-week budget on dedicated machine resources
+
+**Future:** if mutation testing is desired for Curator, open it as an explicit "Mutation Testing Arc" with its own scope plan, baseline budget estimate (probably 1-2 weeks dedicated), and stop-conditions. Probably better suited to a CI nightly job than to interactive shipping. See `docs/MUTATION_TESTING_DEFERRED.md` for the deferred state.
+
+### 16. Qt headless testing pattern (Lesson #98 — new from Round 3 retrospective)
+
+For testing PySide6 GUI modules under apex-accuracy without launching real windows, the established pattern is:
+
+1. **Environment:** set `QT_QPA_PLATFORM=offscreen` before any Qt import. In test files: `os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")` at module top, or via the shared `conftest.py`.
+2. **QApplication singleton:** use a module-scoped `qapp` fixture:
+   ```python
+   @pytest.fixture(scope="module")
+   def qapp():
+       from PySide6.QtWidgets import QApplication
+       return QApplication.instance() or QApplication(sys.argv)
+   ```
+3. **QThread workers:** call `worker.run()` directly (synchronous) instead of `worker.start()` + waiting for the event loop. The `run()` method is the actual work; bypassing the event loop makes tests deterministic.
+4. **Stub QWidget classes:** for tests that would construct real windows/dialogs, `monkeypatch.setattr` the widget class to a lambda factory returning a stub object with just the methods the test needs.
+5. **Signal payload type:** prefer `Signal(object)` over typed signals when payload shape varies across emit sites — lets tests emit arbitrary payloads without pydantic-style type rejection.
+
+**Validated in v1.7.176–179:** four GUI signal modules (launcher, migrate_signals, scan_signals, cleanup_signals) covered 0% → 100% using this pattern alone. No `pytest-qt` dependency needed for signal-emitting modules.
+
+**Extension for larger GUI modules:** dialogs, main_window, models likely need `pytest-qt`'s `qtbot` for actual widget interaction testing (button clicks, dialog acceptance, model row insertion). Add `pytest-qt` as a dev-dependency when the bigger GUI Coverage Arc opens.
+
+### 17. Pragma audit at arc close (Lesson #99 — new from Round 3 retrospective)
+
+For multi-ship arcs that close a single large module (e.g. `cli/main.py`, `services/migration.py`), reserve a final "pragma audit" ship for the defensive-boundary closures rather than dribbling `# pragma: no cover` annotations across all sub-ships.
+
+**Why:**
+- Per-ship pragmatization scatters the documentation — hard to audit later whether annotations are still justified.
+- Batched at arc close, the team can see all defensive-boundary debt at once and decide which deserve real tests vs. pragmas.
+- One coherent documentation pass produces uniform justification quality.
+
+**Pattern (v1.7.175):** the CLI Coverage Arc's final ship batch-added 10 source pragmas to `cli/main.py`. Each pragma has a 1-line justification citing Lesson #91, grouped by defensive-boundary category (TB-size formatter unreachable on TB-class numbers, KeyboardInterrupt-during-confirm, None-default fallbacks, double-checks for already-validated conditions, etc.). The release notes lists every annotation with location and rationale.
+
+**How to apply:** open large-module sweep arcs with a `pragma audit ship reserved` note in the scope plan. Sub-ships focus on real test surface; defensive-boundary residue accumulates and is resolved as one ship at arc close. Total ship count down by 1-3 (pragma sweep replaces multiple per-ship pragma decisions).
+
+### 18. Surface dead/duplicate code for human decision (Lesson #100 — new from Round 3 retrospective)
+
+When coverage work finds dead code, duplicate functions, or vestigial code paths, **never auto-delete**. Document the finding with options + impact + recommendation and defer to human decision.
+
+**Discovery in v1.7.155:** Round 3 Tier 3 found a duplicate `_resolve_file` function at `cli/main.py` lines 187–216 with overlapping but slightly different semantics from the live version. The duplicate has substring matching the live version doesn't; the docstring references a function name that no longer matches reality.
+
+Code's correct response: surface 3 options to Jake — (a) delete dead duplicate, (b) merge substring-match feature into live version, (c) update docstring only. Deferred decision. Then through 21 more sub-ships in the CLI arc, the deferral was preserved (the duplicate was pragma'd at v1.7.175 to keep ship momentum while the decision waited).
+
+**Rule:** auto-deletion of code with unclear provenance can lose features silently. The cost of waiting for a human decision is small (one pragma annotation, maybe one ship's worth of "is this in scope right now"). The cost of wrong auto-deletion is potentially a regression that's invisible until it bites.
+
+**Pattern for documenting:**
+```
+# DEFERRED: {function|class|module} at {file}:{line_range}
+# Found: {what makes it suspicious - duplicate / unreferenced / pre-refactor remnant}
+# Options:
+#   (a) {action with consequence}
+#   (b) {action with consequence}
+#   (c) {action with consequence}
+# Recommendation: {option letter + 1-line rationale}
+# Decision: PENDING - {Jake / specific person / specific event}
+```
+Either in source as a comment block, or as a doc file like `docs/DEFERRED_DECISIONS.md`.
+
+### 19. Defensive-boundary debt accumulates in big modules (Lesson #101 — new from Round 3 retrospective)
+
+Large modules (1000+ statements) naturally accumulate defensive-boundary code: TB-size formatters that handle the impossible case, KeyboardInterrupt-during-confirm paths, None-default fallbacks for fields that are always set in practice, double-checks for conditions that were already validated upstream. These accumulate organically as the code matures and edge cases are discovered.
+
+**Pattern observed (v1.7.175):** `cli/main.py` (1881 statements) needed **10 source pragmas at arc close** to document all defensive boundaries. Estimate: 1 pragma per 150-200 statements of mature CLI/orchestration code is normal. Pure data-transformation modules (models, parsers) typically have far fewer.
+
+**Implication for scope planning:** when opening a large-module sweep arc, budget for:
+- Real test coverage of all reachable lines
+- A pragma audit closing ship (per Lesson #99)
+- 5-15 pragmas with documented justifications (per Lesson #91)
+- Each pragma is research time, not test-writing time — distinct activity
+
+**Implication for code review:** if a new large module ships without any pragmas, either the module is unusually defensive-boundary-light, or the pragmas are owed and not yet annotated. Worth a focused review pass before declaring 100%.
 
 ---
 
