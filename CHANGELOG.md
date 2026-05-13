@@ -4,6 +4,81 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.89] — 2026-05-12 — Migration Phase Gamma sub-ship 1/5: Plan() edges + Apply() control flow
+
+First execution ship of the Migration Phase Gamma arc (opened in v1.7.88). Targets the smallest, most-defensive cluster: Plan() defensive branches and Apply() control-flow branches (autostrip dispatch, conflict-fail raise, _execute_one dispatch).
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/migration.py` | 66.74% | **68.18%** (+1.44%) |
+
+Less than the scope plan's ~72-75% estimate. The estimate was off; the **actual delta calibrates expectations for the remaining sub-ships** (see scope plan revisions below). All target clusters covered cleanly.
+
+### What landed
+
+- `tests/unit/test_migration_plan_apply.py` (NEW, ~530 lines, 16 tests, 8 test classes)
+- 5 new stubs (will be reused across v1.7.90-93): `StubFileRepository` (migration-flavored with `query()` + `query_raises`), `StubSafetyService` (with `check_path_raises` + per-path overrides), `StubAuditRepository`, `StubSourceRepository`, `StubMetadataStripper` (presence-only placeholder)
+- `docs/MIGRATION_PHASE_GAMMA_SCOPE.md` updated with sub-ship 1 closure and revised estimates for sub-ships 2-5
+
+### Branches closed
+
+- **Line 230**: `MigrationReport.duration_seconds` returns None before completion (1 line)
+- **Lines 522-528** (plan defensive nesting check):
+  - The explicit "must not be inside" ValueError re-raise (1 test)
+  - The silent-swallow path for non-nesting Path errors (1 test, via Path.resolve monkeypatch)
+  - The pass-through case where no exception fires (1 test)
+- **Lines 547-554** (plan query failure): `files.query()` raises → empty plan returned (1 test)
+- **Lines 566-580** (plan include/exclude filter): file not under src_root + glob filter active → silently skipped via `relative_to` ValueError (1 test)
+- **Lines 582-591** (plan safety exception): `safety.check_path()` raises → file routed to REFUSE (1 test)
+- **Line 599** (plan dst computation): `_compute_dst_path()` returns None (file not under src_root) → silently skipped (1 test)
+- **Lines 712-743** (apply autostrip dispatch):
+  - dst is public + no_autostrip=True → audit `migration.autostrip.opted_out` (1 test)
+  - dst is public + no_autostrip=False → audit `migration.autostrip.enabled`, auto_strip=True (1 test)
+  - dst is public + audit=None → no log, no crash (1 test)
+  - dst is private → no autostrip-related logging (1 test)
+  - dst is public + no_autostrip=True + audit=None → closes branch 719->745 (1 test)
+- **Lines 837-842** (apply conflict-fail raise): `_execute_one` sets FAILED_DUE_TO_CONFLICT outcome + `on_conflict_mode="fail"` → `MigrationConflictError` raised after report append (1 test)
+- **Line 977** (`_execute_one` dispatch): `dst_source_id is None` defaults to `src_source_id` (1 test, via direct invocation)
+
+### Lesson captured
+
+**Lesson #89 — Scope plans need revision after sub-ship 1. Coverage estimates calibrate to actual delta.**
+
+The Migration Phase Gamma scope plan (v1.7.88) estimated each sub-ship's coverage gain based on the size of its target cluster relative to the whole module. v1.7.89's estimate: ~72-75% (a 5-8% gain). Actual: 68.18% (a 1.44% gain). **The estimate was off by a factor of 3-5x.**
+
+Why: I assumed targeting "Plan() edges + Apply() control flow" would naturally pull in incidental adjacent lines. It didn't. Defensive branches scattered across a 3000+ line file are smaller-grain than the visual line-range hints suggested. A `547-554` range looks like 8 lines but in coverage terms it's 1 logical branch + 5 statements that all become covered or not as a unit.
+
+The lesson is NOT "don't write scope plans" — the plan still produced a sound multi-ship structure. The lesson is: **after the first sub-ship lands, REVISE the remaining estimates based on actuals**, and bake the revision into the plan document. Two errors avoided:
+
+1. **Continuing to plan against stale estimates** — if I'd proceeded to v1.7.90 expecting it to land at ~78%, I'd have set wrong success criteria and either overengineered tests trying to chase the number or shipped feeling like I underdelivered.
+2. **Hiding the calibration miss** — "land at 68% when the plan said 75%" sounds like a problem unless it's surfaced as deliberate calibration. The CHANGELOG and scope-plan tracker now own the miss, the lesson, and the revised estimates.
+
+**General rule for multi-ship arcs:** the first sub-ship is a calibration data point. After it lands, update the plan with actual cost-per-coverage-percent, revise downstream estimates, and document the revision. The arc target (100% here) is unchanged; only the per-sub-ship deltas are recalibrated.
+
+### Files changed
+
+| File | Lines |
+|---|---|
+| `tests/unit/test_migration_plan_apply.py` | +530 (new) |
+| `docs/MIGRATION_PHASE_GAMMA_SCOPE.md` | +14 (revised tracker + estimates) |
+| `CHANGELOG.md` | this entry |
+| `docs/releases/v1.7.89.md` | release notes |
+
+No source changes. Test count: 2022 → 2038 (+16).
+
+### Arc state
+
+- **89 ships**, all tagged
+- Six Phase Gamma modules at 100% (unchanged from v1.7.87)
+- Migration Phase Gamma arc: **sub-ship 1 of 5 closed** (running coverage 68.18%)
+- 1 new lesson (#89)
+
+### Next
+
+**v1.7.90 — sub-ship 2 of 5**: same-source execution (`_execute_one_same_source`) + 4 on-conflict modes (skip/fail/overwrite-with-backup/rename-with-suffix). Revised estimate: 68.18% → ~71-73%. The stubs introduced in v1.7.89 will carry over.
+
 ## [1.7.88] — 2026-05-12 — Migration Phase Gamma: scope plan for the multi-ship arc
 
 Doc-only ship that opens the migration.py arc. `migration.py` is 1031 stmts / 3032 lines — bigger than every other Phase Gamma module combined (837 stmts total). A one-shot push would predictably end in a mid-ship state, violating Lesson #86. This scope plan structures the work as a 5-sub-ship arc.

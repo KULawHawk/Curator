@@ -162,8 +162,19 @@ If a session ends between sub-ships:
 | Sub-ship | Status | Closed clusters | Coverage after | Date |
 |---|---|---|---|---|
 | v1.7.88 | ✅ This scope plan | — | 66.74% (unchanged) | 2026-05-12 |
-| v1.7.89 | ⏳ Pending | Clusters 1 + 2 | TBD | TBD |
-| v1.7.90 | ⏳ Pending | Cluster 3 | TBD | TBD |
-| v1.7.91 | ⏳ Pending | Clusters 4 + 5 | TBD | TBD |
-| v1.7.92 | ⏳ Pending | Cluster 6 | TBD | TBD |
+| v1.7.89 | ✅ Plan() edges + Apply() autostrip/conflict-raise + _execute_one dispatch | Clusters 1 + part of 2 | **68.18%** (+1.44%) | 2026-05-12 |
+| v1.7.90 | ⏳ Pending | Cluster 3 (same-source execution) + remainder of Cluster 2 | TBD | TBD |
+| v1.7.91 | ⏳ Pending | Clusters 4 + 5 (cross-source primary + backup) | TBD | TBD |
+| v1.7.92 | ⏳ Pending | Cluster 6 (rename + auto-strip) | TBD | TBD |
 | v1.7.93 | ⏳ Pending | Cluster 7 + audit test + doctrine update | 100.00% | TBD |
+
+### Revised estimates after sub-ship 1 calibration
+
+The original scope plan estimated v1.7.89 at ~72-75% coverage; actual landed at 68.18%. Lesson learned (#89): defensive branches scattered across a 3000+ line file are smaller-grain than the estimate assumed. **Each subsequent sub-ship's estimate is now revised** based on actual line-count of its target clusters:
+
+- v1.7.90 (Cluster 3: same-source execution, ~50 stmts): expect +3-5%, landing ~71-73%
+- v1.7.91 (Clusters 4+5: cross-source + backup, ~115 stmts): expect +8-11%, landing ~80-84%
+- v1.7.92 (Cluster 6: rename + auto-strip, ~85 stmts): expect +6-8%, landing ~87-92%
+- v1.7.93 (Cluster 7: persistent jobs + remainder, ~150+ stmts): expect +8-13% to land 100%
+
+The **arc target (100%) is unchanged**. Only the per-sub-ship delta estimates revised. The arc may still need a 6th sub-ship if v1.7.93's persistent-jobs work proves bigger than estimated.
