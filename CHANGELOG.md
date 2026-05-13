@@ -4,6 +4,109 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.106] — 2026-05-13 — 🎯 Coverage Sweep ARC CLOSED: `services/document.py` to 100% + arc closure
+
+Final sub-ship (12 of 12) of the Coverage Sweep arc. **Closes the arc.** Lands `services/document.py` at 100% AND wraps the 12-module sweep that began at v1.7.94.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/document.py` | 89.66% | **100.00%** (+10.34%) |
+
+199 statements, 62 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_document_coverage.py` (NEW, 15 tests) covering:
+
+- `_parse_filename_date` defensive (int() failure via monkeypatched patterns)
+- `_parse_pdf_datetime` invalid calendar dates (Feb 31 → ValueError from datetime constructor) + month-out-of-range
+- `_pypdf_available` ImportError (`sys.modules` sentinel)
+- `read_metadata` mtime stat OSError (with call-counter to allow `Path.exists()` first stat call)
+- `_read_pdf` info-is-None + generic exception + raw-dict-construction exception
+- `_read_ooxml` missing core.xml (KeyError) + generic exception
+- OOXML dcterms loop branches: no-dates fall-through, no-Z-suffix, out-of-range year, unparseable ISO
+
+No source changes.
+
+### Notable iteration
+
+`test_read_metadata_mtime_stat_oserror_swallowed` initially monkeypatched `Path.stat` globally — but `Path.exists()` in CPython 3.13 calls `stat()` internally, so my blanket patch blocked the existence check before the mtime fallback was reached. Fix: a call-counter that lets the first `stat()` call (from `.exists()`) succeed and raises on the second call (the mtime fallback at line 295).
+
+Similar pattern to v1.7.105 (`code_project.py` had the same issue with `Path.stat` affecting `Path.is_file()`). Both are flavors of **Lesson #90's corollary**: low-level filesystem primitives are called by higher-level wrappers; monkeypatching them affects multiple call sites.
+
+### Lesson captured
+
+No new lesson per se. The "stat-patch blast radius" issue showed up twice this arc (v1.7.105 + v1.7.106), confirming it as a settled corollary of Lesson #90. Worth mentioning explicitly in CLAUDE.md doctrine item 8 ("data flow tracing") as a sub-bullet, but not a new lesson number. Honest logging per the v1.7.93a precedent.
+
+### Files
+
+- `tests/unit/test_document_coverage.py` (+~280, new, 15 tests)
+- `docs/COVERAGE_SWEEP_SCOPE.md` (+~50, arc-closed status header + trajectory table + arc-level summary)
+
+No source changes.
+
+---
+
+## 🎯 Coverage Sweep arc closure summary
+
+**Opened:** v1.7.94 (2026-05-13)
+**Closed:** v1.7.106 (2026-05-13)
+**Duration:** Single session (same day as Migration Phase Gamma closure)
+
+### Trajectory
+
+| Ship | Module | Before → After | Tests added |
+|---|---|---|---|
+| v1.7.94 | scope plan | — | 0 |
+| v1.7.95 | forecast.py | 98.45 → 100.00 | 1 |
+| v1.7.96 | fuzzy_index.py | 98.02 → 100.00 | 1 |
+| v1.7.97 | watch.py | 97.77 → 100.00 | 2 |
+| v1.7.98 | audit.py | 89.66 → 100.00 | 1 |
+| v1.7.99 | pii_scanner.py | 97.94 → 100.00 | 2 |
+| **v1.7.100** | music.py 🎉 | 94.55 → 100.00 | 6 |
+| v1.7.101 | metadata_stripper.py | 94.17 → 100.00 | 6 |
+| v1.7.102 | musicbrainz.py | 88.34 → 100.00 | 10 |
+| v1.7.103 | classification.py | 91.89 → 100.00 | 4 |
+| v1.7.104 | migration_retry.py | 77.78 → 100.00 | 9 |
+| v1.7.105 | code_project.py | 89.45 → 100.00 | 11 |
+| **v1.7.106** | document.py | 89.66 → 100.00 | 15 |
+| **TOTAL** | **12 modules + scope plan** | | **68 tests** |
+
+### Arc-level results
+
+- **All 12 sweep targets at 100% line + branch** ✅
+- **19 services modules at 100% total** (7 from Migration Phase Gamma + 12 from Coverage Sweep)
+- **108 ships** total in the Curator repo
+- **3 source refactors** for provably-unreachable defensive code (v1.7.95, v1.7.99, v1.7.104)
+- **1 `# pragma: no branch`** annotation (v1.7.104 for-loop natural-exit)
+- **0 new lessons captured** — pure doctrine-in-action across all 12 ships. The lesson library at #79-95 was sufficient for the entire arc; six new patterns surfaced (sys.modules sentinel, table-driven test seam, lazy-import patching, stat-patch blast radius, etc.) but each was a settled-pattern application of existing lessons, not a new principle.
+
+### Notable observations
+
+1. **Handoff baseline accuracy was mixed.** Of the 12 modules, two had significant baseline drift from the handoff's predictions (`classification.py` was 91.89% not 54%; `music.py` filter-sensitivity issue). Lesson #93 (re-measure baseline before each ship) caught both quickly. Without re-measurement, the second module would have been ~10 minutes; with re-measurement, both were ~5 minutes total.
+
+2. **Tests-per-percent ratio trended down across the arc.** Early sub-ships (v1.7.95, v1.7.96, v1.7.97) needed 1-2 tests for 1-2% gains. Later sub-ships (v1.7.104, v1.7.105, v1.7.106) needed 9-15 tests for 10-22% gains — but the per-test work was easier because patterns were established. Lesson #87 (pattern dividends) showing in the numbers again.
+
+3. **Six "settled patterns" emerged during the arc.** Each was used in 2-3 ships, became automatic by the third use:
+   - `sys.modules[name] = None` for optional-dependency ImportError paths (v1.7.96, v1.7.100, v1.7.102, v1.7.106)
+   - Lazy-import patch-at-origin (v1.7.101, v1.7.106)
+   - Refactor unreachable defensive code (v1.7.95, v1.7.99, v1.7.104)
+   - `# pragma: no branch` for language-produced unreachable branches (v1.7.104)
+   - Module-level data-structure monkeypatch as test seam (v1.7.100's `_FILENAME_MUSIC_PATTERNS`)
+   - Selective Path.X monkeypatch with call-counter to avoid blast radius (v1.7.105, v1.7.106)
+
+### What this arc unlocks
+
+- **Future Coverage Sweep arcs** for `plugins/core/*` and `mcp/*` are now low-cost — the patterns + stub vocabulary carry over directly.
+- **`cli/main.py` arc** is the next major coverage milestone (10.73% at last measurement; needs `click.testing.CliRunner` workflow).
+- **GUI coverage strategy** is the only remaining major coverage frontier; needs an explicit decision before any work starts.
+
+### Session totals
+
+This session went from v1.7.91 (start) to v1.7.106 (now): **15 ships in one session, 19 modules at 100%, 2 multi-ship arcs structured and closed (Migration Phase Gamma + Coverage Sweep)**.
+
 ## [1.7.105] — 2026-05-13 — Coverage Sweep 11/12: `services/code_project.py` to 100%
 
 Sub-ship 11 of the Coverage Sweep arc. Closes 17 uncovered lines + 4 partial branches in `services/code_project.py`. Mostly `except OSError: continue` defensive boundaries around `Path.iterdir`, `Path.is_dir`, `Path.is_file`, and `Path.stat`.

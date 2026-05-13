@@ -10,7 +10,7 @@ This file is read automatically by Claude Code at session start. It encodes the 
 
 - **Name:** Curator. Repo: `https://github.com/KULawHawk/Curator.git`. Local root: `C:\Users\jmlee\Desktop\AL\Curator\`.
 - **Brand context:** Curator is one pillar within **Ad Astra** (the overarching umbrella). Governance constitution at `..\Atrium\CONSTITUTION.md` (v0.3 RATIFIED 2026-05-08). Constellation map at `..\AD_ASTRA_CONSTELLATION.md`.
-- **Status:** v1.7.93b shipped. 94 ships total. **Migration Phase Gamma arc CLOSED** at 100.00% line + branch on `services/migration.py`. Seven Phase Gamma modules at 100% (`tier`, `lineage`, `safety`, `scan`, `bundle`, `queries`, `migration`). No active arc.
+- **Status:** v1.7.106 shipped. 108 ships total. **Coverage Sweep arc CLOSED** at 100% on all 12 sweep targets. Combined with Migration Phase Gamma, **19 services modules at 100% line + branch** (`tier`, `lineage`, `safety`, `scan`, `bundle`, `queries`, `migration`, `forecast`, `fuzzy_index`, `watch`, `audit`, `pii_scanner`, `music`, `metadata_stripper`, `musicbrainz`, `classification`, `migration_retry`, `code_project`, `document`). No active arc.
 - **Python:** 3.13.12 in `.venv`. Windows 11 only (see Doctrine principle 3 below).
 
 ---

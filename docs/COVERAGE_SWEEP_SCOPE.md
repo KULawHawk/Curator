@@ -1,10 +1,11 @@
 # Coverage Sweep Arc — Scope Plan
 
-**Status:** Active arc plan — opened v1.7.94
+**Status:** ✅ **ARC CLOSED at v1.7.106 — all 12 sweep targets at 100% line + branch**
 **Owner:** Curator engineering doctrine
 **Created:** 2026-05-13 (v1.7.94)
-**Modules:** 12 services modules below 100%, ordered by ascending effort
-**Target:** All 12 modules at 100% line + branch (per apex-accuracy doctrine)
+**Closed:** 2026-05-13 (v1.7.106)
+**Modules:** 12 services modules below 100% → all now at 100%
+**Target:** All 12 modules at 100% line + branch ✅ ACHIEVED
 
 ## Why this arc
 
@@ -96,7 +97,7 @@ If picking this up in a new session, the restart prompt is: *"Resume Coverage Sw
 | v1.7.103 | ✅ Closed | `services/classification.py` | **100.00%** (was 91.89%) | 2026-05-13 |
 | v1.7.104 | ✅ Closed | `services/migration_retry.py` | **100.00%** (was 77.78%) | 2026-05-13 |
 | v1.7.105 | ✅ Closed | `services/code_project.py` | **100.00%** (was 89.45%) | 2026-05-13 |
-| v1.7.106 | ⏳ Pending | `services/document.py` | TBD | TBD |
+| v1.7.106 | ✅ **ARC CLOSURE** | `services/document.py` | **100.00%** (was 89.66%) | 2026-05-13 |
 
 ## Arc-level success criteria
 
@@ -105,3 +106,42 @@ When this arc closes:
 - **104+ ships** in the Curator repo (up from 94 after v1.7.93b; 94 + this scope plan + 12 module sweeps = 107 if no splits needed).
 - Demonstrates that the apex-accuracy doctrine scales beyond focused arcs to **systematic coverage closure**.
 - The Coverage Sweep pattern (per-module trimmed-ceremony ships ordered by effort) becomes a reusable arc template for future cleanup work.
+
+## ✅ Arc closure — final stats (2026-05-13)
+
+All criteria met or exceeded:
+
+- **19 services modules at 100%** (7 Phase Gamma + 12 Coverage Sweep targets), up from 6 at session start
+- **108 ships total** (107 = the predicted-no-split count, +1 for the v1.7.93 split into 93a/93b which happened earlier in the session)
+- **Apex-accuracy doctrine scaled** across both intense (Migration Phase Gamma) and breadth (Coverage Sweep) arcs in a single session
+- Coverage Sweep pattern is now a documented template (this doc) — reusable for future `plugins/` and `mcp/` sweeps
+
+### Sweep ship trajectory
+
+| Ship | Module | Coverage delta | Tests |
+|---|---|---|---|
+| v1.7.95 | forecast.py | 98.45 → 100.00 | 1 |
+| v1.7.96 | fuzzy_index.py | 98.02 → 100.00 | 1 |
+| v1.7.97 | watch.py | 97.77 → 100.00 | 2 |
+| v1.7.98 | audit.py | 89.66 → 100.00 | 1 |
+| v1.7.99 | pii_scanner.py | 97.94 → 100.00 | 2 |
+| **v1.7.100** | music.py | 94.55 → 100.00 | 6 |
+| v1.7.101 | metadata_stripper.py | 94.17 → 100.00 | 6 |
+| v1.7.102 | musicbrainz.py | 88.34 → 100.00 | 10 |
+| v1.7.103 | classification.py | 91.89 → 100.00 | 4 |
+| v1.7.104 | migration_retry.py | 77.78 → 100.00 | 9 |
+| v1.7.105 | code_project.py | 89.45 → 100.00 | 11 |
+| v1.7.106 | document.py | 89.66 → 100.00 | 15 |
+| **TOTAL** | **12 modules** | **avg +6.6% per module** | **68 tests** |
+
+### Source-level refactors performed during the arc
+
+Three modules had provably-unreachable defensive code removed (per doctrine item 1):
+
+- v1.7.95 `forecast.py`: `if n else 0.0` ternary in `_linear_fit`'s denom==0 path
+- v1.7.99 `pii_scanner.py`: try/except around `bytes.decode("utf-8", errors="replace")` (documented total per Python spec)
+- v1.7.104 `migration_retry.py`: end-of-loop defensive re-raise after for-loop that always exits via internal return/raise
+
+One `# pragma: no branch` was added (per Lesson #91 — defensive boundaries that the language produces but the logic can't traverse):
+
+- v1.7.104 `migration_retry.py`: `for attempt in range(max_retries + 1)` natural-exit branch is unreachable
