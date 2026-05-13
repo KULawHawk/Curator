@@ -92,7 +92,7 @@ If picking this up in a new session, the restart prompt is: *"Resume Coverage Sw
 | v1.7.99 | ✅ Closed | `services/pii_scanner.py` | **100.00%** (was 97.94%) | 2026-05-13 |
 | v1.7.100 | ✅ Closed — 🎉 MILESTONE | `services/music.py` | **100.00%** (was 94.55%) | 2026-05-13 |
 | v1.7.101 | ✅ Closed | `services/metadata_stripper.py` | **100.00%** (was 94.17%) | 2026-05-13 |
-| v1.7.102 | ⏳ Pending | `services/musicbrainz.py` | TBD | TBD |
+| v1.7.102 | ✅ Closed | `services/musicbrainz.py` | **100.00%** (was 88.34%) | 2026-05-13 |
 | v1.7.103 | ⏳ Pending | `services/classification.py` | TBD | TBD |
 | v1.7.104 | ⏳ Pending | `services/migration_retry.py` | TBD | TBD |
 | v1.7.105 | ⏳ Pending | `services/code_project.py` | TBD | TBD |

@@ -4,6 +4,50 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.102] — 2026-05-13 — Coverage Sweep 8/12: `services/musicbrainz.py` to 100%
+
+Sub-ship 8 of the Coverage Sweep arc. Closes 12 uncovered lines + 7 partial branches in `services/musicbrainz.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/musicbrainz.py` | 88.34% | **100.00%** (+11.66%) |
+
+123 statements, 40 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_musicbrainz_coverage.py` (NEW, 9 tests):
+
+1. `test_musicbrainzngs_available_returns_false_when_missing` — `sys.modules` pattern (third sub-ship using it; pattern is mature).
+2. `test_configure_user_agent_swallows_set_useragent_exception` — `MagicMock` whose `set_useragent.side_effect = RuntimeError(...)`; covers lines 242-243.
+3. `test_lookup_recording_score_non_numeric_treated_as_zero` — `ext:score` is a non-numeric string; covers lines 186-187.
+4. `test_lookup_recording_track_without_position_falls_through` — release with mediums whose tracks lack `position`/`number`; covers branches 216→224, 218→216, 224→214.
+5. `test_lookup_recording_track_position_non_numeric_defensive` — track position is "garbage"; covers lines 221-222.
+6. `test_extract_artist_skips_dict_entry_without_name` — artist-credit dict without name field; covers branch 258→254.
+7. `test_extract_artist_skips_non_dict_non_str_entry` — artist-credit entries that are `None` / `int`; covers branch 260→254.
+8. `test_parse_year_falsy_input_returns_none` — covers line 273.
+9. `test_parse_year_non_numeric_prefix_returns_none` — covers lines 281-283 (the `except ValueError: pass; return None` defensive path).
+10. `test_parse_year_out_of_range_returns_none` — numeric year outside 1900-2099; covers branch 279→283.
+
+**Test infrastructure reuse:** the `_make_fake_mb_module` helper (modeled on the existing pattern in `tests/unit/test_music_enrichment.py`) injects a fake `musicbrainzngs` module via `sys.modules`. This is the canonical pattern in the codebase for testing optional-dependency code paths. `musicbrainzngs` isn't installed in this environment, so the fake-module injection is the only way to exercise the production code's main path.
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. The fake-module injection pattern (`sys.modules[name] = fake_module`) is well-established by v1.7.96 (fuzzy_index ImportError) and v1.7.100 (music's mutagen ImportError) and now v1.7.102 (musicbrainz's musicbrainzngs ImportError). Three sub-ships using it ≈ a real pattern. Worth carrying forward for any other optional-deps wrappers in the codebase. Honest logging.
+
+### Files
+
+- `tests/unit/test_musicbrainz_coverage.py` (+~210, new, 10 tests)
+- `docs/COVERAGE_SWEEP_SCOPE.md` (+1 line)
+
+### Next
+
+**v1.7.103** — `services/classification.py`. Handoff: ~30 min, 12 lines, lots of branches.
+
 ## [1.7.101] — 2026-05-13 — Coverage Sweep 7/12: `services/metadata_stripper.py` to 100%
 
 Sub-ship 7 of the Coverage Sweep arc. Closes 7 uncovered lines + 1 partial branch in `services/metadata_stripper.py`.
