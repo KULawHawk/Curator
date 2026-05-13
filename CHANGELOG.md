@@ -4,6 +4,38 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.185] — 2026-05-13 — Round 4 Tier 2 ship 1: GUI Coverage Arc scope plan
+
+**Tier 2 opens.** Doc-only — formal arc scope plan modeled on `docs/CLI_COVERAGE_ARC_SCOPE.md`.
+
+### What landed
+
+`docs/GUI_COVERAGE_ARC_SCOPE.md` (NEW):
+- **Baselines** re-measured at HEAD `7cad661` — statement counts match handoff exactly (`lineage_view` 246, `models` 774, `main_window` 1,089, `dialogs` 2,234)
+- **Tier 2 plan: 6 ships** — scope plan + lineage_view (2 ships) + models (3 ships)
+- **Tier 3 plan: 5 ships** — main_window decomposed by functional area (init/menus, action handlers, dock+state, signal/slot wiring, pragma audit close)
+- **Tier 4 plan: 9-11 ships, default Round 5** — dialogs.py decomposition doc + per-dialog ships + pragma audit
+- **Pragma budget: 29-41 total** across the 4 modules per Lesson #101 / Doctrine #19
+- **Coverage caveat** — `tests/unit/` invocation for the entire arc due to DEFERRED_DECISIONS #1 (sandbox-fragile trash-flow tests)
+- **Status tracker** table — to be updated as each ship lands
+
+### Round 4 totals (revised)
+
+- **Minimum viable** (Tier 1 + 2): 11 ships, 184 → **190**
+- **Stretch** (Tier 1 + 2 + 3): 16 ships, 184 → **195**
+- **Absolute stretch** (all 4 tiers): 25-27 ships, 184 → **204-206**
+
+No source changes. No new lesson.
+
+### Files
+
+- `docs/GUI_COVERAGE_ARC_SCOPE.md` (NEW)
+- `docs/releases/v1.7.185.md`
+
+### Next
+
+**v1.7.186** — `gui/lineage_view.py` Part 1.
+
 ## [1.7.184] — 2026-05-13 — Round 4 Tier 1 ship 5 (FINAL): pytest-qt smoke test
 
 **FINAL Tier 1 ship.** Validates that `pytest-qt`'s `qtbot` fixture is available and that the 3 idioms the GUI Coverage Arc will rely on actually work. Tier 1 closes.
