@@ -148,7 +148,7 @@ Each sub-ship's release notes will document this disclosure until DEFERRED_DECIS
 | v1.7.188 | models Part 1 (helpers + 3 simplest models) | ✅ closed | 11.35% → 39.77% |
 | v1.7.189 | models Part 2 (AuditLog + Config) | ✅ closed | 39.77% → 63.26% |
 | v1.7.190 | models Part 3 + close | ✅ closed | 63.26% → **100%** (0 pragmas added) |
-| v1.7.191 | main_window Part 1 (Tier 3 opt-in) | pending | — |
+| v1.7.191 | main_window Part 1 (construction + helpers) | ✅ closed | 7.57% → 45.87% |
 | v1.7.192 | main_window Part 2 (Tier 3 opt-in) | pending | — |
 | v1.7.193 | main_window Part 3 (Tier 3 opt-in) | pending | — |
 | v1.7.194 | main_window Part 4 (Tier 3 opt-in) | pending | — |

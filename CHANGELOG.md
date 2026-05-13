@@ -4,6 +4,52 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.191] — 2026-05-13 — Round 4 Tier 3 ship 1: `gui/main_window.py` Part 1 (construction + helpers)
+
+**Tier 3 opens.** Covers the window construction surface: `__init__`, `_build_ui`, all 9 `_build_*_tab` methods, the static helpers (`_make_table_view`, `_wrap_table`, `_build_lineage_legend_html`), the settings header updater, the status bar refresher, and the lineage time-slider helpers.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `gui/main_window.py` | 7.57% (incidental) | **45.87%** (550 stmts covered, 6 partial branches) |
+
++468 new statements covered in a single sub-ship. The biggest single-ship coverage gain in Round 4 so far.
+
+### What landed
+
+`tests/unit/test_gui_main_window_part1_coverage.py` (NEW, 27 tests):
+
+- **`make_runtime_stub` factory** — exported for Parts 2-4 reuse. Builds a fully-stubbed `CuratorRuntime` with config + all 9 repos + db. Single source of truth for the test runtime stub.
+- **`TestCuratorMainWindowConstruction`** (7) — basic instantiation (verifies 9 tabs); construction with time-range enabled (slider enabled); without time-range (slider disabled); window title with/without version import; inbox section with empty hint (rowCount==0 branch); inbox section without empty hint (rowCount>0 branch)
+- **`TestStaticHelpers`** (3) — `_make_table_view` (sorting, selection, header config); `_wrap_table` (QVBoxLayout wrapper); `_build_lineage_legend_html` (all 5 edge kinds in output)
+- **`TestSettingsHeader`** (4) — no source_path → "built-in defaults"; with source_path → "Loaded from:"; with `reloaded=True` → "reloaded from disk" suffix; source_path access raises → defensive except clause → "built-in defaults"
+- **`TestStatusBarRefresh`** (2) — db.db_path accessible; db.db_path raises → "(unknown)" fallback
+- **`TestLineageSliderHelpers`** (11) — `_slider_to_datetime` (no range / pct=0 / pct=100 / pct=50 interpolation); `_lineage_time_label_text` (no range / max / interpolated / slider-returns-None defensive); `_lineage_axis_label_text` (no range / with range / slider-returns-None defensive)
+
+### Single-instantiation pattern
+
+The biggest insight from Part 1: **a single `CuratorMainWindow(stub_runtime)` call exercises ~hundreds of statements** because `__init__` → `_build_ui` → all 9 `_build_*_tab` methods runs as a chain. The test design exploits this — most coverage comes from instantiation; focused unit tests fill the gaps for static helpers and computed methods.
+
+The `make_runtime_stub` factory carries the full stub surface forward to Parts 2-4 so they can construct the window without re-defining 60 mocked methods.
+
+### Real-class trick for property exceptions
+
+To test the defensive `except Exception:` in `_update_settings_header` (where `config.source_path` might raise), `MagicMock` is insufficient — its `__getattr__` returns child mocks regardless of property overrides. Solved by replacing `runtime.config` with a real `_RaisingConfig` class that has an actual `@property` raising `AttributeError`. **This pattern is reusable** for any defensive-boundary test involving property exceptions on stubbed services.
+
+Recording inline as a Lesson #95 refinement (the existing rule about pydantic `__dict__` bypass): **for non-pydantic property-access defensive tests, replace the stub with a real class. MagicMock can't honor property semantics.**
+
+### Files
+
+- `tests/unit/test_gui_main_window_part1_coverage.py` (NEW, 27 tests, +~400 lines)
+- `docs/releases/v1.7.191.md`
+
+No source changes. No new numbered lesson (refinement on #95 captured inline).
+
+### Next
+
+**v1.7.192** — `gui/main_window.py` Part 2: action handlers (open-dialog slots for scan/group/cleanup/tier/forecast/health/version_stacks; about; workflow runner; settings reload; audit slots; lineage slot handlers).
+
 ## [1.7.190] — 2026-05-13 — Round 4 Tier 2 ship 6 (FINAL): `gui/models.py` Part 3 + close → **100%**
 
 **`gui/models.py` closed at 100% line + branch. Tier 2 closed.** Zero pragmas needed (pragma budget was 5-7 per Lesson #101 / Doctrine #19; actual: 0).
