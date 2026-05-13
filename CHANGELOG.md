@@ -4,6 +4,45 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.97] — 2026-05-13 — Coverage Sweep 3/12: `services/watch.py` to 100%
+
+Sub-ship 3 of the Coverage Sweep arc. Closes the three uncovered lines + one partial branch in `services/watch.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/watch.py` | 97.77% | **100.00%** (+2.23%) |
+
+133 statements, 46 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_watch_coverage.py` (NEW, 2 tests):
+
+1. `test_relative_to_source_value_error_returns_none` — directly tests `_relative_to_source` with a duplicate-sid `_active_roots` configuration (two roots, same sid). When the wrong root is iterated first, `relative_to` raises ValueError → function returns None (lines 361-362).
+
+2. `test_streaming_loop_skips_event_when_relative_to_source_returns_none` — drives the streaming loop via fake_watchfiles + monkeypatch of `_relative_to_source` to return None for the incoming path. The loop hits `if rel is None: continue` (line 285 + branch 284→next-iter).
+
+No source changes. Reused the existing fake-watchfiles installation pattern from `tests/unit/test_watch.py`.
+
+### Latent quirk surfaced (worth a note, not a lesson)
+
+`_relative_to_source` has a quirk: if `_active_roots` has duplicate sid entries (which shouldn't happen in normal config but could be injected via test setup or a buggy `_resolve_roots` refactor), the function returns None on the FIRST sid-matching root that fails — it doesn't try other roots with the same sid. This is fine in practice because `_resolve_roots` produces unique-sid entries, but worth noting in case future code changes that invariant. Not a bug to fix today.
+
+### Lesson captured
+
+No new lesson this ship. The fake-watchfiles fixture pattern and the duplicate-sid trick both use established techniques from the existing test suite. Honest logging.
+
+### Files
+
+- `tests/unit/test_watch_coverage.py` (+~130, new, 2 tests)
+- `docs/COVERAGE_SWEEP_SCOPE.md` (+1 line, tracker update)
+
+### Next
+
+**v1.7.98** — `services/audit.py`. Handoff predicts ~15 min, 3 lines.
+
 ## [1.7.96] — 2026-05-13 — Coverage Sweep 2/12: `services/fuzzy_index.py` to 100%
 
 Sub-ship 2 of the Coverage Sweep arc. Closes the two uncovered lines (166-167) in `services/fuzzy_index.py` — the `except ImportError` branch in `FuzzyIndex.__init__` that fires when the optional `datasketch` dependency isn't installed.
