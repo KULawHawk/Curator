@@ -10,7 +10,7 @@ This file is read automatically by Claude Code at session start. It encodes the 
 
 - **Name:** Curator. Repo: `https://github.com/KULawHawk/Curator.git`. Local root: `C:\Users\jmlee\Desktop\AL\Curator\`.
 - **Brand context:** Curator is one pillar within **Ad Astra** (the overarching umbrella). Governance constitution at `..\Atrium\CONSTITUTION.md` (v0.3 RATIFIED 2026-05-08). Constellation map at `..\AD_ASTRA_CONSTELLATION.md`.
-- **Status:** v1.7.145 shipped (HEAD `244e7dd`). **164 tags / 145 ships total.** **ROUND 2 COMPLETE.** Five arcs closed in the v1.7.x line: Migration Phase Gamma (v1.7.93b), Coverage Sweep (v1.7.106), Plugins+MCP+Config Sweep (v1.7.125), Storage Repositories Sweep (v1.7.137), Mid-Size Services Sweep (v1.7.145). **55 modules at 100% line + branch** across services (19), storage (16), plugins (8), mcp (4), models (5), config (1), cli small (2). **Overall Curator coverage: 54.63%** (was 45.80% pre-Round 1). Remaining at <100%: `cli/main.py` (10.73%, ~1627 uncovered — separate massive arc), `cli/mcp_keys.py` (78.11%), `cli/mcp_orphans.py` (64.84%), all `gui/*` (0% — needs strategy first), `services/migration.py` (99.71% — possibly a coverage-tool measurement edge case; was reported at 100% at v1.7.93b).
+- **Status:** v1.7.179 shipped (HEAD `a26396d`). **198 tags / 179 ships total.** **ROUND 3 COMPLETE.** Round 3 closed 34 ships across 4 tiers (v1.7.146 → v1.7.179): Tier 1 stabilization (6 ships, services/migration.py → 100%), Tier 2 CLI Coverage Arc kickoff (3 ships, cli/mcp_keys + cli/mcp_orphans → 100%), Tier 3 cli/main.py decomposition (21 ships, 10.73% → 99.43%), Tier 4 GUI signals (4 ships, all 0% → 100%). **63 modules at 100% line + branch** now (was 55 at Round 2 close). Remaining at <100%: `cli/main.py` (99.43% — pragma-bound on documented defensive boundaries + dead `_resolve_file` duplicate deferred to Jake), `gui/*` widgets (not in scope yet — Round 4 candidate). **Zero new numbered lessons captured in Round 3** — doctrine at saturation; Lessons #79–95 carried the entire arc.
 - **Python:** 3.13.12 in `.venv`. Windows 11 only (see Doctrine principle 3 below).
 
 ---
@@ -259,18 +259,19 @@ GitHub repo: `https://github.com/KULawHawk/Curator.git`.
 
 ---
 
-## Current arc state (v1.7.92 mid-ship)
+## Current arc state (Round 3 complete — v1.7.179)
 
 ```
-v1.7.88 ✅ Scope plan
-v1.7.89 ✅ Plan() + Apply() control flow         (68.18%, +1.44%)
-v1.7.90 ✅ Same-source + 4 conflict modes        (70.05%, +1.87%)
-v1.7.91 ✅ Cross-source + overwrite-with-backup  (77.47%, +7.42%)  ← biggest
-v1.7.92 ⏳ Auto-strip + small defensive bits     MID-SHIP NOT COMMITTED
-v1.7.93 ⏳ Persistent path + doctrine close      (target 100%)
+ROUND 3 COMPLETE — 34 ships across 4 tiers (v1.7.146 -> v1.7.179)
+  Tier 1: 6 ships (stabilization)              ✅
+  Tier 2: 3 ships (CLI Coverage Arc kickoff)   ✅
+  Tier 3: 21 ships (cli/main.py decomposition) ✅  10.73% -> 99.43%
+  Tier 4: 4 ships (GUI signals)                ✅  4 modules: 0% -> 100% each
 ```
 
-**v1.7.92 mid-ship state:** `tests/unit/test_migration_autostrip.py` written, 14 tests pass. Coverage not measured. Not committed. Resume protocol at `..\.curator\CLAUDE_CODE_HANDOFF_v1792.md`.
+Awaiting Jake's direction on Round 4 / v2.0 cut. See `docs/RELEASE_NOTES_v2.0_DRAFT.md` (v1.7.151) and `docs/MUTATION_TESTING_REPORT.md` (v1.7.150) for forward-looking context.
+
+**Pending decision deferred to Jake:** dead `_resolve_file` duplicate at `cli/main.py` lines 187-216 (3 options: delete / merge feature / fix docstring).
 
 ---
 
