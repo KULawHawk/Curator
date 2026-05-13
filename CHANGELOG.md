@@ -4,6 +4,60 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.190] — 2026-05-13 — Round 4 Tier 2 ship 6 (FINAL): `gui/models.py` Part 3 + close → **100%**
+
+**`gui/models.py` closed at 100% line + branch. Tier 2 closed.** Zero pragmas needed (pragma budget was 5-7 per Lesson #101 / Doctrine #19; actual: 0).
+
+### Coverage delta
+
+| Module | Before (after Part 2) | After Part 3 |
+|---|---|---|
+| `gui/models.py` | 63.26% (508 stmts) | **100.00%** (774 stmts, **380 branches**, 0 missing, 0 partial) |
+
++266 new statements. Total 175 tests across Parts 1-3 (54 + 52 + 69) all pass in ~5s.
+
+### What landed
+
+`tests/unit/test_gui_models_part3_coverage.py` (NEW, 69 tests):
+
+- **`TestFormatDuration`** (9 parametrized) — None / 0s / sub-minute / boundary 60s / sub-hour / boundary 3600s / multi-hour
+- **`TestScanJobTableModel`** (11) — init (default + custom limit + exception fallback); job_at; counts; headerData; data with both files counts ("80/100" form); files_seen only ("50"); both zero (""); invalid index + EditRole + row out of range + column fallback
+- **`TestPendingReviewTableModel`** (13) — default thresholds (0.7/0.95); custom thresholds + limit; init exception; edge_at; counts; headerData; data with `.value` Enum-like kind; data with plain string kind; file unresolvable → `(uuid)` fallback; file_repo exception → `(uuid)` fallback; invalid index + role short-circuits; row out of range + column fallback; **path cache** (file_repo.get called once per unique UUID across multiple rows)
+- **`TestMigrationJobTableModel`** (14) — init default + custom limit + exception fallback; job_at; counts; headerData; data all 8 columns DisplayRole; tooltip on Src→Dst col (full paths); tooltip on Status col when error set; tooltip on Status with no error → None; tooltip on other columns → None; invalid index + EditRole short-circuit; row out of range + column fallback; sort each column + None values
+- **`TestMigrationProgressTableModel`** (18) — init with/without job_id; init exception fallback; set_job_id triggers refresh; set_job_id(None) clears; progress_at; counts; headerData; data all 5 cols (incl. truncated 12-char hash with `…` single-char ellipsis); outcome None → ""; verified_xxhash short form (3 cases); tooltip on Src Path col (full src+dst); tooltip on Outcome col with/without error; tooltip on other columns → None; invalid index + EditRole; row out of range + column fallback; sort each column + None values
+- **`TestModuleExports`** (1) — all 9 model classes in `__all__`
+
+### Pragma audit (Lesson #99 / Doctrine #17 — arc-close ship)
+
+Predicted: **5-7 pragmas**. Actual: **0**. The module's design — uniform Qt protocol across 9 models, each with try/except → empty fallback on repo failures, no defensive boundaries beyond standard Qt protocol returns — leaves nothing to pragma. **380/380 branches are real and all covered.**
+
+This is the **third module** in Curator to close at 100% line + branch with zero new pragmas (after Round 3 Tier 4's signal modules and v1.7.187's `lineage_view.py`). The pattern holds: well-decomposed GUI code with consistent repo-stub testability is pragma-light.
+
+### Tier 2 closed
+
+| Ship | Title | Result |
+|---|---|---|
+| v1.7.185 | scope plan | doc-only |
+| v1.7.186 | lineage_view Part 1 | 0% → 65.67% |
+| v1.7.187 | lineage_view Part 2 + close | **100% (0 pragmas)** |
+| v1.7.188 | models Part 1 | 11.35% → 39.77% |
+| v1.7.189 | models Part 2 | 39.77% → 63.26% |
+| v1.7.190 | models Part 3 + close | **100% (0 pragmas)** |
+
+**Tier 2 outcome: 2 modules closed at 100% line + branch with zero new pragmas in either.** 6 ships exactly as scoped.
+
+### Files
+
+- `tests/unit/test_gui_models_part3_coverage.py` (NEW, 69 tests, +~580 lines)
+- `docs/GUI_COVERAGE_ARC_SCOPE.md` (status tracker rows updated)
+- `docs/releases/v1.7.190.md`
+
+No source changes. No new lesson.
+
+### Next
+
+**Tier 2 status report → Jake.** Tier 3 (`gui/main_window.py` decomposition) is opt-in per the handoff. **Stopping here per handoff: "STOP and wait for Jake's confirmation before Tier 3."**
+
 ## [1.7.189] — 2026-05-13 — Round 4 Tier 2 ship 5: `gui/models.py` Part 2 (AuditLog + Config models)
 
 Closes `AuditLogTableModel` (with its filter state, `_format_entity`, `_format_details`) and `ConfigTableModel` (with `_flatten` + `_format_value`). The 4 remaining models go in Part 3.
