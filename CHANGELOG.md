@@ -4,6 +4,48 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.131] — 2026-05-13 — Tier 3 ship 5: `storage/repositories/trash_repo.py` to 100%
+
+Closes 6 uncovered lines + 1 partial branch in `storage/repositories/trash_repo.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `storage/repositories/trash_repo.py` | 82.22% | **100.00%** (+17.78%) |
+
+39 statements, 6 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_storage_trash_repo_coverage.py` (NEW, 4 tests) — uses the shared `repos` + `local_source` fixtures from `tests/conftest.py` to satisfy the `trash_registry → files → sources` foreign-key chain:
+- `delete(curator_id)` removes the record
+- `list(since=...)` excludes older records
+- `list(limit=None)` returns all matching (covers branch 97->100 — the False arm where LIMIT is not appended)
+- `count()` returns row total
+
+No source changes.
+
+### Notable iteration
+
+Caught two minor first-try issues:
+- Foreign-key constraint failure when constructing TrashRecord without inserting a corresponding FileEntity first → fixed by adopting the shared `repos`/`local_source` fixtures (the established pattern from `tests/unit/test_storage.py`).
+- FileEntity has `xxhash3_128` field, not `file_hash`. The `file_hash` is a TrashRecord field that takes the file's hash as input — fixed by passing `file_entity.xxhash3_128`.
+
+### Lesson captured
+
+No new lesson. Both fixes are settled patterns; the second was just a model field-name lookup.
+
+### Files
+
+- `tests/unit/test_storage_trash_repo_coverage.py` (+~95, new, 4 tests)
+- `docs/STORAGE_SWEEP_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.131.md`
+
+### Next
+
+**v1.7.132** — `storage/repositories/migration_job_repo.py` (6 lines + 5 partial branches).
+
 ## [1.7.130] — 2026-05-13 — Tier 3 ship 4: `storage/repositories/source_repo.py` to 100%
 
 Closes 6 uncovered lines in `storage/repositories/source_repo.py`.
