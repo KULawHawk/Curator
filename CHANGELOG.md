@@ -4,6 +4,37 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.109] — 2026-05-13 — Round 2 Tier 1 ship 3: `models/migration.py` to 100%
+
+Sub-ship 3 of Round 2 Tier 1. Closes 6 uncovered lines in `models/migration.py` (the property bodies on `MigrationJob` and `MigrationProgress`).
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `models/migration.py` | 87.69% | **100.00%** (+12.31%) |
+
+61 statements, 4 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_models_migration_coverage.py` (NEW, 8 tests): direct unit tests of `MigrationJob.is_terminal`, `MigrationJob.is_same_source`, `MigrationProgress.is_pending`, and `MigrationProgress.duration_seconds`.
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. Honest logging.
+
+### Files
+
+- `tests/unit/test_models_migration_coverage.py` (+~100, new, 8 tests)
+- `docs/releases/v1.7.109.md` (release notes)
+
+### Next
+
+**v1.7.110** — `models/base.py`.
+
 ## [1.7.108] — 2026-05-13 — Round 2 Tier 1 ship 2: `models/jobs.py` to 100%
 
 Sub-ship 2 of Round 2 Tier 1. Closes 4 uncovered lines in `models/jobs.py` (the two `@property` method bodies).
