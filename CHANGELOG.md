@@ -4,6 +4,48 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.163] — 2026-05-13 — Round 3 Tier 3 ship 9: `cli/main.py` `organize` + `organize-revert`
+
+Closes ~79 uncovered lines + 13 partial branches across `organize`, `organize-revert`, `_organize_plan_to_dict`, `_render_organize_plan`, `_stage_report_to_dict`, `_render_stage_report`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 44.29% | **49.09%** (+4.80%) |
+
+Partials: 22 → 9 (largest single ship partial cleanup so far).
+
+### What landed
+
+`tests/unit/test_cli_organize_coverage.py` (NEW, 28 tests):
+- **Validation branches**: --type without --target, unknown --type, --stage/--apply without --type+--target, --stage + --apply mutually exclusive
+- **--enrich-mb validation**: requires --type music, requires --mb-contact, MusicBrainz import error (exit 2), missing musicbrainzngs (exit 2), happy-path client attachment
+- **Plan rendering**: human empty, populated with --show-files (3 buckets + file paths + arrow destinations), populated without --show-files (proposals count only), JSON empty, JSON populated with include_files
+- **--stage / --apply**: happy paths, ValueError exits 2, JSON includes stage report
+- **_render_stage_report**: failures rendered with errors, skipped capped at 5 + "and N more", apply mode hint ("Files moved to final destinations"), stage mode hint ("Review the staged tree")
+- **organize-revert**: FileNotFoundError exit 1, RuntimeError exit 2, human output with restored/skipped/failed + error messages, JSON output
+
+### Test infrastructure built
+
+- `_empty_plan` / `_populated_plan(with_proposals)` factories
+- `_stage_report(moved, skipped, failed, mode, with_errors)` factory
+- `_revert_report(restored, skipped, failed, with_errors)` factory
+
+All three reuse the model dataclasses directly. Monkeypatch `OrganizeService.plan` / `.stage` / `.apply` / `.revert_stage` to return them.
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_cli_organize_coverage.py` (+~530, new, 28 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.163.md`
+
+### Next
+
+**v1.7.164** — `cleanup_app` (4 subcommands + helpers, ~250 lines predicted).
+
 ## [1.7.162] — 2026-05-13 — Round 3 Tier 3 ship 8: `cli/main.py` `doctor` + `safety_app`
 
 Closes ~91 uncovered lines across `doctor` + `safety check` + `safety paths`.

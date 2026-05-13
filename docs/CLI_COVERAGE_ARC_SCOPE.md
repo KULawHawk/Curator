@@ -178,7 +178,7 @@ Restart prompt: *"Resume CLI Coverage Arc. Open docs/CLI_COVERAGE_ARC_SCOPE.md, 
 | v1.7.160 | ✅ Closed | `audit` | cli/main.py: 35.16% → 36.78% | 2026-05-13 |
 | v1.7.161 | ✅ Closed | `watch` | cli/main.py: 36.78% → 39.59% | 2026-05-13 |
 | v1.7.162 | ✅ Closed | `doctor` + `safety_app` (check + paths) | cli/main.py: 39.59% → 44.29% | 2026-05-13 |
-| v1.7.163 | ⏳ Pending | `organize` + `organize-revert` | TBD | TBD |
+| v1.7.163 | ✅ Closed | `organize` + `organize-revert` + helpers | cli/main.py: 44.29% → 49.09% | 2026-05-13 |
 | v1.7.164 | ⏳ Pending | `cleanup_app` | TBD | TBD |
 | v1.7.165 | ⏳ Pending | `gui` + `gdrive_app` | TBD | TBD |
 | v1.7.166 | ⏳ Pending | `migrate` Part 1 | TBD | TBD |
