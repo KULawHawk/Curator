@@ -18,12 +18,12 @@
 
 ---
 
-**Status:** Active arc plan — sub-ship 4 of 5 closed at v1.7.92
+**Status:** Active arc plan — sub-ship 5a of 6 closed at v1.7.93a (split per Lesson #88)
 **Owner:** Curator engineering doctrine
 **Created:** 2026-05-12 (v1.7.88)
 **Module:** `src/curator/services/migration.py`
 **Starting coverage:** 66.74% line + branch (319 missing lines, 53 partial branches)
-**Current coverage:** 80.49% (after v1.7.92)
+**Current coverage:** 90.86% (after v1.7.93a)
 **Target:** 100.00% line + branch (per apex-accuracy doctrine, see v1.7.84)
 
 ## Why this needs a plan, not a single ship
@@ -185,7 +185,8 @@ If a session ends between sub-ships:
 | v1.7.90 | ✅ Same-source execution + 4 on-conflict modes (_resolve_collision) | Cluster 3 + part of Cluster 6 | **70.05%** (+1.87%) | 2026-05-12 |
 | v1.7.91 | ✅ Cross-source execution + overwrite-with-backup full body | Cluster 4 + Cluster 5 | **77.47%** (+7.42%) | 2026-05-12 |
 | v1.7.92 | ✅ Auto-strip metadata body + small defensive boundaries (_update_index vanished, _trash_source exception, _audit_conflict exception, audit_move/copy minor branches, apply() autostrip dispatch) | Cluster 6 (auto-strip portion) + 6 small defensives | **80.49%** (+3.02%) | 2026-05-13 |
-| v1.7.93 | ⏳ Pending | Cluster 6 remainder (rename-with-suffix-for-progress, overwrite-with-backup-for-progress, conflict-progress emit, collision-progress resolve) + Cluster 7 (persistent path: cross-source-transfer body, persistent execute_one variants, create_job, run_job, worker pool) + audit test + doctrine update | 100.00% | TBD |
+| v1.7.93a | ✅ Progress sisters + cross-source-transfer body (split per Lesson #88) | Cluster 6 remainder (`_emit_progress_audit_conflict`, `_resolve_collision_for_progress`, `_cross_source_overwrite_with_backup_for_progress`, `_cross_source_rename_with_suffix_for_progress`) + cross-source bytes infrastructure (`_cross_source_transfer` body, `_can_write_to_source`, `_hook_first_result`, `_read_bytes_via_hook`, `_invoke_post_write_hook`) | **90.86%** (+10.37%) | 2026-05-13 |
+| v1.7.93b | ⏳ Pending — LANDMARK arc closure | Cluster 7 (persistent job lifecycle: `run_job` options resolution, `create_job`, `_worker_loop`, `_execute_one_persistent_*` same-source + cross-source variants, `_build_report_from_persisted`, worker pool methods) + audit test + doctrine update | 100.00% | TBD |
 
 ### Revised estimates after sub-ship 1 calibration
 
@@ -202,6 +203,18 @@ v1.7.92 landed at **80.49%** (+3.02%), below the estimate (+6-8% landing ~87-92%
 
 v1.7.92 instead closed: the auto-strip body (873-948) + 3 small defensive exception boundaries (`_update_index` vanished, `_trash_source` exception, `_audit_conflict` exception) + 3 minor audit branches (`_audit_move` / `_audit_copy` source-IDs-None, `_audit_copy` insert exception) + apply() autostrip dispatch line.
 
-v1.7.93 now consolidates two clusters (the rest of 6 + all of 7). Estimated +20% delta to land 100%, ~750 raw lines of new test target — the biggest single sub-ship in the arc. May split into v1.7.93a (progress + cross-source-transfer) + v1.7.93b (persistent-job lifecycle + worker pool) per Lesson #88.
+### v1.7.93 split decision (per Lesson #88)
 
-The **arc target (100%) is unchanged**. Only the per-sub-ship deltas revised.
+After reading the v1.7.93 target regions in detail at the start of the closure work, the consolidated scope (~750 raw lines) was identified as >2x a typical sub-ship's budget. Per Lesson #88, scope growth beyond 1.5x triggers a split. v1.7.93 was split at the natural API seam between progress-side helpers and the persistent-job machinery that orchestrates them:
+
+- **v1.7.93a (Group A — Progress sisters + cross-source-transfer infrastructure, ~290 lines):** the *_for_progress methods (sisters of v1.7.89-91 apply-time methods) + `_cross_source_transfer` body + the hook-helper defensives. Reuses existing stubs (`StubAuditRepository`, `StubMigrationPluginManager`). Trimmed-ceremony ship.
+
+- **v1.7.93b (Group B — Persistent job lifecycle + worker pool, ~450 lines):** `create_job`, `run_job` options resolution, `_worker_loop`, `_execute_one_persistent_*` same-source + cross-source variants, `_build_report_from_persisted`. Requires new `StubMigrationJobRepository` infrastructure + threading-aware test design. **Landmark ceremony** — arc closure to 100%, lessons rollup, "Seven Phase Gamma modules at 100%" status.
+
+Total arc: 7 sub-ships instead of 5 (v1.7.88, v1.7.89, v1.7.90, v1.7.91, v1.7.92, v1.7.93a, v1.7.93b).
+
+### v1.7.93a landed: 90.86% (+10.37%)
+
+Right in the predicted 88-91% band. 51 tests, no new stub classes needed (`MigrationProgress` factory + reuse of existing pluggy + audit stubs). One lesson captured: see CHANGELOG.
+
+The **arc target (100%) is unchanged**. v1.7.93b closes it.

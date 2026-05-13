@@ -4,6 +4,90 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.93a] — 2026-05-13 — Migration Phase Gamma sub-ship 5a/6: Progress sisters + cross-source-transfer body
+
+Sub-ship 5a of the Migration Phase Gamma arc (split from v1.7.93 per Lesson #88 after the v1.7.92 calibration pushed Cluster 6 remainder into v1.7.93's consolidated scope). Targets Group A of the split: the persistent-path *_for_progress family of methods (`_emit_progress_audit_conflict`, `_resolve_collision_for_progress`, `_cross_source_overwrite_with_backup_for_progress`, `_cross_source_rename_with_suffix_for_progress`) plus the cross-source bytes-transfer infrastructure that all persistent-path cross-source code depends on (`_cross_source_transfer` body, `_can_write_to_source` defensives, `_hook_first_result` defensives, `_read_bytes_via_hook` defensives, `_invoke_post_write_hook` no-op paths).
+
+v1.7.93b (Group B, landmark arc-closure ship) covers the persistent-job lifecycle + worker pool.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/migration.py` | 80.49% | **90.86%** (+10.37%) |
+
+Right in the predicted 88-91% band. Pattern dividends per Lesson #87 paid clean: the v1.7.91 cross-source test patterns mapped directly onto the *_for_progress sisters; the v1.7.90 collision-resolution test patterns mapped onto `_resolve_collision_for_progress`.
+
+### What landed
+
+- `tests/unit/test_migration_persistent_progress.py` (NEW, ~860 lines, 51 tests, 9 test classes)
+- No new stub classes. Reused `StubAuditRepository` (v1.7.89), `StubMigrationPluginManager` + `StubMigrationHooks` (v1.7.91), `make_service` helper (v1.7.89). Added a focused `make_progress` factory + a small `_setup_pm_for_transfer` helper for the cross-source-transfer tests.
+- `docs/MIGRATION_PHASE_GAMMA_SCOPE.md` tracker updated with the v1.7.93 split decision + sub-ship 5a closure
+- `CLAUDE.md` status updated
+
+### Test classes
+
+| Class | Tests | Targets |
+|---|---|---|
+| TestEmitProgressAuditConflict | 4 | audit=None / base details / details_extra merge / log raises (1672-1695) |
+| TestResolveCollisionForProgress | 9 | skip / fail / overwrite-with-backup success / OSError / rename-with-suffix success / 9999 exhaustion / unknown mode / audit=None nested / nested log raises (2022-2105) |
+| TestCrossSourceOverwriteBackupForProgress | 5 | existing_file_id=None degrade / rename fails degrade / retry MOVED / retry HASH_MISMATCH / retry SKIPPED_COLLISION (1713-1786) |
+| TestCrossSourceRenameWithSuffixForProgress | 4 | first suffix wins / third wins after collisions / HASH_MISMATCH surfaces / 9999 exhaustion (1805-1857) |
+| TestCrossSourceTransfer | 8 | happy path / src bytes None / write FileExistsError / write None / dst unreadable / hash mismatch / verify=False / src_xxhash cached (2293-2408) |
+| TestInvokePostWriteHook | 2 | pm=None / missing hookspec (2438-2449) |
+| TestCanWriteToSource | 8 | pm=None / register exception / infos-not-list / None in list / exact match / prefix match / supports_write=False / no match (2210-2233) |
+| TestHookFirstResult | 7 | pm=None / missing hook / FileExistsError propagates / other exception / single value / list first non-None / list all None (2235-2261) |
+| TestReadBytesViaHook | 4 | first chunk None / short read / empty=EOF / None mid-loop (2263-2290) |
+
+No source code changes.
+
+### Notable iteration
+
+One iteration pass: the `_setup_pm_for_transfer` helper used a single FIFO queue across both src and dst read-back phases. For short data (single chunk), the short-read break exits the read loop with the trailing `b""` EOF terminator still queued — which then got consumed by the dst read-back, yielding an empty buffer and a spurious HASH_MISMATCH in the happy-path test. Fix was trivial: drop `b""` terminators in tests where the data fits in one chunk; the short-read break already exits the loop. This is a quiet reminder of Lesson #90 (data-flow tracing) extended to test helpers: the helper's iterator-consumption pattern must match how the production code drives it. No new lesson — Lesson #90 already covers it.
+
+### Lesson captured
+
+No new lesson this ship. This was doctrine-in-action paying dividends:
+
+- **Lesson #84 (stub patterns compound):** 51 tests written with zero new stub classes. The 5-stub vocabulary established in v1.7.89 + the pluggy mock from v1.7.91 covered the entire surface.
+- **Lesson #87 (pattern dividends):** the *_for_progress family of methods are structurally sister-functions of methods covered in v1.7.89-91. Each `TestX...ForProgress` class directly mirrored the corresponding v1.7.89-91 test class with `MigrationProgress` swapped in for `MigrationMove`.
+- **Lesson #88 (split if scope grows beyond 1.5x):** the v1.7.93 consolidated scope from the v1.7.92 calibration was identified as >2x typical at the start of v1.7.93 work. Split at the natural API seam between progress-side helpers (this ship) and the persistent-job machinery (v1.7.93b). The seam was clean; no work was duplicated.
+
+When a sub-ship lands without surfacing a fresh lesson, that's a signal the doctrine is working — the patterns are mature enough that the work is predictable. We log "no new lesson" honestly rather than fabricate a thin one.
+
+### Files changed
+
+| File | Lines |
+|---|---|
+| `tests/unit/test_migration_persistent_progress.py` | +860 (new) |
+| `docs/MIGRATION_PHASE_GAMMA_SCOPE.md` | +15 (tracker + split decision documentation) |
+| `CLAUDE.md` | +1 (status header) |
+| `CHANGELOG.md` | this entry |
+| `docs/releases/v1.7.93a.md` | release notes |
+
+No source changes. Test count: 2095 → 2146 (+51).
+
+### Arc state
+
+- **93 ships**, all tagged
+- Six Phase Gamma modules at 100% (unchanged)
+- Migration arc: **sub-ship 5a of 6 closed**, running coverage 90.86%
+- 0 new lessons (doctrine-in-action)
+- 0 new stub classes (pattern-reuse from v1.7.89-91)
+
+### Next
+
+**v1.7.93b — sub-ship 6 of 6, ARC CLOSURE (LANDMARK):** persistent job lifecycle + worker pool. Closes:
+- `run_job` body 2614-2820 (options resolution from job.options, threading worker spawn, status finalize) — including the small defensive bits at 2618 / 2635-2636 / 2658-2659
+- `_worker_loop` 2820-2905 (per-row outcome dispatch, MigrationConflictError handler, on_progress callback)
+- `_execute_one_persistent` 2935-2952 (dispatch to same-source vs cross-source)
+- `_execute_one_persistent_same_source` 2980-3108 (~130 lines, mirror of `_execute_one_same_source`)
+- `_execute_one_persistent_cross_source` 3110-3300 (~190 lines, mirror of `_execute_one_cross_source` with conflict-mode dispatch)
+- `create_job` body (2859-2892)
+- `_build_report_from_persisted` 3302-end (including defensive 3323-3324)
+
+Target: 90.86% → **100.00%**. Requires NEW `StubMigrationJobRepository` modeled on `StubAuditRepository` — 9+ methods (`get_job`, `update_job_status`, `reset_in_progress_to_pending`, `next_pending_progress`, `update_progress`, `increment_job_counts`, `count_progress_by_status`, `query_progress`, `get_progress`). Threading test design: monkeypatch `ThreadPoolExecutor` or run with `workers=1` for determinism. Will be FULL LANDMARK ceremony with arc closure summary, lessons rollup #79-93+, "Seven Phase Gamma modules at 100%" status, doctrine close-out.
+
 ## [1.7.92] — 2026-05-13 — Migration Phase Gamma sub-ship 4/5: Auto-strip metadata + small defensive boundaries
 
 Sub-ship 4 of the Migration Phase Gamma arc. Targets the `_auto_strip_metadata` body (lines 873-948 — the v1.7.29 / v1.7.35 metadata-cleanliness path that runs after a successful move when the destination source has `share_visibility="public"`), plus a cluster of small defensive boundaries that were left uncovered after sub-ships 1-3: `_update_index` entity-vanished (same-source variant), `_trash_source` exception path, `_audit_conflict` exception path, `_audit_move` / `_audit_copy` source-IDs-None branches, `_audit_copy` insert exception, and apply()'s autostrip dispatch line. Ships the on-tree `CLAUDE.md` doctrine file (previously untracked).
