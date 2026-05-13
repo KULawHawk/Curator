@@ -4,6 +4,44 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.107] — 2026-05-13 — Round 2 Tier 1 ship 1: `models/file.py` to 100%
+
+First sub-ship of Round 2's Tier 1 (Migration Final + Trivial Mop-Up). Closes line 99 (the `is_text_eligible` property body) in `models/file.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `models/file.py` | 97.37% | **100.00%** (+2.63%) |
+
+38 statements, 0 branches, 0 misses, 0 partials.
+
+### Round 2 first Lesson #93 catch
+
+The handoff (`CLAUDE_CODE_HANDOFF_ROUND2.md`) listed v1.7.107 as a "migration.py final closure" ship — predicting 99.71% with 2 uncovered lines at 984-988. **Re-measurement on the actual code showed `migration.py` already at 100.00%** (0 misses, 0 partials, 1031 stmts, 358 branches) from the v1.7.93b arc closure. The handoff doc was stale on that point.
+
+Per Lesson #93 (re-measure baseline before scaffolding), I skipped the redundant closure ship and slid the rest of Tier 1 up by one number. The Migration Phase Gamma arc closure was already done correctly at v1.7.93b; doing it again would be ceremonial busywork with no coverage value. This drops Tier 1 from 10 sweep ships to 9, but the actual coverage delta is unchanged.
+
+### What landed
+
+`tests/unit/test_models_file_coverage.py` (NEW, 4 tests): direct unit tests of the `is_text_eligible` property covering all branches (known text extension, binary extension, None extension, case-insensitive lowercasing).
+
+No source changes.
+
+### Lesson captured
+
+No new lesson, but a clean validation of Lesson #93's load-bearing role for Round 2 — caught on the very first ship. Honest logging per the v1.7.93a precedent.
+
+### Files
+
+- `tests/unit/test_models_file_coverage.py` (+~50, new, 4 tests)
+- `CHANGELOG.md` (this entry)
+- `docs/releases/v1.7.107.md` (release notes)
+
+### Next
+
+**v1.7.108** — `models/jobs.py`. Handoff: ~4 lines.
+
 ## [1.7.106] — 2026-05-13 — 🎯 Coverage Sweep ARC CLOSED: `services/document.py` to 100% + arc closure
 
 Final sub-ship (12 of 12) of the Coverage Sweep arc. **Closes the arc.** Lands `services/document.py` at 100% AND wraps the 12-module sweep that began at v1.7.94.
