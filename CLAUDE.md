@@ -338,6 +338,10 @@ For auto-strip, reuse `StubMetadataStripper` from `tests/unit/test_migration_aut
 
 **Do not redesign stubs.** New tests should compose existing stubs unless there's a genuinely new collaborator that needs one (then add it as a class, import-from-elsewhere pattern).
 
+### GUI testing strategy
+
+For PySide6 GUI modules (Round 4 Tier 2+), see **[`docs/GUI_TESTING_STRATEGY.md`](docs/GUI_TESTING_STRATEGY.md)** (v1.7.183). Foundation: the Qt headless pattern from Lesson #98 / Doctrine #16, proven on 4 modules in Round 3 Tier 4. Extension: `pytest-qt`'s `qtbot` fixture for widget interaction (modal dialogs, mouse clicks, menu activation) on the bigger modules. The strategy doc also carries the **post-Lesson-#93 revised baseline** for `gui/lineage_view.py`, `gui/models.py`, `gui/main_window.py`, `gui/dialogs.py` — line counts are 1.6–2.1× the Round 4 handoff predictions.
+
 ---
 
 ## Ship workflow

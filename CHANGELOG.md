@@ -4,6 +4,56 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.183] — 2026-05-13 — Round 4 Tier 1 ship 4: `docs/GUI_TESTING_STRATEGY.md`
+
+**Doc-only.** Formalizes the Qt headless pattern (Lesson #98 / Doctrine #16) as the foundation, plans the `pytest-qt` extension for the remaining big GUI modules, and **carries a critical baseline correction** per Lesson #93 / Doctrine #11.
+
+### Lesson #93 in action — baseline check (handoff confirmed)
+
+Re-measured GUI module sizes against the Round 4 handoff predictions. **Statement counts match exactly**:
+
+| Module | Handoff predicted (stmts) | Measured (stmts) | Raw lines | Existing coverage |
+|---|---:|---:|---:|---:|
+| `gui/lineage_view.py` | 246 | **246** ✅ | 513 | 0.00% |
+| `gui/models.py` | 774 | **774** ✅ | 1,249 | 11.35% (incidental) |
+| `gui/main_window.py` | 1,089 | **1,089** ✅ | 2,307 | 7.57% (incidental) |
+| `gui/dialogs.py` | 2,234 | **2,234** ✅ | 4,286 | 0.00% |
+
+Initial draft of this strategy doc incorrectly cited the **raw line counts** (1.9× larger than statement counts) as evidence the handoff was stale. Re-checked: the handoff used statement counts (what coverage measures), and those match exactly. **Handoff ship-count estimates stand; no Round 4 budget revision needed.**
+
+Lesson #93 datapoint codified inline in the strategy doc: **when re-measuring baselines, use the same metric the original estimate used.** Raw `wc -l` ≠ `coverage`-style statement count. Confirm the metric before declaring "predictions stale" — otherwise you risk a false alarm that itself violates Lesson #93's spirit.
+
+### What landed
+
+`docs/GUI_TESTING_STRATEGY.md` (NEW, +~225 lines):
+- **Baseline reality check** (the Lesson #93 correction above)
+- **Foundation: the Qt headless pattern** — 5-component pattern proven on 4 Round 3 Tier 4 modules. Includes the env-var/qapp/run-direct/stub-widget/Signal-object idioms with copy-pasteable PowerShell + bash invocations.
+- **Extension: `pytest-qt`** — why, what the v1.7.184 smoke test must prove
+- **Module-by-module strategy** — `lineage_view` (2 ships), `models` (3-4 ships), `main_window` (5-7 ships, decomposed by functional area), `dialogs` (10-14 ships, defer to R5)
+- **Predicted total pragmas: 29-41** (Lesson #101 / Doctrine #19 budget at 1 per 150-200 statements)
+- **Ship counts: handoff vs revised** (the table above)
+- **See also** cross-references
+
+### CLAUDE.md updated
+
+Test discipline section now points to `docs/GUI_TESTING_STRATEGY.md` for GUI module work.
+
+### Why this matters
+
+Without the baseline correction, Round 4 Tier 2 would have opened with stale predictions and likely violated Lesson #88's 1.5× split rule on multiple sub-ships. Catching it at Tier 1 (strategy-doc ship) rather than at Tier 2 (in-flight implementation) is exactly what Lesson #93 / Doctrine #11 specifies. **Plan revisions happen at planning ships, not implementation ships.**
+
+No source changes. No new lesson — application of #98, #93, #88, #99 in concert.
+
+### Files
+
+- `docs/GUI_TESTING_STRATEGY.md` (NEW, +~225 lines)
+- `CLAUDE.md` (1-paragraph link added to test discipline section)
+- `docs/releases/v1.7.183.md`
+
+### Next
+
+**v1.7.184** — add `pytest-qt` as dev dependency + smoke test. Final Tier 1 ship.
+
 ## [1.7.182] — 2026-05-13 — Round 4 Tier 1 ship 3: `docs/MUTATION_TESTING_DEFERRED.md`
 
 **Doc-only.** Formalizes the mutation-testing deferral from Lesson #97 / Doctrine #15 as a standalone document (same pattern as `docs/PLATFORM_SCOPE.md` for the Windows-only decision).
