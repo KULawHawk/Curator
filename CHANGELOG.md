@@ -4,6 +4,112 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.92] — 2026-05-13 — Migration Phase Gamma sub-ship 4/5: Auto-strip metadata + small defensive boundaries
+
+Sub-ship 4 of the Migration Phase Gamma arc. Targets the `_auto_strip_metadata` body (lines 873-948 — the v1.7.29 / v1.7.35 metadata-cleanliness path that runs after a successful move when the destination source has `share_visibility="public"`), plus a cluster of small defensive boundaries that were left uncovered after sub-ships 1-3: `_update_index` entity-vanished (same-source variant), `_trash_source` exception path, `_audit_conflict` exception path, `_audit_move` / `_audit_copy` source-IDs-None branches, `_audit_copy` insert exception, and apply()'s autostrip dispatch line. Ships the on-tree `CLAUDE.md` doctrine file (previously untracked).
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/migration.py` | 77.47% | **80.49%** (+3.02%) |
+
+**Below the revised v1.7.92 target band of ~87-92% (expected +6-8%).** Honest miss; root cause documented in the scope plan: the `_cross_source_rename_with_suffix` body originally scoped here turned out to be two *_for_progress variants (lines 1713-1786, 1805-1857) sharing infrastructure with persistent-path code. The non-progress sibling (1397-1465) was already covered by integration tests. The progress variants are re-scoped to v1.7.93, consolidating the rest of Cluster 6 with all of Cluster 7. The +3.02% delivered matches what the auto-strip body + 6 small defensives alone should yield.
+
+### What landed
+
+- `tests/unit/test_migration_autostrip.py` overwritten: old v1.7.35-era real-DB integration tests (4 behavioral tests) replaced with stub-based v1.7.92 design — 20 tests, 4 test classes covering: `_auto_strip_metadata` body (11 tests including 2 added this ship for 896→exit and 912→917 branches), apply() autostrip dispatch line 830 (1 integration test added this ship), `_audit_move` / `_audit_copy` minor defensives (3 tests added this ship), and the 3 small defensive-boundary cases (`_update_index` vanished, `_trash_source` exception, `_audit_conflict` exception)
+- `docs/MIGRATION_PHASE_GAMMA_SCOPE.md` tracker updated with sub-ship 4 closure + post-v1.7.92 calibration note revising v1.7.93's scope
+- `CLAUDE.md` committed for the first time (was untracked through v1.7.91 despite being the binding session-start doc)
+
+### New stub
+
+`StubMetadataStripper` (in `test_migration_autostrip.py`) — a recording stub with `result` / `raise_exc` / `create_tmp` knobs and a `.calls` list. Distinct from the placeholder of the same name in `test_migration_plan_apply.py` (which exists only to satisfy the `metadata_stripper=...` constructor arg without ever invoking `.strip_file()`). The v1.7.92 version is fully functional and will carry forward into any future tests that exercise the auto-strip dispatch.
+
+### Branches closed
+
+`_auto_strip_metadata` (lines 873-948):
+- `metadata_stripper is None` early-return (873-874)
+- `dst_path.exists()` False → defensive early-return (880-881)
+- `StripOutcome.STRIPPED` + tmp exists → atomic replace + audit (891-909)
+- `StripOutcome.PASSTHROUGH` → same atomic-replace + audit path
+- `StripOutcome.STRIPPED` + tmp missing → skip replace, still audit (892-895 false branch)
+- **`StripOutcome.STRIPPED` + audit=None → skip audit.log block, fall through (896→exit branch)** — added this ship
+- `StripOutcome.SKIPPED` → cleanup tmp, no audit (910-928)
+- `StripOutcome.FAILED` → cleanup tmp + audit failure
+- Cleanup `unlink` raises `OSError` → swallowed (912-916)
+- **`StripOutcome.SKIPPED` + tmp missing → skip unlink, fall through to 917 audit check (912→917 branch)** — added this ship
+- `strip_file` raises any exception → defensive cleanup + audit (929-948)
+- Defensive cleanup `unlink` raises `OSError` → swallowed
+- `audit is None` in defensive boundary → no crash
+
+`apply()` autostrip dispatch:
+- **Line 830 (`self._auto_strip_metadata(move)`) — exercised via apply() integration test with `share_visibility="public"` dst source, fake `_execute_one` that sets `outcome=MOVED`** — added this ship
+
+`_update_index` (same-source path):
+- Line 1470: `files.get(curator_id) is None` → `RuntimeError("vanished")` raised, caught by `_execute_one_same_source`'s defensive Exception clause → outcome=FAILED with "vanished during migration"
+
+`_trash_source` defensive boundary:
+- Lines 1486-1491: `send2trash.send2trash` raises → error appended to `move.error`, outcome unchanged (best-effort discipline)
+
+`_audit_conflict` defensive boundary:
+- Lines 1892-1893: `audit.log` raises → caught with `logger.warning`, doesn't propagate
+
+`_audit_move` / `_audit_copy` defensives:
+- **Branch 2131→2135 False**: `_audit_move` called with `src_source_id=None` → skip the cross-source-details block — added this ship
+- **Branch 2175→2179 False**: `_audit_copy` same pattern — added this ship
+- **Lines 2187-2188**: `_audit_copy`'s `except Exception` around `audit.insert(entry)` — covered with a custom `BoomAudit` whose `insert()` raises (sibling `_audit_move`'s except at 2143-2147 was already covered via StubAuditRepository's missing `insert` attr → AttributeError) — added this ship
+
+No source code changes.
+
+### Lessons captured
+
+**Lesson #92 — Tool routing is a discipline.** (Formally captured in CHANGELOG; previously sketched in CLAUDE.md doctrine item 10 added between v1.7.91 and v1.7.92.)
+
+Knowing which Claude product or session to use for which kind of work is itself part of the craft. Engineering arcs with tight test-iterate-ship loops go in Claude Code (native shell, no MCP timeouts, multi-file edits without chat overhead). Cross-arc reflection, design discussions, and scope-plan kickoffs go in The Log chat (conversational depth, no time-per-round-trip pressure). Recognize budget cliffs early — a clean handoff via a context-prime prompt is *better* than pushing through and ending mid-ship. The "don't worry about tokens" directive doesn't make context unlimited; pre-commit to ship boundaries you can actually complete.
+
+The pattern that surfaced this lesson: v1.7.92 was attempted in The Log chat first, ran out of budget mid-ship, was handed off to Claude Code via `CLAUDE_CODE_HANDOFF_v1792.md` for completion. The handoff was clean, the resume took ~5 turns, and the ship completed in this session — but the existence of a "mid-ship state" at all was a routing failure. The lesson is: **route to Claude Code BEFORE starting the engineering arc**, not after the first session hits a budget wall. `CLAUDE.md`'s 🟢 Tool routing section codifies the matrix going forward.
+
+**Lesson #93 — Test-design rewrites can silently drop coverage on previously-implicitly-covered lines.**
+
+The mid-ship state of `test_migration_autostrip.py` was a *complete rewrite* of the file: the old v1.7.35-era integration-style tests (real DB, real files, calling `migration_service.apply(...)` end-to-end) were replaced with the new v1.7.92 design (direct-call unit tests against `_auto_strip_metadata` and the audit helpers). The 14 new tests all passed, and the file's docstring listed 4 new in-scope items as the v1.7.92 closure.
+
+What was silently lost: line 830 — `self._auto_strip_metadata(move)` — the apply()-side *dispatch line* into the helper. The old integration tests implicitly covered it because they went through apply(); the new direct-call tests skip apply() entirely. Coverage of line 830 dropped from "implicitly covered" to "uncovered" without any failing test signaling it. The 14-test pass said "the new design works"; it did NOT say "we still cover everything the old design covered."
+
+**This is distinct from Lesson #90 (data-flow tracing).** Lesson #90 is: when writing a NEW surgical test, trace control flow to make sure your assertions are against the right object. Lesson #93 is: when *replacing* an existing test file, compare coverage delta against the previous design, not just confirm the new tests pass. The two halves of the question are different:
+
+- "Do the new tests pass?" — green ✅
+- "Does the new design cover everything the old design covered (whether explicitly or incidentally)?" — needs a coverage diff
+
+**General rule:** before shipping a test-file rewrite, run `pytest --cov-report=term-missing` and compare the missing-line list against the pre-rewrite list. Any line that *moved from covered to uncovered* is a regression that needs either (a) a new test to restore the cover, (b) `# pragma: no cover` with justification, or (c) explicit documentation that it's deferred to a future ship. Sub-ship 4 hit case (a) — a single apply() integration test that exercises the dispatch line was added before shipping.
+
+The deeper pattern: integration-style tests carry *incidental* coverage of orchestration code paths. Replacing them with direct-call unit tests trades fidelity (testing the actual API surface) for explicitness (knowing what's covered) — but the trade only works if you re-verify the missing-line list after the swap. Otherwise you've quietly degraded the safety net.
+
+### Files changed
+
+| File | Lines |
+|---|---|
+| `tests/unit/test_migration_autostrip.py` | rewrite (~315 → ~700, +439 / -264 net per diff) |
+| `docs/MIGRATION_PHASE_GAMMA_SCOPE.md` | +9 (tracker update + calibration note) |
+| `CLAUDE.md` | +280 (first commit; was untracked) |
+| `CHANGELOG.md` | this entry |
+| `docs/releases/v1.7.92.md` | release notes |
+
+No source changes. Test count: 2089 → 2095 (+6 from this ship; v1.7.92 net is 2089 → 2095 = +20 new autostrip tests minus 14 old autostrip tests removed in the rewrite).
+
+### Arc state
+
+- **92 ships**, all tagged
+- Six Phase Gamma modules at 100% (unchanged)
+- Migration arc: **sub-ship 4 of 5 closed**, running coverage 80.49%
+- 2 new lessons (#92 — tool routing, #93 — coverage regression from test-design rewrite)
+- 1 new functional stub (`StubMetadataStripper` recording variant)
+- `CLAUDE.md` now on-tree (was previously untracked but referenced by the lesson adoption protocol)
+
+### Next
+
+**v1.7.93 — sub-ship 5 of 5, arc closure (landmark):** consolidates the remainder of Cluster 6 (the `_cross_source_overwrite_with_backup_for_progress` body 1713-1786 + `_cross_source_rename_with_suffix_for_progress` body 1805-1857 + `_emit_progress_audit_conflict` 1672-1692 + `_resolve_collision_for_progress` 2022-2105) with all of Cluster 7 (persistent path: `_execute_one_persistent_*` 2218-2290, `_cross_source_transfer` body 2324-2408, `create_job` 2859-2996, `run_job` 3001-3107, persistent worker pool methods 3127-3300, plus misc 2618 / 2635-2636 / 2658-2659). Target: 80.49% → **100.00%**. ~750 raw lines + many branches. May split into v1.7.93a (progress variants + cross-source-transfer body) + v1.7.93b (persistent-job lifecycle + worker pool) per Lesson #88 if scope grows beyond 1.5x budget. Needs `StubMigrationJobRepository` modeled on `StubAuditRepository`. Will be the biggest sub-ship in the arc.
+
 ## [1.7.91] — 2026-05-12 — Migration Phase Gamma sub-ship 3/5: Cross-source execution + overwrite-with-backup
 
 Biggest sub-ship in the Migration Phase Gamma arc by line count. Targets `_execute_one_cross_source` orchestration (transfer dispatch, collision dispatch across 4 modes, FileEntity index update, plugin-mediated trash) and `_cross_source_overwrite_with_backup` (the cross-source rename-existing-then-retry flow). Plus the two cross-source helpers: `_find_existing_dst_file_id_for_overwrite` (two-strategy resolution) and `_attempt_cross_source_backup_rename` (pluggy hook dispatch with 7 failure modes).

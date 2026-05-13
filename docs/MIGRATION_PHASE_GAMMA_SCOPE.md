@@ -18,12 +18,12 @@
 
 ---
 
-**Status:** Active arc plan — sub-ship 1 of 5 closed at v1.7.89
+**Status:** Active arc plan — sub-ship 4 of 5 closed at v1.7.92
 **Owner:** Curator engineering doctrine
 **Created:** 2026-05-12 (v1.7.88)
 **Module:** `src/curator/services/migration.py`
 **Starting coverage:** 66.74% line + branch (319 missing lines, 53 partial branches)
-**Current coverage:** 68.18% (after v1.7.89)
+**Current coverage:** 80.49% (after v1.7.92)
 **Target:** 100.00% line + branch (per apex-accuracy doctrine, see v1.7.84)
 
 ## Why this needs a plan, not a single ship
@@ -184,8 +184,8 @@ If a session ends between sub-ships:
 | v1.7.89 | ✅ Plan() edges + Apply() autostrip/conflict-raise + _execute_one dispatch | Clusters 1 + part of 2 | **68.18%** (+1.44%) | 2026-05-12 |
 | v1.7.90 | ✅ Same-source execution + 4 on-conflict modes (_resolve_collision) | Cluster 3 + part of Cluster 6 | **70.05%** (+1.87%) | 2026-05-12 |
 | v1.7.91 | ✅ Cross-source execution + overwrite-with-backup full body | Cluster 4 + Cluster 5 | **77.47%** (+7.42%) | 2026-05-12 |
-| v1.7.92 | ⏳ Pending | Cluster 6 remainder (rename-with-suffix body + auto-strip) | TBD | TBD |
-| v1.7.93 | ⏳ Pending | Cluster 7 + audit test + doctrine update | 100.00% | TBD |
+| v1.7.92 | ✅ Auto-strip metadata body + small defensive boundaries (_update_index vanished, _trash_source exception, _audit_conflict exception, audit_move/copy minor branches, apply() autostrip dispatch) | Cluster 6 (auto-strip portion) + 6 small defensives | **80.49%** (+3.02%) | 2026-05-13 |
+| v1.7.93 | ⏳ Pending | Cluster 6 remainder (rename-with-suffix-for-progress, overwrite-with-backup-for-progress, conflict-progress emit, collision-progress resolve) + Cluster 7 (persistent path: cross-source-transfer body, persistent execute_one variants, create_job, run_job, worker pool) + audit test + doctrine update | 100.00% | TBD |
 
 ### Revised estimates after sub-ship 1 calibration
 
@@ -196,4 +196,12 @@ The original scope plan estimated v1.7.89 at ~72-75% coverage; actual landed at 
 - v1.7.92 (Cluster 6: rename + auto-strip, ~85 stmts): expect +6-8%, landing ~87-92%
 - v1.7.93 (Cluster 7: persistent jobs + remainder, ~150+ stmts): expect +8-13% to land 100%
 
-The **arc target (100%) is unchanged**. Only the per-sub-ship delta estimates revised. The arc may still need a 6th sub-ship if v1.7.93's persistent-jobs work proves bigger than estimated.
+### Post-v1.7.92 calibration
+
+v1.7.92 landed at **80.49%** (+3.02%), below the estimate (+6-8% landing ~87-92%). Why: the `_cross_source_rename_with_suffix` body that was originally scoped for v1.7.92 turned out to be the *_for_progress variants (lines 1713-1786, 1805-1857) — different code paths from what the original plan assumed. The non-progress rename-with-suffix body (1397-1465) was already covered by integration tests. The progress variants share infrastructure with persistent-path code, so they were re-scoped to v1.7.93 (consolidating Cluster 6 remainder with Cluster 7 persistent path).
+
+v1.7.92 instead closed: the auto-strip body (873-948) + 3 small defensive exception boundaries (`_update_index` vanished, `_trash_source` exception, `_audit_conflict` exception) + 3 minor audit branches (`_audit_move` / `_audit_copy` source-IDs-None, `_audit_copy` insert exception) + apply() autostrip dispatch line.
+
+v1.7.93 now consolidates two clusters (the rest of 6 + all of 7). Estimated +20% delta to land 100%, ~750 raw lines of new test target — the biggest single sub-ship in the arc. May split into v1.7.93a (progress + cross-source-transfer) + v1.7.93b (persistent-job lifecycle + worker pool) per Lesson #88.
+
+The **arc target (100%) is unchanged**. Only the per-sub-ship deltas revised.
