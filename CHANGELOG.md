@@ -4,6 +4,51 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.144] — 2026-05-13 — Tier 4 ship 7: `services/hash_pipeline.py` to 100%
+
+Closes 52 uncovered lines + 12 partial branches in `services/hash_pipeline.py` — the multi-stage hash pipeline.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/hash_pipeline.py` | 64.42% | **100.00%** (+35.58%) |
+
+158 statements, 50 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_services_hash_pipeline_coverage.py` (NEW, 16 tests) covering:
+- ppdeep import fallback (force ImportError for both vendored AND PyPI variants via `sys.modules` sentinels + `importlib.reload`)
+- `process` isolated vs non-isolated size group branches (line 142->144)
+- Inode dedup: hardlink siblings inherit hashes from representative; files without inode each get unique noinode keys
+- `_full_hash` exception arm (RuntimeError from reader → `stats.errors++`)
+- Cache hit early return (lines 285-289)
+- Fuzzy hash path (lines 302, 309, 315-317): inject fake `_ppdeep_hash` via monkeypatch so wants_fuzzy=True regardless of installed ppdeep
+- `_read_chunks` no-owner RuntimeError (line 360), short read EOF, multi-chunk continuation (368->350), empty chunk EOF
+- `_read_segment` basic + no-owner RuntimeError
+- `_group_by_prefix_suffix` unique-prefix subgroup + same-prefix-different-suffix subgroups
+
+Uses an `_StubPluginManager` with configurable byte reader. No source changes.
+
+### Notable iteration
+
+`_ppdeep_hash` isn't installed in the test environment (the vendored and PyPI variants both raise ImportError), so lines 302/309/315-317 (the wants_fuzzy=True path) were unreachable through normal testing. Fixed via `monkeypatch.setattr("curator.services.hash_pipeline._ppdeep_hash", fake_hash)` to inject a working fake at module attribute level.
+
+### Lesson captured
+
+No new lesson. Module-attribute monkeypatch for optional-dep injection is a settled pattern.
+
+### Files
+
+- `tests/unit/test_services_hash_pipeline_coverage.py` (+~300, new, 16 tests)
+- `docs/MID_SIZE_SERVICES_SWEEP_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.144.md`
+
+### Next
+
+**v1.7.145** — `services/trash.py` (90 lines, 24.69% baseline — the largest single-module surface in this arc + the worst-covered remaining module). Final Tier 4 ship.
+
 ## [1.7.143] — 2026-05-13 — Tier 4 ship 6: `services/organize.py` to 100%
 
 Closes 56 uncovered lines + 10 partial branches in `services/organize.py`.
