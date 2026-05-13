@@ -4,6 +4,43 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.173] — 2026-05-13 — Round 3 Tier 3 ship 19: `cli/main.py` `audit-summary`
+
+Closes ~99 uncovered lines in the `audit-summary` command. **Crosses 90% threshold on cli/main.py.**
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 89.72% | **94.90%** (+5.18%) |
+
+### What landed
+
+`tests/unit/test_cli_audit_summary_coverage.py` (NEW, 14 tests):
+- Bad --since value exits 2
+- No events in window
+- Populated table render
+- Filter by --actor / --action
+- --since explicit (vs default --days)
+- --limit caps with "and N more groups"
+- --no-bars flag
+- --local timezone label + JSON timezone field
+- Relative time buckets (seconds / minutes / hours / days)
+- JSON output (utc + local variants)
+- CSV with header / no-header + tsv dialect
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_cli_audit_summary_coverage.py` (+~210, new, 14 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.173.md`
+
+### Next
+
+**v1.7.174** — `audit-export` (~150 lines, final non-cleanup ship).
+
 ## [1.7.172] — 2026-05-13 — Round 3 Tier 3 ship 18: `cli/main.py` `tier`
 
 Closes ~133 uncovered lines in the `tier` command. **Biggest single-ship gain of the entire CLI Coverage Arc (+7.39%).** Scope plan flagged this for Lesson #88 split; landed as single ship cleanly because the scan/render and --apply halves share factory infrastructure.

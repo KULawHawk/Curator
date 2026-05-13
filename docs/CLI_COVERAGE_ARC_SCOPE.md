@@ -188,7 +188,7 @@ Restart prompt: *"Resume CLI Coverage Arc. Open docs/CLI_COVERAGE_ARC_SCOPE.md, 
 | v1.7.170 | ✅ Closed | `scan-pii` | cli/main.py: 73.60% → **78.30%** | 2026-05-13 |
 | v1.7.171 | ✅ Closed | `export-clean` | cli/main.py: 78.30% → **82.33%** | 2026-05-13 |
 | v1.7.172 | ✅ Closed — single ship (no split needed) | `tier` (scan + --apply) | cli/main.py: 82.33% → **89.72%** | 2026-05-13 |
-| v1.7.173 | ⏳ Pending | `audit-summary` | TBD | TBD |
+| v1.7.173 | ✅ Closed | `audit-summary` | cli/main.py: 89.72% → **94.90%** | 2026-05-13 |
 | v1.7.174 | ⏳ Pending | `audit-export` | TBD | TBD |
 | v1.7.175 | ⏳ Pending | Final cleanup + arc close | TBD | TBD |
 
