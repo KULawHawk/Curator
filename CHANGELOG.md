@@ -4,6 +4,43 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.171] — 2026-05-13 — Round 3 Tier 3 ship 17: `cli/main.py` `export-clean`
+
+Closes ~69 uncovered lines in the `export-clean` command. **Crosses 80% threshold on cli/main.py.**
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 78.30% | **82.33%** (+4.03%) |
+
+### What landed
+
+`tests/unit/test_cli_export_clean_coverage.py` (NEW, 12 tests):
+- Source not found exits 1
+- Single file happy path (creates dst parent dir)
+- Directory recursive with --no-recursive + --ext flags
+- Failures rendered with exit 1
+- 25 failures cap at 20 with "and 5 more"
+- --show-files renders per-file outcomes (excluding failures, with fields detail)
+- --drop-icc constructs fresh MetadataStripper(keep_icc_profile=False)
+- JSON output
+- CSV with header (pipe-delimited fields cell) / no-header / tsv / with failures exits 1
+
+Test infrastructure: `_result` and `_report` factories. Pattern: monkeypatch `MetadataStripper.{strip_file, strip_directory}` or class-level for drop-icc rebuild test.
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_cli_export_clean_coverage.py` (+~310, new, 12 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.171.md`
+
+### Next
+
+**v1.7.172** — `tier` command (~320 lines predicted; likely Lesson #88 split).
+
 ## [1.7.170] — 2026-05-13 — Round 3 Tier 3 ship 16: `cli/main.py` `scan-pii`
 
 Closes ~82 uncovered lines in the `scan-pii` command.
