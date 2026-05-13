@@ -4,6 +4,36 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.169] — 2026-05-13 — Round 3 Tier 3 ship 15: `cli/main.py` `status_app`
+
+Closes ~60 uncovered lines across `status set`, `status get`, `status report`, plus the LIVE `_resolve_file` definition at line 3721 (the one that actually executes — the duplicate at line 187 was pragma'd in v1.7.155).
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 70.57% | **73.60%** (+3.03%) |
+
+### What landed
+
+`tests/unit/test_cli_status_app_coverage.py` (NEW, 17 tests):
+- **`_resolve_file`** (live definition): UUID match, path match, no-match returns None
+- **status set**: file-not-found exit 1, invalid status exit 1, happy path, --expires-in-days, --clear-expires, JSON
+- **status get**: file-not-found exit 1, all 4 status colors (vital/active/provisional/junk), with supersedes_id + expires_at, JSON
+- **status report**: empty (Total 0), populated (4 buckets), --source filter, JSON
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_cli_status_app_coverage.py` (+~290, new, 17 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.169.md`
+
+### Next
+
+**v1.7.170** — `scan-pii` (~225 lines predicted).
+
 ## [1.7.168] — 2026-05-13 — Round 3 Tier 3 ship 14: `cli/main.py` `forecast`
 
 Closes ~36 uncovered lines in the `forecast` command. **Crosses 70% threshold on cli/main.py.**
