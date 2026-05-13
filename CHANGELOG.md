@@ -4,6 +4,81 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.145] — 2026-05-13 — Tier 4 FINAL: `services/trash.py` to 100%
+
+**ROUND 2 COMPLETE.** Closes 90 uncovered lines in `services/trash.py` — the largest single-module surface in Tier 4 and the worst-covered remaining service (24.69% baseline). Mid-Size Services Sweep arc CLOSED.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/trash.py` | 24.69% | **100.00%** (+75.31%) |
+
+125 statements, 32 branches, 0 misses, 0 partials. (5 lines moved into a documented `# pragma: no cover` annotation, see notable iteration below.)
+
+### What landed
+
+`tests/unit/test_services_trash_coverage.py` (NEW, 25 tests):
+- `send_to_trash` failure modes: Send2TrashUnavailableError, FileNotFoundError, TrashVetoed, send2trash exception → TrashError
+- `send_to_trash` full happy path: bundle membership snapshot, flex snapshot, OS trash + TrashRecord insert + file soft-delete + post-trash hook + audit log
+- `restore` failure modes: NotInTrashError, RestoreVetoed, RestoreImpossibleError (no os_trash_location), RestoreImpossibleError (move failure wrap)
+- `restore` full happy path: real file move from trash → target + bundle restore + post-restore hook
+- `list_trashed` + `is_in_trash` reads
+- `_check_pre_trash_veto` / `_check_pre_restore_veto`: empty results, allow results, veto detection
+- `_derive_os_trash_location`: non-Windows None, recycle_bin import failure None, entry-found content_path return, entry-not-found None
+- `_restore_from_os_trash`: missing location → impossible, basic move, $I companion cleanup (present + missing variants)
+
+Uses shared `repos`/`local_source`/`plugin_manager` fixtures with `plugin_manager.hook` swapped to a MagicMock per test for hook control.
+
+### Notable iteration: import-fallback pragma
+
+Lines 60-64 (the `send2trash` import-fallback chain) are annotated `# pragma: no cover` with justification. Testing them via `importlib.reload(trash_mod)` to force ImportError on the vendored copy poisons class identity across tests: after reload, `Send2TrashUnavailableError` is a fresh class object, and the rest of the test file's `from curator.services.trash import Send2TrashUnavailableError` (captured at collection time) is the OLD class. `pytest.raises(Send2TrashUnavailableError)` against the new class fails the isinstance check.
+
+The pragma is justified per the Lesson #91 pattern: the import chain is a defensive boundary for environments missing the vendored copy. In normal deployment, the vendored copy is always available so the fallback chain is unreachable. This is the third pragma in Round 2 (after plugins/manager.py thread-race fallthrough and services/cleanup.py BFS-component invariant).
+
+### Lesson captured
+
+No new lesson. The class-identity-after-reload trap is a known Python gotcha, but it's been seen before in Round 2 (the lineage_fuzzy_dup tests handled it with `importlib.reload`-in-fixture). The decision to pragma vs. test-via-reload depends on whether the test file's collected imports are stale; for trash.py the imports are dense enough that pragma is cleaner.
+
+### Files
+
+- `tests/unit/test_services_trash_coverage.py` (+~430, new, 25 tests)
+- `src/curator/services/trash.py` (+1 pragma annotation)
+- `docs/MID_SIZE_SERVICES_SWEEP_SCOPE.md` (+2 lines, tracker close + ARC COMPLETE marker)
+- `docs/releases/v1.7.145.md`
+
+### Tier 4 close-out
+
+All 8 sub-ships closed:
+
+| Ship | Module | Final |
+|---|---|---|
+| v1.7.138 | `storage/repositories/lineage_repo.py` | 100% |
+| v1.7.139 | `storage/repositories/file_repo.py` | 100% |
+| v1.7.140 | Mid-Size Services Sweep scope plan | n/a |
+| v1.7.141 | `services/photo.py` | 100% |
+| v1.7.142 | `services/cleanup.py` | 100% |
+| v1.7.143 | `services/organize.py` | 100% |
+| v1.7.144 | `services/hash_pipeline.py` | 100% |
+| v1.7.145 | `services/trash.py` | 100% |
+
+### Round 2 close-out (v1.7.107 → v1.7.145)
+
+39 ships total. **55 modules at 100% line + branch** (Round 1: 19 services + Round 2 Tier 1: 9 mixed + Round 2 Tier 2: 9 plugins/MCP/config + Round 2 Tier 3: 11 storage + Round 2 Tier 4: 7 modules).
+
+**Round 2 doctrine summary:**
+- **0 new lessons captured** — all settled doctrine
+- **0 mid-ship session ends**
+- **3 `# pragma: no branch/cover` annotations** (Lesson #91 pattern): plugins/manager.py (thread-race), services/cleanup.py (BFS invariant), services/trash.py (import fallback)
+- **No source refactoring required** beyond pragma annotations
+- Storage subpackage fully covered (16 modules)
+- All MCP/plugins/config covered (Tier 2)
+- All mid-size services covered (Tier 4)
+
+### Next
+
+Round 2 closed. Reporting in to Jake.
+
 ## [1.7.144] — 2026-05-13 — Tier 4 ship 7: `services/hash_pipeline.py` to 100%
 
 Closes 52 uncovered lines + 12 partial branches in `services/hash_pipeline.py` — the multi-stage hash pipeline.

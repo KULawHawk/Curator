@@ -82,7 +82,9 @@ Restart prompt: *"Resume Mid-Size Services Sweep arc. Open docs/MID_SIZE_SERVICE
 | v1.7.142 | ✅ Closed | `services/cleanup.py` | **100.00%** (was 87.53%) | 2026-05-13 |
 | v1.7.143 | ✅ Closed | `services/organize.py` | **100.00%** (was 80.29%) | 2026-05-13 |
 | v1.7.144 | ✅ Closed | `services/hash_pipeline.py` | **100.00%** (was 64.42%) | 2026-05-13 |
-| v1.7.145 | ⏳ Pending — possible split | `services/trash.py` | TBD | TBD |
+| v1.7.145 | ✅ Closed | `services/trash.py` | **100.00%** (was 24.69%) | 2026-05-13 |
+
+**ARC COMPLETE.** All 5 modules at 100% line + branch.
 
 ## Arc-level success criteria
 

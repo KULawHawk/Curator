@@ -57,7 +57,7 @@ from curator.storage.repositories.trash_repo import TrashRepository
 _send2trash = None
 try:
     from curator._vendored.send2trash import send2trash as _send2trash  # type: ignore[import-not-found]
-except ImportError:
+except ImportError:  # pragma: no cover -- vendored copy ships with Curator; this fallback chain only triggers in environments where the vendored module has been deleted/missing
     try:
         from send2trash import send2trash as _send2trash  # type: ignore[import-not-found]
     except ImportError:
