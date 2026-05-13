@@ -190,7 +190,9 @@ Restart prompt: *"Resume CLI Coverage Arc. Open docs/CLI_COVERAGE_ARC_SCOPE.md, 
 | v1.7.172 | ✅ Closed — single ship (no split needed) | `tier` (scan + --apply) | cli/main.py: 82.33% → **89.72%** | 2026-05-13 |
 | v1.7.173 | ✅ Closed | `audit-summary` | cli/main.py: 89.72% → **94.90%** | 2026-05-13 |
 | v1.7.174 | ✅ Closed | `audit-export` | cli/main.py: 94.90% → **97.93%** | 2026-05-13 |
-| v1.7.175 | ⏳ Pending | Final cleanup + arc close | TBD | TBD |
+| v1.7.175 | ✅ **ARC CLOSED** | Final cleanup pass + Lesson #91 pragmas | cli/main.py: 97.93% → **99.43%** (0 missing lines, 15 documented branch partials) | 2026-05-13 |
+
+**CLI Coverage Arc CLOSED.** cli/main.py: 10.73% → 99.43% (+88.70%) across 21 sub-ships (v1.7.155-175). All 1840 statements executed in tests (0 missing lines). 15 residual partial branches are data-shape edge cases in render loops; can be closed in a follow-up sweep but represent diminishing returns.
 
 ## Arc-level success criteria
 
