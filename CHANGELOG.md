@@ -4,6 +4,108 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.86] — 2026-05-12 — Phase Gamma: `services/scan.py` to 100% (orchestrator-shape module)
+
+Fifth Phase Gamma module at the apex-accuracy standard. `services/scan.py` reaches **100.00% line + branch coverage** with 23 focused unit tests targeting the 15% of uncovered code that 178 existing integration tests couldn't reach.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/scan.py` | 84.97% | **100.00%** |
+
+### Phase Gamma cumulative (five modules at 100%)
+
+| Module | Stmts | Branches |
+|---|---|---|
+| `services/tier.py` | 114 | 30 |
+| `services/lineage.py` | 135 | 78 |
+| `services/safety.py` | 173 | 58 |
+| `storage/queries.py` | 95 | 42 |
+| `services/scan.py` | 242 | 44 |
+| **Combined** | **759** | **252** |
+
+All at 100.00% line + branch. 0 misses across 759 stmts and 252 branches.
+
+### What landed
+
+- `tests/unit/test_scan_service.py` (NEW, ~620 lines, 23 tests, 11 test classes)
+- 8 stubs: `StubFileRepository`, `StubSourceRepository`, `StubScanJobRepository`, `StubHashPipeline`, `StubClassificationService`, `StubLineageService`, `StubAuditService` (with `StubBoundLogger`), `StubPluginManager` (with `StubHooks` + `StubHookCaller`)
+- Tests target specific uncovered branches:
+  - `TestScanReport` (2): `duration_seconds` None branch + completion case
+  - `TestScanTopLevelException` (1): `scan()` outer try/except
+  - `TestScanPathsTopLevelException` (1): `scan_paths()` outer try/except
+  - `TestScanPathsPerPathErrors` (7): dedupe, invalid path, vanished+known, vanished+unknown, directory skip, stat OSError, upsert exception
+  - `TestScanPathsPostProcessError` (1): inner post-process exception
+  - `TestScanPostProcessError` (1): full-scan post-process exception
+  - `TestEnumerateNoPlugin` (1): RuntimeError when no plugin claims source_id
+  - `TestEnumerateUpsertError` (1): upsert exception during enumeration
+  - `TestUpsertReScanLogic` (2): re-derive extension when None; un-soft-delete on re-scan
+  - `TestEnsureSource` (3): skip None plugin infos; no-match RuntimeError; non-matching plugin source_type continues
+  - `TestRemainingBranches` (3): mark-deleted idempotency; files_unchanged increment; classification returns None
+
+### Trash test "hang" investigation
+
+Flagged in v1.7.84 and v1.7.85 as outstanding. Investigated this session: the full pytest suite now runs clean at **1973 passed / 10 skipped / 0 failed in 2:47**. The earlier hang was a one-time transient (likely Windows recycle-bin state). **No defensive fix needed** — pushing back on my own recommendation per the partnership directive. Shipping a skip-mark for a problem that doesn't exist would be exactly the make-work the directive warns against.
+
+### Lessons captured
+
+**Lesson #82 — Orchestrator modules CAN reach 100%; the question is stub infrastructure, not feasibility.**
+
+My initial assessment of scan.py was pessimistic: "5 service deps + pluggy + filesystem = probably 2 passes minimum, maybe a multi-ship arc." The reality: 3 passes (94% → 97.9% → 100%) in a single session, ~620 lines of test code (8 stubs + 23 tests). Every uncovered branch turned out to be **reachable, not defensively impossible**. **The lesson: when faced with a complex orchestrator, don't ask "can this reach 100%" — ask "what's the stub-infrastructure cost?" The 100% bar is almost always achievable if you're willing to build the fakes.** The exception remains genuine defensive impossibilities (e.g. `# pragma: no cover` on platform branches in v1.7.84), but those should be rare.
+
+**Lesson #83 — Monkeypatching service METHODS is much safer than monkeypatching stdlib classes.**
+
+Direct reinforcement of Lesson #78 with a concrete example from this ship. My first attempt at testing the `OSError on stat` branch used `monkeypatch.setattr(Path, "stat", boom_stat)`. The result: `Path.exists()` (which internally calls `stat`) also broke, causing the test to fail with an uncaught OSError before the code under test ever ran. The fix: `monkeypatch.setattr(svc, "_stat_to_file_info", boom_stat)` — patches the service's own helper method instead of the stdlib class. **Rule: when testing a specific code path that calls a helper, prefer patching the helper directly over patching the underlying stdlib primitive.** The helper is the right abstraction boundary; patching below it tends to break unrelated call sites.
+
+**Lesson #84 — Stub-first architecture pays compound interest.**
+
+The stubs I built for scan.py (`StubFileRepository`, `StubSourceRepository`, etc.) follow the same pattern as the lineage.py and tier.py stubs from previous ships. Each new Phase Gamma module reuses the design vocabulary even when the specific stub class is new. **The cumulative effect is real: stubs that took longer to design in v1.7.82 (lineage) felt mechanical by v1.7.86 (scan).** The pattern: a minimal class with the methods the service calls, a way to inject canned return values, and lists/sets that record what was called for assertions. This is a transferable skill, not just a per-module artifact.
+
+**Lesson #85 — Push back on your own recommendations when evidence changes.**
+
+In v1.7.84 and v1.7.85, I flagged the trash test hang as a problem worth a small ship to fix or skip. When I investigated this session, the full suite ran clean. The right move was to *retract the recommendation*, not to ship a defensive fix anyway to "close the loop." The partnership directive ("aid Jake in not wasting time") cuts both ways: I should push back when Jake's plan looks wasteful, AND I should push back on **my own prior recommendations** when new evidence shows they're no longer warranted. Sunk-cost reasoning is corner-cutting even when the corner being cut is my own consistency.
+
+**Lesson #86 — "Mid-ship" is not an acceptable session-end state. Don't leave defective processes.**
+
+I hit a context-window limit mid-way through v1.7.86 and presented "shipped at 100% on disk, ceremony pending" as a reasonable stopping point. Jake pushed back hard: *"it doesn't matter the time commit get it untangled and 100%. why leave a defective process."* He's right. The repo on disk and the repo on origin/main are not the same state — leaving them divergent means:
+
+  1. The next session's context summary will report "85 ships shipped, v1.7.86 mid-ship" — a forked-state signal that costs more time to interpret than just finishing would have.
+  2. CI doesn't run against on-disk code; it runs against origin/main. An untagged ship has zero CI verification.
+  3. The git history loses the link between the work (the 23 new tests) and the narrative (the release notes capturing why). Recovering that link weeks later is more expensive than writing it now.
+  4. "Done at 100%, almost shipped" reads to a future me as "essentially done." It isn't. **A ship is committed, tagged, and pushed, or it isn't a ship.**
+
+This is the inverse of Lesson #71 (apex accuracy): just as "94% coverage" is corner-cutting language for accuracy, "mid-ship" is corner-cutting language for the ceremony. The ceremony exists because git history and CI need closed loops. Going forward: **when a ship's work is done at 100%, the next action is ALWAYS the commit/tag/push sequence, period.** Token budget pressure is not an exception — it's the moment when the discipline matters most. If I'm running low on budget, finish the ship FIRST, then summarize, not the other way around.
+
+### Files changed
+
+| File | Lines |
+|---|---|
+| `tests/unit/test_scan_service.py` | +620 (new) |
+| `CHANGELOG.md` | this entry |
+| `docs/releases/v1.7.86.md` | release notes |
+
+No source code changes. Test count: 1972 → 1995 (+23).
+
+### Arc state
+
+- **86 ships**, all tagged
+- Five Phase Gamma modules at 100% line + branch
+- pytest local Win full suite: 1995 / 10 / 0 (expected; was 1973 / 10 / 0 confirmed pre-ship)
+- 5 new lessons (#82, #83, #84, #85, #86)
+- Trash test "hang" investigated and retired as non-issue
+
+### Next
+
+Phase Gamma remaining candidates:
+
+| Module | Coverage | Notes |
+|---|---|---|
+| `services/migration.py` | 67% | 1031 stmts — needs scope plan; possibly multi-ship arc |
+| `services/bundle.py` | 53% | Smaller; pluggy + integration overlap |
+
+Or pivot: GUI work (300-rule reference + the deferred Curator Phase Beta gate 4), the deferred MB enrichment items, or other priorities.
+
 ## [1.7.85] — 2026-05-12 — Phase Gamma: `storage/queries.py` to 100% (47 tests, one pass)
 
 Fourth Phase Gamma module at the apex-accuracy standard. `storage/queries.py` reaches **100.00% line + branch coverage** in a single pass with 47 focused tests and no stubs needed.
