@@ -4,6 +4,45 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.134] — 2026-05-13 — Tier 3 ship 8: `storage/repositories/job_repo.py` to 100%
+
+Closes 11 uncovered lines + 1 partial branch in `storage/repositories/job_repo.py` — the ScanJob repository.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `storage/repositories/job_repo.py` | 68.89% | **100.00%** (+31.11%) |
+
+41 statements, 4 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_storage_job_repo_coverage.py` (NEW, 8 tests):
+- `update(job)` rewrites the row
+- `update_status` 'running' branch sets started_at
+- `update_status` "other" branch (status not in terminal/'running')
+- `update_status` 'failed' (terminal) sets completed_at + error
+- `delete(job_id)` removes the row
+- `list_recent(limit)` orders by started_at DESC + default limit returns all
+- `list_by_status(status)` filters by status
+
+Uses shared `repos`/`local_source` fixtures. No source changes.
+
+### Lesson captured
+
+No new lesson.
+
+### Files
+
+- `tests/unit/test_storage_job_repo_coverage.py` (+~115, new, 8 tests)
+- `docs/STORAGE_SWEEP_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.134.md`
+
+### Next
+
+**v1.7.135** — `storage/repositories/hash_cache_repo.py` (14 lines).
+
 ## [1.7.133] — 2026-05-13 — Tier 3 ship 7: `storage/exceptions.py` to 100%
 
 Closes 9 uncovered lines in `storage/exceptions.py` — pure exception class definitions previously at 0%.

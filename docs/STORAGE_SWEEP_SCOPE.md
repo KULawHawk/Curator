@@ -125,7 +125,7 @@ Restart prompt: *"Resume Storage Repositories Sweep arc. Open docs/STORAGE_SWEEP
 | v1.7.131 | ✅ Closed | `storage/repositories/trash_repo.py` | **100.00%** (was 82.22%) | 2026-05-13 |
 | v1.7.132 | ✅ Closed | `storage/repositories/migration_job_repo.py` | **100.00%** (was 91.54%) | 2026-05-13 |
 | v1.7.133 | ✅ Closed | `storage/exceptions.py` | **100.00%** (was 0.00%) | 2026-05-13 |
-| v1.7.134 | ⏳ Pending | `storage/repositories/job_repo.py` | TBD | TBD |
+| v1.7.134 | ✅ Closed | `storage/repositories/job_repo.py` | **100.00%** (was 68.89%) | 2026-05-13 |
 | v1.7.135 | ⏳ Pending | `storage/repositories/hash_cache_repo.py` | TBD | TBD |
 | v1.7.136 | ⏳ Pending | `storage/repositories/_helpers.py` | TBD | TBD |
 | v1.7.137 | ⏳ Pending | `storage/repositories/bundle_repo.py` | TBD | TBD |
