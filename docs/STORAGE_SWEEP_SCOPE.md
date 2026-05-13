@@ -137,7 +137,9 @@ Restart prompt: *"Resume Storage Repositories Sweep arc. Open docs/STORAGE_SWEEP
 | Sub-ship | Status | Module | Final coverage | Date |
 |---|---|---|---|---|
 | v1.7.138 | ✅ Closed | `storage/repositories/lineage_repo.py` | **100.00%** (was 38.67%) | 2026-05-13 |
-| v1.7.139 | ⏳ Pending | `storage/repositories/file_repo.py` | TBD | TBD |
+| v1.7.139 | ✅ Closed | `storage/repositories/file_repo.py` | **100.00%** (was 43.60%) | 2026-05-13 |
+
+**Storage subpackage fully covered — every storage module at 100% line + branch.**
 
 With v1.7.139, **the entire `storage/` subpackage** will be at 100% line + branch.
 

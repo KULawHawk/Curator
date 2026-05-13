@@ -4,6 +4,82 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.139] — 2026-05-13 — Tier 4 ship 2: `storage/repositories/file_repo.py` to 100%
+
+Closes 96 uncovered lines + 5 partial branches in `storage/repositories/file_repo.py` — the biggest single ship in Round 2. **Entire `storage/` subpackage now at 100% line + branch.**
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `storage/repositories/file_repo.py` | 43.60% | **100.00%** (+56.40%) |
+
+194 statements, 56 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_storage_file_repo_coverage.py` (NEW, 36 tests) covering every previously-uncovered method:
+- `upsert` update branch (curator_id exists)
+- `mark_deleted` default + explicit `when`
+- `undelete` clears `deleted_at`
+- `delete` (hard) removes the row
+- `find_by_md5` / `find_by_fuzzy_hash` with and without `include_deleted`
+- `find_candidates_by_size` basic + `exclude_curator_id` + `include_deleted`
+- `query` with `flex_attrs` filter (Python post-fetch step)
+- `iter_all` basic / source filter / `include_deleted` / batched / empty-DB returns immediately
+- `count(source_id=...)` filter
+- `update_status` invalid raises ValueError; basic; `supersedes_id` set/clear; `expires_at` set/clear
+- `count_by_status` returns all 4 buckets + source filter + `include_deleted`
+- `query_by_status` basic + limit + source filter + `include_deleted`
+- `find_expiring_before` basic + source filter + `include_deleted`
+
+Uses shared `repos`/`local_source` fixtures, with additional `SourceConfig` inserts for multi-source tests. No source changes.
+
+### Notable iteration
+
+The biggest ship of Round 2 (predicted 30-50 tests, landed at 36) landed as a single ship without needing the Lesson #88 split. Key insights:
+- The 96 lines were spread across 14 small methods, each testable in 2-4 tests
+- All methods follow the same `repos`/`local_source` + dict-based row pattern — no novel infrastructure
+- Initial measurement caught 4 lines + 3 partials still missing → added 4 more tests (undelete + empty `iter_all` + `include_deleted=True` for both `count_by_status` and `query_by_status`)
+- One trivial first-try issue: `FileQuery(source_id=...)` → actual API is `source_ids=[...]` (list-typed). Fix took one line.
+
+### Lesson captured
+
+No new lesson. The "biggest single ship" landed cleanly because the test surface was uniform — small CRUD/query methods on a single entity. The Lesson #88 split criterion (>1.5x typical scope) targets work where novelty compounds, not work where the same pattern repeats 36 times.
+
+### Files
+
+- `tests/unit/test_storage_file_repo_coverage.py` (+~340, new, 36 tests)
+- `docs/STORAGE_SWEEP_SCOPE.md` (+1 line, tracker close + storage-subpackage-complete marker)
+- `docs/releases/v1.7.139.md`
+
+### Storage subpackage close-out
+
+With v1.7.138 (lineage_repo) and v1.7.139 (file_repo), the entire `src/curator/storage/` tree is now at 100% line + branch:
+
+- `storage/__init__.py` 100%
+- `storage/connection.py` 100% (v1.7.127)
+- `storage/exceptions.py` 100% (v1.7.133)
+- `storage/migrations.py` 100% (v1.7.129)
+- `storage/queries.py` 100% (pre-Tier 3)
+- `storage/repositories/__init__.py` 100%
+- `storage/repositories/_helpers.py` 100% (v1.7.136)
+- `storage/repositories/audit_repo.py` 100% (v1.7.128)
+- `storage/repositories/bundle_repo.py` 100% (v1.7.137)
+- `storage/repositories/file_repo.py` 100% (v1.7.139) ← this ship
+- `storage/repositories/hash_cache_repo.py` 100% (v1.7.135)
+- `storage/repositories/job_repo.py` 100% (v1.7.134)
+- `storage/repositories/lineage_repo.py` 100% (v1.7.138)
+- `storage/repositories/migration_job_repo.py` 100% (v1.7.132)
+- `storage/repositories/source_repo.py` 100% (v1.7.130)
+- `storage/repositories/trash_repo.py` 100% (v1.7.131)
+
+That's **16 modules** in the storage subpackage at 100%.
+
+### Next
+
+**v1.7.140** — scope plan for the Mid-Size Services Sweep arc (5 services modules).
+
 ## [1.7.138] — 2026-05-13 — Tier 4 ship 1: `storage/repositories/lineage_repo.py` to 100%
 
 Closes 38 uncovered lines in `storage/repositories/lineage_repo.py`. First of two storage modules deferred from Tier 3 to Tier 4 (opt-in stretch). Jake explicitly approved Tier 4.
