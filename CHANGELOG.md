@@ -4,6 +4,66 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.137] — 2026-05-13 — Tier 3 ship 11 (FINAL): `storage/repositories/bundle_repo.py` to 100%
+
+Closes 28 uncovered lines in `storage/repositories/bundle_repo.py` — the biggest of Tier 3 and the final sub-ship. **Storage Repositories Sweep arc COMPLETE.**
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `storage/repositories/bundle_repo.py` | 52.94% | **100.00%** (+47.06%) |
+
+64 statements, 4 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_storage_bundle_repo_coverage.py` (NEW, 9 tests):
+- `update(bundle)` overwrites all fields incl. flex attrs
+- `delete(bundle_id)` removes the row
+- `get` returns bundle with flex attrs loaded
+- `get` missing returns None
+- `list_all` returns all bundles
+- `list_all(bundle_type=...)` filters by type
+- `find_by_name` returns matches (multiple) + empty when no match
+- `remove_membership` drops the row (verified via `member_count`)
+
+Uses shared `repos`/`local_source` fixtures. No source changes.
+
+### Lesson captured
+
+No new lesson.
+
+### Files
+
+- `tests/unit/test_storage_bundle_repo_coverage.py` (+~115, new, 9 tests)
+- `docs/STORAGE_SWEEP_SCOPE.md` (+2 lines, tracker close + ARC COMPLETE marker)
+- `docs/releases/v1.7.137.md`
+
+### Tier 3 close-out
+
+All 11 sub-ships closed:
+
+| Ship | Module | Final |
+|---|---|---|
+| v1.7.127 | `storage/connection.py` | 100% |
+| v1.7.128 | `storage/repositories/audit_repo.py` | 100% |
+| v1.7.129 | `storage/migrations.py` | 100% |
+| v1.7.130 | `storage/repositories/source_repo.py` | 100% |
+| v1.7.131 | `storage/repositories/trash_repo.py` | 100% |
+| v1.7.132 | `storage/repositories/migration_job_repo.py` | 100% |
+| v1.7.133 | `storage/exceptions.py` | 100% |
+| v1.7.134 | `storage/repositories/job_repo.py` | 100% |
+| v1.7.135 | `storage/repositories/hash_cache_repo.py` | 100% |
+| v1.7.136 | `storage/repositories/_helpers.py` | 100% |
+| v1.7.137 | `storage/repositories/bundle_repo.py` | 100% |
+
+Combined doctrine totals: Round 1 (19 services) + Round 2 Tier 1 (9 mixed) + Round 2 Tier 2 (9 plugins/MCP/config) + Round 2 Tier 3 (11 storage) = **48 modules at 100% line + branch**.
+
+### Next
+
+Tier 3 closed. Reporting in to Jake before any Tier 4 (opt-in stretch) work. Tier 4 requires Jake's explicit go-ahead per the Round 2 handoff.
+
 ## [1.7.136] — 2026-05-13 — Tier 3 ship 10: `storage/repositories/_helpers.py` to 100%
 
 Closes 16 uncovered lines + 6 partial branches in `storage/repositories/_helpers.py` — the shared utilities all repositories use.
