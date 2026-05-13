@@ -4,6 +4,47 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.198] — 2026-05-13 — Round 4 Tier 4 ship 3: `FileInspectDialog` + `ForecastDialog`
+
+Closes the two smallest dialog classes (both read-only viewers): `FileInspectDialog` (file detail viewer with 3 tabs) and `ForecastDialog` (drive capacity forecast viewer).
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `gui/dialogs.py` | 10.20% (helpers + result classes) | **16.84%** (+6.64%) |
+
+### What landed
+
+`tests/unit/test_gui_dialogs_inspect_forecast_coverage.py` (NEW, 31 tests):
+
+**FileInspectDialog (15 tests):**
+- Basic construction (3 tabs verified)
+- Header text with/without deleted_at
+- Metadata tab with flex attrs / flex iteration exception
+- Lineage tab: with edges / get_edges_for exception / file_repo exception / file_repo None / edge_kind without `.value`
+- Bundles tab: with memberships / get_memberships exception / bundle.get exception / bundle.get None / unnamed bundle
+
+**ForecastDialog (16 tests):**
+- Basic construction (empty + with forecasts)
+- _refresh exception path
+- All 5 status colors via parametrize (fit_ok / past_95pct / past_99pct / insufficient_data / no_growth) + unknown
+- No slope branch / no projections / only 95pct / with monthly history
+- Refresh clears old cards
+- Refresh button click triggers re-compute
+- Close button calls reject
+
+### Files
+
+- `tests/unit/test_gui_dialogs_inspect_forecast_coverage.py` (NEW, 31 tests, +~360 lines)
+- `docs/releases/v1.7.198.md`
+
+No source changes. No new lesson.
+
+### Next
+
+**v1.7.199** — `VersionStackDialog` (207 lines) + `ScanDialog` Part 1 (371 lines / start of medium-complexity dialogs with worker stubbing).
+
 ## [1.7.197] — 2026-05-13 — Round 4 Tier 4 ship 2: dialog helpers + result classes + 🐛 test-pollution fix
 
 Closes the module-level helpers (`_make_kv_table`, `_make_table`, `_stringify`) and 3 result/data classes (`BundleEditorResult`, `_CheckResult`, `HealthCheckResult`) in `gui/dialogs.py`. **Also fixes a test-pollution bug** from v1.7.193.
