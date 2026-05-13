@@ -4,6 +4,44 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.101] — 2026-05-13 — Coverage Sweep 7/12: `services/metadata_stripper.py` to 100%
+
+Sub-ship 7 of the Coverage Sweep arc. Closes 7 uncovered lines + 1 partial branch in `services/metadata_stripper.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/metadata_stripper.py` | 94.17% | **100.00%** (+5.83%) |
+
+173 statements, 50 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_metadata_stripper_coverage.py` (NEW, 6 tests):
+
+1. `test_strip_directory_relative_to_value_error_uses_basename` — monkeypatches `Path.relative_to` selectively to raise ValueError; covers the defensive fallback `rel = Path(src.name)` (lines 269-270).
+2. `test_strip_image_detects_all_metadata_fields` — `_FakeImage` carrying every metadata field; covers 5 detection arms (exif, xmp, photoshop, png_text, comment).
+3. `test_strip_image_detects_icc_when_not_keeping` — `keep_icc_profile=False` + image with ICC; covers line 311.
+4. `test_strip_image_keeps_icc_when_configured` — `keep_icc_profile=True` + image with ICC; covers line 325 (the save_kwargs assignment).
+5. `test_strip_image_detects_xmp_photoshop_comment` — explicit coverage of lines 313/315/320 (in case any were missed by the bundled test).
+6. `test_strip_pdf_with_no_metadata_dict` — subclassed `PdfReader` overriding `metadata` to None; covers branch 415->421 False arm.
+
+No source changes. Used **monkeypatching at the package level** for both `PIL.Image.open` (lazy import inside `_strip_image`) and `pypdf.PdfReader` (lazy import inside `_strip_pdf`) — patching at the module-import location, not the service module's namespace, since the imports happen lazily inside the method bodies.
+
+### Lesson captured
+
+No new lesson, but worth noting carry-forward: **when production code uses lazy imports inside method bodies** (`from PIL import Image` inside `_strip_image`), `mock.patch("service_module.Image.open")` fails with AttributeError. Patch at the package-of-origin instead (`PIL.Image.open`, `pypdf.PdfReader`). This is Python-import-mechanics 101 but easy to forget. Saved time once recognized.
+
+### Files
+
+- `tests/unit/test_metadata_stripper_coverage.py` (+~250, new, 6 tests)
+- `docs/COVERAGE_SWEEP_SCOPE.md` (+1 line)
+
+### Next
+
+**v1.7.102** — `services/musicbrainz.py`. Handoff: ~30 min, 12 lines.
+
 ## [1.7.100] — 2026-05-13 — 🎉 Coverage Sweep 6/12: `services/music.py` to 100% — **v1.7.100 MILESTONE**
 
 Sub-ship 6 of the Coverage Sweep arc. Closes 6 uncovered lines + 5 partial branches in `services/music.py`. **This is the v1.7.100 milestone tag** — see milestone reflection in `docs/releases/v1.7.100.md`.
