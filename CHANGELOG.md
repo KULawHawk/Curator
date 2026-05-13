@@ -4,6 +4,39 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.96] — 2026-05-13 — Coverage Sweep 2/12: `services/fuzzy_index.py` to 100%
+
+Sub-ship 2 of the Coverage Sweep arc. Closes the two uncovered lines (166-167) in `services/fuzzy_index.py` — the `except ImportError` branch in `FuzzyIndex.__init__` that fires when the optional `datasketch` dependency isn't installed.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/fuzzy_index.py` | 98.02% | **100.00%** (+1.98%) |
+
+81 statements, 20 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_fuzzy_index_coverage.py` (NEW, 1 test) — uses `monkeypatch.setitem(sys.modules, "datasketch", None)` to simulate the missing-dependency case. Python's import machinery treats `sys.modules[name] = None` as "do not import this module," causing `from datasketch import MinHashLSH` to raise ImportError, which is then translated to `FuzzyIndexUnavailableError` with an install hint.
+
+No source changes.
+
+### Lesson captured
+
+No new lesson this ship. The `sys.modules[name] = None` pattern for testing optional-dependency import failures is a standard Python testing technique; worth noting as carry-forward technique for similar tests in `mcp/*` and any future optional-deps in `services/`. Honest logging.
+
+### Files
+
+- `tests/unit/test_fuzzy_index_coverage.py` (+33, new)
+- `docs/COVERAGE_SWEEP_SCOPE.md` (+1 line, tracker update)
+- `CHANGELOG.md` (this entry)
+- `docs/releases/v1.7.96.md` (release notes)
+
+### Next
+
+**v1.7.97** — `services/watch.py`. Handoff predicts ~10 min, 3 lines.
+
 ## [1.7.95] — 2026-05-13 — Coverage Sweep 1/12: `services/forecast.py` to 100%
 
 Sub-ship 1 of the Coverage Sweep arc. Closes the one uncovered statement + one partial branch in `services/forecast.py` (was 98.45% → **100.00%**).
