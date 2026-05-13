@@ -4,6 +4,37 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.110] — 2026-05-13 — Round 2 Tier 1 ship 4: `models/base.py` to 100%
+
+Sub-ship 4 of Round 2 Tier 1. Closes 8 uncovered lines in `models/base.py` — the `flex` property body, `get_computed` body, `get_flex` body, and `has_flex` body, none of which any existing test exercised directly.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `models/base.py` | 53.85% | **100.00%** (+46.15%) |
+
+22 statements, 4 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_models_base_coverage.py` (NEW, 6 tests) — flex-property/get_flex/has_flex/set_flex round-trip + `get_computed` happy-path + `get_computed` KeyError-when-no-plugin-handles (with `MagicMock` plugin manager).
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. Honest logging.
+
+### Files
+
+- `tests/unit/test_models_base_coverage.py` (+~85, new, 6 tests)
+- `docs/releases/v1.7.110.md` (release notes)
+
+### Next
+
+**v1.7.111** — `plugins/manager.py`.
+
 ## [1.7.109] — 2026-05-13 — Round 2 Tier 1 ship 3: `models/migration.py` to 100%
 
 Sub-ship 3 of Round 2 Tier 1. Closes 6 uncovered lines in `models/migration.py` (the property bodies on `MigrationJob` and `MigrationProgress`).
