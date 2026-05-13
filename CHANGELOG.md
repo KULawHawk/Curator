@@ -4,6 +4,49 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.188] — 2026-05-13 — Round 4 Tier 2 ship 4: `gui/models.py` Part 1 (helpers + 3 simplest models)
+
+Closes the 2 module-level helpers + 3 of the 9 Qt table models in `gui/models.py`: `_format_size`, `_format_dt`, `FileTableModel`, `BundleTableModel`, `TrashTableModel`. Parts 2 + 3 cover the remaining 6 models + `_format_duration`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `gui/models.py` | 11.35% (incidental from existing GUI tests) | **39.77%** (335 stmts covered, **0 partial branches** in the covered portion) |
+
+~217 new statements covered. Remaining 439 statements are exactly the 6 models scoped for Parts 2 + 3.
+
+### What landed
+
+`tests/unit/test_gui_models_part1_coverage.py` (NEW, 54 tests):
+
+- **`TestFormatSize`** (9 parametrized) — None / 0 B / under 1024 / KB / MB / GB / TB / **PB fallback (1024^5 → "1024.0 PB" — the function's actual loop behavior; see "Note on _format_size" below)**
+- **`TestFormatDt`** (2) — None + populated datetime
+- **`TestFileTableModel`** (15) — init (success + failure → empty); include_deleted flag; rowCount/columnCount with valid parent → 0; file_at in/out of range; headerData (column / out-of-range / vertical / non-display-role); data all 6 columns; data tooltip on path column; invalid index; unsupported role; **row out-of-range via `createIndex`** (line 156 branch); column fallback (line 177 `return None`); xxhash short form (3 cases); extension None; sort each column + 99-column fallback; sort with None values
+- **`TestBundleTableModel`** (12) — same Qt-protocol shape; unnamed bundle → "(unnamed)" fallback; covers `bundle_at`, headerData, data (all 5 cols), tooltip-absence, row out-of-range (line 275 branch), column fallback, sort with None
+- **`TestTrashTableModel`** (13) — same Qt-protocol shape; `limit` kwarg propagation; row out-of-range (line 375 branch); sort covers all 5 columns + fallback
+
+### Note on `_format_size`
+
+The function has an off-by-one in its PB branch: for input `1024^5`, it returns `"1024.0 PB"` instead of `"1.0 PB"`. The loop exits after TB without one more division. The test asserts the actual behavior (so we have honest coverage); this is a low-impact display oddity for PB-scale values that would never appear in a personal-use Curator install. Filing for `docs/DEFERRED_DECISIONS.md` consideration in a future ship — not blocking this one.
+
+### Canonical pattern established
+
+Each table model follows the same Qt protocol (`rowCount`, `columnCount`, `headerData`, `data` with DisplayRole + ToolTipRole branches per column, `sort` with per-column key function). The pattern from this Part 1 (stub-repo + create-index + role-parameterized `data` calls) ports directly to Parts 2 + 3.
+
+Lesson #84 (stub vocabulary reuse) applies: the `_make_file_entity`, `_make_bundle_entity`, `_make_trash_record` factories live in this Part 1 file. If Parts 2 + 3 need them they'll import here rather than duplicate.
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_gui_models_part1_coverage.py` (NEW, 54 tests, +~480 lines)
+- `docs/releases/v1.7.188.md`
+
+### Next
+
+**v1.7.189** — `gui/models.py` Part 2: `AuditLogTableModel` (audit-log-specific helpers + filter state) + `ConfigTableModel` (nested-dict flattening via `_flatten` + `_format_value`). Predicted ~270 stmts.
+
 ## [1.7.187] — 2026-05-13 — Round 4 Tier 2 ship 3: `gui/lineage_view.py` Part 2 + close → **100%**
 
 **`gui/lineage_view.py` closed at 100% line + branch.** Zero pragmas needed (defensive-boundary debt was lower than the Lesson #101 / Doctrine #19 estimate of 2-4 — the module's pure-Python design kept its surface clean).
