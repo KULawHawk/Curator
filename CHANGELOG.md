@@ -4,6 +4,46 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.111] — 2026-05-13 — Round 2 Tier 1 ship 5: `plugins/manager.py` to 100%
+
+Sub-ship 5 of Round 2 Tier 1. Closes 2 uncovered lines + 2 partial branches in `plugins/manager.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `plugins/manager.py` | 89.19% | **100.00%** (+10.81%) |
+
+31 statements, 6 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_plugins_manager_coverage.py` (NEW, 4 tests):
+1. Singleton caching — second `get_plugin_manager()` returns same instance.
+2. `reset_plugin_manager()` clears the singleton.
+3. `_create_plugin_manager` swallows a misbehaving plugin's init exception (covers lines 87-91).
+4. `_create_plugin_manager` no-external-plugins-loaded branch (covers 68→85).
+
+**Auto-use fixture** (`restore_singleton`) saves/restores `pm_mod._pm` so test ordering doesn't leak state to other tests in the suite.
+
+### Source change
+
+One small `# pragma: no branch` annotation on line 37 (the inner double-checked locking arm). The branch fires only when another thread sets `_pm` between the outer null check and the lock acquisition — a thread race that isn't reliably testable from a single-threaded unit test. Per doctrine item 1 + Lesson #91, annotated explicitly rather than scaffolding a thread-race test.
+
+### Lesson captured
+
+No new lesson — the double-checked-locking-pragma pattern is a clean application of Lesson #91 (defensive boundaries unreachable through normal flow). Honest logging.
+
+### Files
+
+- `tests/unit/test_plugins_manager_coverage.py` (+~80, new, 4 tests)
+- `src/curator/plugins/manager.py` (+1 pragma annotation on line 37)
+- `docs/releases/v1.7.111.md` (release notes)
+
+### Next
+
+**v1.7.112** — `cli/util.py`.
+
 ## [1.7.110] — 2026-05-13 — Round 2 Tier 1 ship 4: `models/base.py` to 100%
 
 Sub-ship 4 of Round 2 Tier 1. Closes 8 uncovered lines in `models/base.py` — the `flex` property body, `get_computed` body, `get_flex` body, and `has_flex` body, none of which any existing test exercised directly.

@@ -34,7 +34,7 @@ def get_plugin_manager() -> pluggy.PluginManager:
     global _pm
     if _pm is None:
         with _pm_lock:
-            if _pm is None:  # double-checked locking
+            if _pm is None:  # double-checked locking  # pragma: no branch -- thread-race fallthrough is not unit-testable
                 _pm = _create_plugin_manager()
     return _pm
 
