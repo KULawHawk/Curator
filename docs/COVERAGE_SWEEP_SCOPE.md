@@ -94,7 +94,7 @@ If picking this up in a new session, the restart prompt is: *"Resume Coverage Sw
 | v1.7.101 | ✅ Closed | `services/metadata_stripper.py` | **100.00%** (was 94.17%) | 2026-05-13 |
 | v1.7.102 | ✅ Closed | `services/musicbrainz.py` | **100.00%** (was 88.34%) | 2026-05-13 |
 | v1.7.103 | ✅ Closed | `services/classification.py` | **100.00%** (was 91.89%) | 2026-05-13 |
-| v1.7.104 | ⏳ Pending | `services/migration_retry.py` | TBD | TBD |
+| v1.7.104 | ✅ Closed | `services/migration_retry.py` | **100.00%** (was 77.78%) | 2026-05-13 |
 | v1.7.105 | ⏳ Pending | `services/code_project.py` | TBD | TBD |
 | v1.7.106 | ⏳ Pending | `services/document.py` | TBD | TBD |
 

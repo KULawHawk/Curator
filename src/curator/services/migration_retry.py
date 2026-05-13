@@ -135,7 +135,7 @@ def retry_transient_errors(fn: Callable) -> Callable:
 
         last_exc: BaseException | None = None
 
-        for attempt in range(max_retries + 1):
+        for attempt in range(max_retries + 1):  # pragma: no branch -- always exits via internal return/raise
             try:
                 return fn(self, *args, **kwargs)
             except Exception as exc:  # noqa: BLE001
@@ -176,10 +176,9 @@ def retry_transient_errors(fn: Callable) -> Callable:
 
                 time.sleep(sleep_for)
 
-        # Defensive: re-raise the last exception if we somehow exit the loop
-        # without returning (shouldn't happen given the logic above).
-        if last_exc is not None:
-            raise last_exc
-        raise RuntimeError("retry_transient_errors: unreachable")
+        # The for-loop above always exits via `return` (success) or
+        # `raise` (non-retryable error, OR retryable but attempt >=
+        # max_retries). The previous "defensive end-of-loop" block
+        # was provably unreachable and has been removed (v1.7.104).
 
     return wrapper

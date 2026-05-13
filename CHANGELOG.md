@@ -4,6 +4,47 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.104] — 2026-05-13 — Coverage Sweep 10/12: `services/migration_retry.py` to 100%
+
+Sub-ship 10 of the Coverage Sweep arc. Closes 17 uncovered lines + several partial branches in `services/migration_retry.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/migration_retry.py` | 77.78% | **100.00%** (+22.22%) |
+
+75 statements, 28 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_migration_retry_coverage.py` (NEW, 9 tests) — covers `_is_retryable`'s exception-classification arms (HttpError retry-after parsing, googleapiclient/requests/urllib3 ImportError paths, urllib3 ProtocolError) and `retry_transient_errors`'s max_retries clamping (negative→0, excessive→10).
+
+**Source refactors (two):**
+
+1. Removed provably-unreachable end-of-loop defensive block (formerly lines 179-183). The for-loop always exits via internal `return` (success) or `raise` (non-retryable error, or retryable exhausted). The previous "defensive fallback re-raise" was dead code. Same refactor pattern as v1.7.95 (forecast) and v1.7.99 (pii_scanner).
+
+2. Added `# pragma: no branch -- always exits via internal return/raise` to the `for attempt in range(...)` loop header. Coverage.py's branch tracker would otherwise mark the natural-exit branch as partial; the pragma annotates the genuine unreachability.
+
+### Lesson captured
+
+No new lesson per se, but worth flagging the **two distinct flavors of "unreachable defensive code"** I've now handled in this arc:
+
+- **Statement-level**: a `return None` or `raise` line that can't be reached. Refactor (remove) is the cleanest option per doctrine item 1. Examples: v1.7.95 forecast (`if n else 0.0` ternary), v1.7.99 pii_scanner (decode try/except), v1.7.104 migration_retry (end-of-loop re-raise).
+- **Branch-level**: a control-flow branch that the language semantics produce but the logic can't traverse — e.g. for-loop natural exit when every iteration body returns/raises. Refactoring would mean restructuring the loop. `# pragma: no branch` with justification is cleaner.
+
+Both flavors arrive at the same place: "untested code is untrusted code" is honored, either by deletion or by explicit annotation. Worth adding to doctrine item 1 as a sub-point in a future ship; for now, the pattern is consistent.
+
+### Files
+
+- `tests/unit/test_migration_retry_coverage.py` (+~180, new, 9 tests)
+- `src/curator/services/migration_retry.py` (+1 / -6, dead-code removal + pragma)
+- `docs/COVERAGE_SWEEP_SCOPE.md` (+1 line)
+
+### Next
+
+**v1.7.105** — `services/code_project.py`. Handoff: ~45 min, 17 lines (will re-measure).
+
 ## [1.7.103] — 2026-05-13 — Coverage Sweep 9/12: `services/classification.py` to 100%
 
 Sub-ship 9 of the Coverage Sweep arc. Closes line 86 + 2 partial branches in `services/classification.py`.
