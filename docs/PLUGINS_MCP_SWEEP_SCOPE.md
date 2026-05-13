@@ -102,7 +102,7 @@ Restart prompt: *"Resume Plugins + MCP + Config Sweep arc. Open docs/PLUGINS_MCP
 | v1.7.120 | ✅ Closed | `mcp/auth.py` | **100.00%** (was 90.38%) | 2026-05-13 |
 | v1.7.121 | ✅ Closed | `mcp/tools.py` | **100.00%** (was 88.89%) | 2026-05-13 |
 | v1.7.122 | ✅ Closed | `mcp/server.py` | **100.00%** (was 71.05%) | 2026-05-13 |
-| v1.7.123 | ⏳ Pending | `config/__init__.py` | TBD | TBD |
+| v1.7.123 | ✅ Closed | `config/__init__.py` | **100.00%** (was 61.18%) | 2026-05-13 |
 | v1.7.124 | ⏳ Pending | `plugins/core/local_source.py` | TBD | TBD |
 | v1.7.125 | ⏳ Pending — possible split | `plugins/core/gdrive_source.py` | TBD | TBD |
 

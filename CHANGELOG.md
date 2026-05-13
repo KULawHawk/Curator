@@ -4,6 +4,52 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.123] — 2026-05-13 — Tier 2 ship 7: `config/__init__.py` to 100%
+
+Closes 39 uncovered lines + 10 partial branches in `config/__init__.py` — the biggest config-loader sweep of the arc so far.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `config/__init__.py` | 61.18% | **100.00%** (+38.82%) |
+
+118 statements, 34 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_config_coverage.py` (NEW, 29 tests) covering:
+
+- `__init__` data-merge branch
+- `Config.load` file-found + file-not-found paths
+- `Config.from_dict` factory
+- `get` dotted-path defensives (intermediate not dict, key not present)
+- `set` dotted-path with intermediate dict creation + replacement of non-dict intermediate
+- `__getitem__`, `__contains__`, `as_dict`, `source_path`, `db_path`/`log_path`/`log_level` convenience properties
+- `save()` happy path, source-path fallback, no-path error, tomli_w missing
+- `_merge` body (both dict-deep-merge and value-replace arms)
+- `_deep_update` body (recurse and replace arms)
+- `_resolve_path` branches: explicit / env var / cwd / platformdirs / platformdirs-missing / none-found
+- `_resolve_auto_paths` branches: db_path already explicit / log_path already explicit
+
+Helper `_strip_none_values` strips None values from the config dict before save tests — `DEFAULT_CONFIG` contains None values that aren't TOML-serializable.
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. The config-test pattern (monkeypatch.setenv + monkeypatch.chdir + monkeypatch.setattr on `platformdirs.user_config_dir`) is well-trodden territory. Honest logging.
+
+### Files
+
+- `tests/unit/test_config_coverage.py` (+~270, new, 29 tests)
+- `docs/PLUGINS_MCP_SWEEP_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.123.md`
+
+### Next
+
+**Tier 2 status: 7 of 9 sub-ships closed** (after scope plan v1.7.116 + 6 sweeps so far). Reporting in to Jake before tackling the bigger plugin sources (`local_source.py` ~50 lines, `gdrive_source.py` ~72 lines + PyDrive2 mocking risk per handoff watchpoint).
+
 ## [1.7.122] — 2026-05-13 — Tier 2 ship 6: `mcp/server.py` to 100%
 
 Closes 20 uncovered lines in `mcp/server.py` — the FastMCP server lifecycle and `main()` dispatch.
