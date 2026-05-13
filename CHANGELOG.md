@@ -4,6 +4,117 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.93b] — 2026-05-13 — 🎯 Migration Phase Gamma ARC CLOSED: Persistent job lifecycle + worker pool → `migration.py` at 100.00%
+
+Sub-ship 5b/6 (final) of the Migration Phase Gamma arc. **Closes the arc.** Targets Group B of the v1.7.93 split: the persistent-job lifecycle (`create_job`, `run_job` options resolution + threading orchestration, `_worker_loop` per-row dispatch, `_execute_one_persistent` dispatcher, `_execute_one_persistent_same_source`, `_execute_one_persistent_cross_source`, `abort_job`, `list_jobs`, `get_job_status`, `_build_report_from_persisted`). Lands `services/migration.py` at **100.00% line + branch** — the seventh Phase Gamma module at 100%.
+
+Trimmed ceremony per Jake's call (memory edit #5) — lessons-learned content kept rich and detailed.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/migration.py` | 90.86% | **100.00%** (+9.14%) |
+
+Exactly the target. 1031 statements, 358 branches, **0 misses, 0 partial branches**. No `# pragma: no cover` annotations needed — every defensive boundary was reachable via the right test design.
+
+### What landed
+
+- `tests/unit/test_migration_persistent_jobs.py` (NEW, ~1300 lines, 89 tests, 11 test classes)
+- **New stub: `StubMigrationJobRepository`** — the entire MigrationJobRepository surface (11 methods: `get_job`, `insert_job`, `seed_progress_rows`, `update_job_status`, `reset_in_progress_to_pending`, `next_pending_progress`, `update_progress`, `increment_job_counts`, `count_progress_by_status`, `query_progress`, `get_progress`, `list_jobs`). Modeled on `StubAuditRepository` per Lesson #84.
+- **New threading test pattern: `_SyncExecutor`** — synchronous drop-in for `concurrent.futures.ThreadPoolExecutor`. Runs submitted callables inline, preserves submit/result/__enter__/__exit__ contract. Used via `sync_executor` fixture to make `run_job` deterministic in tests without changing production code.
+- `docs/MIGRATION_PHASE_GAMMA_SCOPE.md` marked **ARC CLOSED** with final stats
+- `CLAUDE.md` status updated
+
+### Test class coverage
+
+| Class | Tests | Targets |
+|---|---|---|
+| TestRequireJobsRepo | 2 | jobs-repo absent raises / present is no-op (2794-2800) |
+| TestCreateJob | 8 | SAFE pending / CAUTION default skipped / CAUTION + include / REFUSE always skipped / db_path_guard / options pass-through / options=None / jobs-repo missing (2455-2552) |
+| TestAbortJob | 3 | running sets event / unrunning no-op / jobs-repo missing (2725-2743) |
+| TestListJobsAndStatus | 5 | list pass-through / list missing repo / get_job_status dict shape / not found / missing repo (2745-2788) |
+| TestBuildReportFromPersisted | 4 | empty / outcome resolved / invalid outcome → FAILED defensive (3322-3324) / outcome=None (3302-3341) |
+| TestExecuteOnePersistentDispatch | 2 | dst_source_id=None defaults to src / cross-source dispatches (2907-2952) |
+| TestExecuteOnePersistentSameSource | 16 | happy path / 4 conflict modes / hash mismatch / unlink OSError swallow / keep-source variants with audit/None/exception/source_id-None / FileEntity vanished / trash failure swallow / main audit variants (2954-3108) |
+| TestExecuteOnePersistentCrossSource | 19 | happy / HASH_MISMATCH early / 4 conflict modes (including unknown defensive) / overwrite-with-backup full retry tree / rename-with-suffix full retry tree / keep-source variants / FileEntity vanished / trash hook propagated via `_hook_first_result` monkeypatch (Lesson #91) / main audit variants (3110-3300) |
+| TestWorkerLoop | 13 | empty queue / abort-set / each outcome type / defensive unknown / MigrationConflictError / other exception / on_progress callback / on_progress exception swallow / get_progress=None branch (2802-2905) |
+| TestRunJob | 17 | missing repo / not found / completed early-return / max_retries 4 paths (explicit kwarg / persisted / invalid / None / AttributeError) / on_conflict 4 paths / workers=0 clamp / happy completed / partial / cancelled via Event-pre-set (2554-2723) |
+
+No source code changes. Test count: 2146 → 2235 (+89).
+
+### Lessons captured
+
+**Lesson #94 — Synchronous executor shim is cleaner than `workers=1` for testing threaded code.**
+
+`run_job` builds a real `ThreadPoolExecutor` and submits N workers to it. Setting `workers=1` reduces concurrency but doesn't eliminate non-determinism: the executor still spawns a thread, scheduling is non-deterministic, and test teardown timing depends on thread join. For unit-test purposes, the production code's threading is incidental — we want to exercise the submit/result/__enter__/__exit__ contract without an actual thread.
+
+The pattern that worked: monkeypatch the module-level `ThreadPoolExecutor` reference (`curator.services.migration.ThreadPoolExecutor`) with a `_SyncExecutor` class whose `submit()` runs the callable inline and returns a future-like object whose `result()` returns the captured value (or re-raises the captured exception). The production code's loop (`for f in futures: f.result()`) is unchanged. All threading-related code paths (abort_event semantics, `try/finally` for `_abort_events` cleanup, worker exception propagation via `f.result()`) are exercised.
+
+**General rule:** when a production class uses concurrent.futures internally, prefer a sync shim over `workers=1` for unit tests. Reserve real-executor tests for integration tests where the threading model itself is what you're testing. The fixture-level monkeypatch keeps the swap scoped to the test that needs it.
+
+This pattern will carry forward: `cli/main.py` uses similar threading via `click.testing.CliRunner` callbacks; future `gui/*` test work will need the same trick for Qt's signal/slot machinery.
+
+**Lesson #95 — Pydantic `validate_assignment=True` blocks defensive-test injection via attribute assignment.**
+
+Curator's models use pydantic v2 with `validate_assignment=True` (inherited from `CuratorEntity`). To test the `except (AttributeError, TypeError):` clauses in `run_job` (which catch malformed `job.options` — e.g. a value that isn't a dict), I needed to inject a non-dict value into `job.options`.
+
+Initial attempt: `job.options = SimpleNamespace()` → `pydantic_core.ValidationError`. Pydantic validates the assignment and refuses the non-dict.
+
+Fix: `job.__dict__["options"] = SimpleNamespace()`. This bypasses the descriptor entirely — the value lives in the instance dict directly. The next `getattr(job, "options")` returns the SimpleNamespace; `.get("max_retries")` raises AttributeError (no such method on SimpleNamespace); the defensive `except (AttributeError, TypeError):` catches it.
+
+**General rule:** when testing defensive boundaries against type-incorrect values in pydantic v2 models with `validate_assignment=True`, use `instance.__dict__[field] = bad_value` to bypass validation. This is specifically for testing the "field has the wrong type at runtime" failure mode — NOT a workaround to silently break model invariants in production code.
+
+This is the pydantic-v2 generalization of an old pattern (we've previously used object.__setattr__ for similar bypasses on dataclasses). Worth keeping in the mental toolkit for any future pydantic-defended boundary that has an `except (AttributeError, TypeError):` clause.
+
+**Lesson #91 reinforced (no new number) — Defensive boundaries unreachable via plugin-raised exceptions.**
+
+The cross-source trash hook's `except Exception` at lines 3268-3269 (`_execute_one_persistent_cross_source`) repeats the exact pattern called out in v1.7.91 Lesson #91. My initial test set the `curator_source_delete` hook to raise `RuntimeError("trash failed")` and asserted the migration still completes. The test passed — but coverage of 3268-3269 stayed at 0% because `_hook_first_result` swallows non-FileExistsError exceptions internally (line 2254) and returns None. The caller's `except Exception` is defensive code against future refactors, not against plugin behavior.
+
+Fix: monkeypatch `_hook_first_result` itself to propagate the exception for the specific hook name. Same recipe as v1.7.91. The pattern shows up at 4 sites in the module: v1.7.91 covered 3 (trash, stat, enumerate); v1.7.93b covered the 4th (persistent-path trash).
+
+**This validates Lesson #91 as a real pattern, not a one-off.** When 4 separate defensive `except` clauses across the same module all need the same test-design workaround (monkeypatch `_hook_first_result`), the lesson is genuinely load-bearing. Worth re-reading on every future cross-source ship in the codebase.
+
+### Arc closure summary
+
+Migration Phase Gamma — opened v1.7.88, closed v1.7.93b. 7 sub-ships:
+
+| Ship | Coverage after | Delta | Tests added |
+|---|---|---|---|
+| v1.7.88 (scope plan) | 66.74% | — | 0 |
+| v1.7.89 (Plan + Apply) | 68.18% | +1.44% | 16 |
+| v1.7.90 (Same-source + 4 conflict modes) | 70.05% | +1.87% | 13 |
+| v1.7.91 (Cross-source + overwrite-with-backup) | 77.47% | +7.42% | 38 |
+| v1.7.92 (Auto-strip + small defensives) | 80.49% | +3.02% | 20 (net +6 from rewrite) |
+| v1.7.93a (Progress sisters + xfer body) | 90.86% | +10.37% | 51 |
+| **v1.7.93b (Persistent job lifecycle)** | **100.00%** | **+9.14%** | **89** |
+| **TOTAL** | **+33.26%** | | **227+ tests** |
+
+Test infrastructure built: 7 stub classes, all reusable across the codebase. 6 new test files totaling ~3300 lines of focused unit-test code. The pattern dividends from Lesson #87 compounded clean: v1.7.93a (51 tests) and v1.7.93b (89 tests) needed only 1 new stub combined (`StubMigrationJobRepository`) — everything else came from the v1.7.89-91 vocabulary.
+
+Lessons captured during the arc: #88 (multi-ship arcs need scope plans), #89 (calibrate after sub-ship 1), #90 (data-flow tracing), #91 (defensive boundaries can be unreachable), #92 (tool routing as discipline), #93 (test-design rewrites need coverage diff), #94 (sync executor shim for threading), #95 (pydantic validate_assignment bypass).
+
+**Curator now has seven Phase Gamma modules at 100% line + branch:** `services/tier.py`, `services/lineage.py`, `services/safety.py`, `services/scan.py`, `services/bundle.py`, `storage/queries.py`, and now `services/migration.py`. The apex-accuracy doctrine has been validated against the largest service in the codebase (1031 stmts, 3100+ lines, 7-sub-ship arc).
+
+### Files
+
+- `tests/unit/test_migration_persistent_jobs.py` (+1300, new, 89 tests, `StubMigrationJobRepository`, `_SyncExecutor`)
+- `docs/MIGRATION_PHASE_GAMMA_SCOPE.md` (+25, arc-closed status header + tracker + final-stats summary)
+- `CLAUDE.md` (+1 line, status header)
+- `CHANGELOG.md` (this entry)
+- `docs/releases/v1.7.93b.md` (release notes, trimmed ceremony with rich lessons)
+
+No source changes.
+
+### Next
+
+Migration Phase Gamma arc is **closed**. Suggested follow-up work (deferred to future sessions, not part of this arc):
+
+- **Coverage Sweep Arc** (CLAUDE_CODE_HANDOFF_WOW.md Tier 3): bring 12 more services modules to 100% — `forecast`, `fuzzy_index`, `watch`, `audit`, `pii_scanner`, `music`, `metadata_stripper`, `musicbrainz`, `code_project`, `classification`, `migration_retry`, `document`. Estimated 5-6 hours.
+- **Audit-check test** for migration.py (per scope plan's "Audit-check infrastructure" section): a test in `tests/integration/` that asserts `migration.py` stays at 100% going forward.
+- **CLI coverage arc** (`cli/main.py` at 10.73%): substantial standalone arc using `click.testing.CliRunner`.
+- **GUI coverage strategy**: PySide6 modules at 0%; needs a strategy decision before any coverage work begins.
+
 ## [1.7.93a] — 2026-05-13 — Migration Phase Gamma sub-ship 5a/6: Progress sisters + cross-source-transfer body
 
 Sub-ship 5a of the Migration Phase Gamma arc (split from v1.7.93 per Lesson #88 after the v1.7.92 calibration pushed Cluster 6 remainder into v1.7.93's consolidated scope). Targets Group A of the split: the persistent-path *_for_progress family of methods (`_emit_progress_audit_conflict`, `_resolve_collision_for_progress`, `_cross_source_overwrite_with_backup_for_progress`, `_cross_source_rename_with_suffix_for_progress`) plus the cross-source bytes-transfer infrastructure that all persistent-path cross-source code depends on (`_cross_source_transfer` body, `_can_write_to_source` defensives, `_hook_first_result` defensives, `_read_bytes_via_hook` defensives, `_invoke_post_write_hook` no-op paths).

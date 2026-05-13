@@ -10,7 +10,7 @@ This file is read automatically by Claude Code at session start. It encodes the 
 
 - **Name:** Curator. Repo: `https://github.com/KULawHawk/Curator.git`. Local root: `C:\Users\jmlee\Desktop\AL\Curator\`.
 - **Brand context:** Curator is one pillar within **Ad Astra** (the overarching umbrella). Governance constitution at `..\Atrium\CONSTITUTION.md` (v0.3 RATIFIED 2026-05-08). Constellation map at `..\AD_ASTRA_CONSTELLATION.md`.
-- **Status:** v1.7.93a shipped. 93 ships total. Active arc: **Migration Phase Gamma** sub-ship 5a of 6 closed (split per Lesson #88; see `docs/MIGRATION_PHASE_GAMMA_SCOPE.md`). `migration.py` at 90.86% line + branch; v1.7.93b closes the arc to 100% (landmark).
+- **Status:** v1.7.93b shipped. 94 ships total. **Migration Phase Gamma arc CLOSED** at 100.00% line + branch on `services/migration.py`. Seven Phase Gamma modules at 100% (`tier`, `lineage`, `safety`, `scan`, `bundle`, `queries`, `migration`). No active arc.
 - **Python:** 3.13.12 in `.venv`. Windows 11 only (see Doctrine principle 3 below).
 
 ---
@@ -28,7 +28,7 @@ This is non-negotiable. Before doing engineering work in a new session:
 ### At session start (within the first 5 turns)
 
 1. **Read the most recent 5 CHANGELOG entries** in `CHANGELOG.md` and pay special attention to the "Lesson captured" sections.
-2. **Read every lesson newer than the most recent one referenced in this CLAUDE.md.** The doctrine below lists lessons through #93. If CHANGELOG shows #94 or higher, those exist; read them.
+2. **Read every lesson newer than the most recent one referenced in this CLAUDE.md.** The doctrine below lists lessons through #95. If CHANGELOG shows #96 or higher, those exist; read them.
 3. **Acknowledge the lessons in your first substantive response.** Not verbosely — something like "Read lessons through #N. Carrying #X and #Y forward as relevant here." This proves you actually read them.
 
 ### Before writing a new test, source-code change, or significant decision
@@ -83,7 +83,7 @@ Claude should *proactively recommend* moving work to a different tool when:
 
 ## Doctrine
 
-These are non-negotiable. Read once, apply always. Lessons #79–93 below; check CHANGELOG for #94+.
+These are non-negotiable. Read once, apply always. Lessons #79–95 below; check CHANGELOG for #96+.
 
 ### 1. APEX PRINCIPLE — ACCURACY
 
@@ -110,7 +110,7 @@ Cross-platform parity is **SUSPENDED** (documented in `docs/PLATFORM_SCOPE.md`).
 
 ### 5. Lesson capture
 
-After every ship, write down lessons in the CHANGELOG entry's "Lesson captured" section. Number sequentially. Latest is #93 (v1.7.92). Lessons compound — read prior ones before tackling unfamiliar territory. **See Lesson Adoption Protocol at top of this file — adopting lessons is REQUIRED, not optional.**
+After every ship, write down lessons in the CHANGELOG entry's "Lesson captured" section. Number sequentially. Latest is #95 (v1.7.93b — arc-closure landmark for Migration Phase Gamma). Lessons compound — read prior ones before tackling unfamiliar territory. **See Lesson Adoption Protocol at top of this file — adopting lessons is REQUIRED, not optional.**
 
 ### 6. Mid-ship is not acceptable session-end state (Lesson #86)
 
@@ -132,13 +132,31 @@ Some `except` clauses are protected by intermediate layers that swallow the exce
 
 Knowing which Claude product or session to use for which kind of work is itself part of the craft. Engineering arcs go in Claude Code. Cross-arc reflection and design go in The Log chat. Recognize budget cliffs early — a clean handoff via a context-prime prompt (like the v1.7.92 one at `..\.curator\CLAUDE_CODE_HANDOFF_v1792.md`) is *better* than pushing through and ending mid-ship. The "don't worry about tokens" directive doesn't make context unlimited; pre-commit to ship boundaries you can actually complete. See "Tool routing" section above for the routing matrix.
 
-### 11. Test-design rewrites need a coverage diff (Lesson #93 — new)
+### 11. Test-design rewrites need a coverage diff (Lesson #93)
 
 When *replacing* an existing test file with a different design (e.g. integration-style → direct-call unit tests, or the reverse), the new tests passing does NOT prove the new design covers everything the old design did. Integration-style tests carry *incidental* coverage of orchestration code paths; direct-call unit tests trade that for explicitness about what's tested. The trade only works if you compare the `--cov-report=term-missing` output against the pre-rewrite baseline.
 
 **Discovery in v1.7.92:** the autostrip test file rewrite passed all 14 new tests but quietly uncovered line 830 (`self._auto_strip_metadata(move)` — the apply() dispatch into the helper). The old integration tests had implicitly covered it; the new direct-call tests skip apply() entirely. Coverage diff caught the regression before ship; a focused apply() integration test restored the line.
 
 **How to apply:** before shipping a test-file rewrite (or deleting an integration test because "unit tests cover it"), diff the missing-line list. Lines that moved covered→uncovered need: (a) a restoring test, (b) `# pragma: no cover` with justification, or (c) explicit deferral documentation. This is distinct from Lesson #90 (control-flow tracing for new tests) — that's about correctness of new tests; this is about *coverage continuity* across the rewrite boundary.
+
+### 12. Synchronous executor shim for testing threaded code (Lesson #94 — new)
+
+When a production class uses `concurrent.futures.ThreadPoolExecutor` internally, prefer a synchronous shim over `workers=1` for unit tests. `workers=1` reduces concurrency but doesn't eliminate non-determinism: a real thread is still spawned, scheduling is still non-deterministic, and test teardown timing depends on thread join. Reserve real-executor tests for integration tests where the threading model is what you're testing.
+
+**Pattern (v1.7.93b):** monkeypatch the module-level `ThreadPoolExecutor` reference (e.g. `curator.services.migration.ThreadPoolExecutor`) with a `_SyncExecutor` class whose `submit()` runs the callable inline and returns a future-like object whose `result()` returns the captured value (or re-raises the captured exception). The production code's loop (`for f in futures: f.result()`) is unchanged. All threading-related code paths (abort_event semantics, try/finally for cleanup, worker exception propagation via `f.result()`) are exercised.
+
+**How to apply:** make the shim available via a pytest fixture (`@pytest.fixture def sync_executor(monkeypatch): ...`) and require it in any test that exercises threaded production code. Carries forward to other threaded code (Qt signal/slot in GUI tests, click.testing.CliRunner callbacks, async work eventually).
+
+### 13. Pydantic validate_assignment bypass for defensive-boundary testing (Lesson #95 — new)
+
+Curator's models use pydantic v2 with `validate_assignment=True` (inherited from `CuratorEntity`). To test `except (AttributeError, TypeError):` clauses that catch type-incorrect field values at runtime, you can't inject the bad value via attribute assignment — pydantic rejects it.
+
+**Pattern:** use `instance.__dict__[field] = bad_value` to bypass the descriptor entirely. The value lives in the instance dict; the next `getattr(instance, field)` returns it; method calls that assume the correct type then raise as expected.
+
+**Discovery in v1.7.93b:** to test `run_job`'s `except (AttributeError, TypeError):` around `job.options.get("max_retries")` (which catches malformed options not being a dict), I tried `job.options = SimpleNamespace()` → `pydantic_core.ValidationError`. Fix: `job.__dict__["options"] = SimpleNamespace()`. Then `.get("max_retries")` raises AttributeError (no such method on SimpleNamespace) and the defensive except catches it.
+
+**How to apply:** specifically for testing the "field has the wrong type at runtime" failure mode in pydantic-v2 models with `validate_assignment=True`. NOT a workaround to silently break model invariants in production code — only use in unit tests targeting specific defensive boundaries.
 
 ---
 

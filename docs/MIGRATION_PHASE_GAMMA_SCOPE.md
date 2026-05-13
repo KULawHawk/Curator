@@ -18,13 +18,14 @@
 
 ---
 
-**Status:** Active arc plan — sub-ship 5a of 6 closed at v1.7.93a (split per Lesson #88)
+**Status:** ✅ **ARC CLOSED at v1.7.93b — `services/migration.py` at 100.00% line + branch**
 **Owner:** Curator engineering doctrine
 **Created:** 2026-05-12 (v1.7.88)
+**Closed:** 2026-05-13 (v1.7.93b)
 **Module:** `src/curator/services/migration.py`
 **Starting coverage:** 66.74% line + branch (319 missing lines, 53 partial branches)
-**Current coverage:** 90.86% (after v1.7.93a)
-**Target:** 100.00% line + branch (per apex-accuracy doctrine, see v1.7.84)
+**Final coverage:** **100.00%** (1031 stmts, 358 branches, 0 misses, 0 partials)
+**Target:** 100.00% line + branch ✅ ACHIEVED
 
 ## Why this needs a plan, not a single ship
 
@@ -186,7 +187,7 @@ If a session ends between sub-ships:
 | v1.7.91 | ✅ Cross-source execution + overwrite-with-backup full body | Cluster 4 + Cluster 5 | **77.47%** (+7.42%) | 2026-05-12 |
 | v1.7.92 | ✅ Auto-strip metadata body + small defensive boundaries (_update_index vanished, _trash_source exception, _audit_conflict exception, audit_move/copy minor branches, apply() autostrip dispatch) | Cluster 6 (auto-strip portion) + 6 small defensives | **80.49%** (+3.02%) | 2026-05-13 |
 | v1.7.93a | ✅ Progress sisters + cross-source-transfer body (split per Lesson #88) | Cluster 6 remainder (`_emit_progress_audit_conflict`, `_resolve_collision_for_progress`, `_cross_source_overwrite_with_backup_for_progress`, `_cross_source_rename_with_suffix_for_progress`) + cross-source bytes infrastructure (`_cross_source_transfer` body, `_can_write_to_source`, `_hook_first_result`, `_read_bytes_via_hook`, `_invoke_post_write_hook`) | **90.86%** (+10.37%) | 2026-05-13 |
-| v1.7.93b | ⏳ Pending — LANDMARK arc closure | Cluster 7 (persistent job lifecycle: `run_job` options resolution, `create_job`, `_worker_loop`, `_execute_one_persistent_*` same-source + cross-source variants, `_build_report_from_persisted`, worker pool methods) + audit test + doctrine update | 100.00% | TBD |
+| v1.7.93b | ✅ **ARC CLOSURE** — Persistent job lifecycle + worker pool | Cluster 7 (`create_job`, `run_job` options resolution + threading orchestration, `_worker_loop` per-row dispatch, `_execute_one_persistent` dispatcher, `_execute_one_persistent_same_source`, `_execute_one_persistent_cross_source`, `abort_job`, `list_jobs`, `get_job_status`, `_build_report_from_persisted`) | **100.00%** (+9.14%) | 2026-05-13 |
 
 ### Revised estimates after sub-ship 1 calibration
 
@@ -217,4 +218,15 @@ Total arc: 7 sub-ships instead of 5 (v1.7.88, v1.7.89, v1.7.90, v1.7.91, v1.7.92
 
 Right in the predicted 88-91% band. 51 tests, no new stub classes needed (`MigrationProgress` factory + reuse of existing pluggy + audit stubs). One lesson captured: see CHANGELOG.
 
-The **arc target (100%) is unchanged**. v1.7.93b closes it.
+### v1.7.93b landed: 100.00% (+9.14%) — ARC CLOSED
+
+89 tests in `tests/unit/test_migration_persistent_jobs.py`. One new stub: `StubMigrationJobRepository` (~11 methods). Threading test design used `_SyncExecutor` shim (sync drop-in for `ThreadPoolExecutor`) for determinism. Three lessons captured: see CHANGELOG.
+
+**Arc final stats:**
+- 7 sub-ships (v1.7.88 doc, v1.7.89-93b execution)
+- 66.74% → 100.00% on `services/migration.py` (1031 stmts, 358 branches, 0 misses)
+- 6 new stub classes introduced across the arc (`StubFileRepository`, `StubSafetyService`, `StubAuditRepository`, `StubSourceRepository`, `StubMetadataStripper`, `StubMigrationPluginManager`, `StubMigrationJobRepository`) — all reusable across other tests
+- 5 new lessons captured during the arc (#88, #89, #90, #91, #92, #93, #94, #95 — 8 if you count #88 which opened the arc, but #88 is properly attributed to its own ship)
+- ~3300 lines of test code across 6 new test files (test_migration_plan_apply.py, test_migration_execution.py, test_migration_cross_source.py, test_migration_autostrip.py, test_migration_persistent_progress.py, test_migration_persistent_jobs.py)
+
+**`services/migration.py` is now the seventh Phase Gamma module at 100% line + branch.**
