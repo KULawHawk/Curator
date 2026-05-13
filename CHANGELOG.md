@@ -4,6 +4,56 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.187] — 2026-05-13 — Round 4 Tier 2 ship 3: `gui/lineage_view.py` Part 2 + close → **100%**
+
+**`gui/lineage_view.py` closed at 100% line + branch.** Zero pragmas needed (defensive-boundary debt was lower than the Lesson #101 / Doctrine #19 estimate of 2-4 — the module's pure-Python design kept its surface clean).
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `gui/lineage_view.py` | 65.67% (Part 1, 155 stmts + 54 br) | **100.00%** (246 stmts, **54 branches**, 0 missing, 0 partials) |
+
+### What landed
+
+`tests/unit/test_gui_lineage_view_part2_coverage.py` (NEW, 8 tests):
+
+- **`TestFactoryAndInit`** (2) — `_make_lineage_graph_view` deferred-import factory path; `__init__` invokes `refresh` and renders empty state on `is_empty` layout
+- **`TestRefresh`** (4) — argument-less call preserves persisted filter (line 406-407 branch); explicit `max_detected_at` persists; populated scene has expected item count (2 nodes × 2 items + 1 edge × 2 items = 6); **unresolved-edge `continue` branch verified** (line ~455-456 `if not src or not dst: continue`)
+- **`TestClearTimeFilter`** (1) — sets persisted filter to None and re-renders with `max_detected_at=None`
+- **`TestModuleExports`** (1) — all 8 names in `__all__`
+
+### Test infrastructure
+
+- Module-scoped `qapp` fixture (Lesson #98 / Doctrine #16 pattern)
+- `qtbot.addWidget` for cleanup
+- No real `QGraphicsScene` rendering needed — verified via `view._scene.items()` count after `refresh()`
+- `MagicMock` builder + `side_effect` factory to control layout per call
+
+### Pragma audit (per Lesson #99 / Doctrine #17 — arc-close ship)
+
+**Zero pragmas added.** The pragma budget for this module was 2-4 (per Lesson #101 / Doctrine #19). Actual: 0. The module's design — pure-Python builder + thin Qt view — has no defensive boundaries that escape testing. Only 2 existing pragmas remain:
+- `pragma: no cover` on the `except ImportError: NETWORKX_AVAILABLE = False` line (line 35-36) — networkx is installed in the dev/CI env, so the ImportError path is unreachable in tests; intentional pragma already present
+- `pragma: no cover` on the `if TYPE_CHECKING` block (line 38) — standard for type-only imports
+
+Both predate this ship. **The 54 branches are all real-control-flow branches and all 100% covered by tests.**
+
+### Test count
+
+64 tests combined (56 in Part 1 + 8 in Part 2). All pass in <4s.
+
+No source changes. No new lesson — this is the second module Curator has closed at 100% with zero pragmas (the others were the 4 Round 3 Tier 4 signals modules which were also pure-Python after the qapp setup). Validates `docs/GUI_TESTING_STRATEGY.md`'s prediction that small + well-decomposed GUI modules are pragma-light.
+
+### Files
+
+- `tests/unit/test_gui_lineage_view_part2_coverage.py` (NEW, 8 tests, +~180 lines)
+- `docs/GUI_COVERAGE_ARC_SCOPE.md` (status tracker row updated)
+- `docs/releases/v1.7.187.md`
+
+### Next
+
+**v1.7.188** — `gui/models.py` Part 1. The biggest Tier 2 module (774 stmts, 11.35% already incidentally covered).
+
 ## [1.7.186] — 2026-05-13 — Round 4 Tier 2 ship 2: `gui/lineage_view.py` Part 1 (builder + helpers)
 
 Closes the pure-Python surface of `lineage_view.py`: the dataclasses (`GraphNode`, `GraphEdge`, `GraphLayout`), the edge-kind color mapping, and the entire `LineageGraphBuilder` class. Part 2 (v1.7.187) covers the Qt view layer.
