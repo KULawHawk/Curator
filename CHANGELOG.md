@@ -4,6 +4,35 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.182] — 2026-05-13 — Round 4 Tier 1 ship 3: `docs/MUTATION_TESTING_DEFERRED.md`
+
+**Doc-only.** Formalizes the mutation-testing deferral from Lesson #97 / Doctrine #15 as a standalone document (same pattern as `docs/PLATFORM_SCOPE.md` for the Windows-only decision).
+
+### What landed
+
+`docs/MUTATION_TESTING_DEFERRED.md` (NEW, +~145 lines):
+- **Decision** — set aside 2026-05-13, originally attempted v1.7.150
+- **Why deferred** — the math (1,092 mutants on `services/migration.py`, ~8–50 hours per module, multi-week total CPU budget for comprehensive coverage), what v1.7.150 actually tried, the equivalent-mutations problem
+- **What it would take to open the arc** — dedicated scope plan, dedicated CPU resources (nightly CI / weekend job), a triage protocol for survivors, tool re-evaluation (mutmut 2.5.x / cosmic-ray / mutpy / newer)
+- **When to revisit** — 4 signals that would justify opening the arc (real bug through 100% coverage; CI capacity available; Curator approaches v3.0 / wider distribution; security or correctness bug traced to weak test)
+- **See also** — cross-references to the rule, the original killed-run report, the retrospective, the deferred-decisions index, the platform-scope sibling doc
+
+### CLAUDE.md updated
+
+Doctrine #15 (Lesson #97) now points to `docs/MUTATION_TESTING_DEFERRED.md` as the authoritative deferred-state record. The doctrine text is unchanged otherwise.
+
+No source changes. No new lesson.
+
+### Files
+
+- `docs/MUTATION_TESTING_DEFERRED.md` (NEW)
+- `CLAUDE.md` (1-line link added under Doctrine #15)
+- `docs/releases/v1.7.182.md`
+
+### Next
+
+**v1.7.183** — `docs/GUI_TESTING_STRATEGY.md` formalizing Lesson #98 + the big-GUI extension plan.
+
 ## [1.7.181] — 2026-05-13 — Round 4 Tier 1 ship 2: `docs/DEFERRED_DECISIONS.md` index
 
 **Doc-only.** Formalizes the deferred-decision pattern from Lesson #100 / Doctrine #18 as a single project index.

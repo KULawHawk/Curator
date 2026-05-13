@@ -180,7 +180,7 @@ Mutation testing tools (mutmut, cosmic-ray) generate hundreds to thousands of co
 - A triage protocol for survived mutations (categorize: actually-weak-test vs. equivalent-mutation vs. unreachable-code)
 - Multi-day or multi-week budget on dedicated machine resources
 
-**Future:** if mutation testing is desired for Curator, open it as an explicit "Mutation Testing Arc" with its own scope plan, baseline budget estimate (probably 1-2 weeks dedicated), and stop-conditions. Probably better suited to a CI nightly job than to interactive shipping. See `docs/MUTATION_TESTING_DEFERRED.md` for the deferred state.
+**Future:** if mutation testing is desired for Curator, open it as an explicit "Mutation Testing Arc" with its own scope plan, baseline budget estimate (probably 1-2 weeks dedicated), and stop-conditions. Probably better suited to a CI nightly job than to interactive shipping. Full deferred-state record + signals-to-revisit + tool re-evaluation criteria in **[`docs/MUTATION_TESTING_DEFERRED.md`](docs/MUTATION_TESTING_DEFERRED.md)** (v1.7.182).
 
 ### 16. Qt headless testing pattern (Lesson #98 — new from Round 3 retrospective)
 
