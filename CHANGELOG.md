@@ -4,6 +4,52 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.124] — 2026-05-13 — Tier 2 ship 8: `plugins/core/local_source.py` to 100%
+
+Closes 50 uncovered lines + 7 partial branches in `plugins/core/local_source.py` — the local filesystem source plugin.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `plugins/core/local_source.py` | 62.18% | **100.00%** (+37.82%) |
+
+143 statements, 50 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_local_source_coverage.py` (NEW, 26 tests) covering:
+
+- `_matches_ignore` ancestor matching (parent.name + parent.match), basename matching, no-match
+- `_stat_to_file_stat` body
+- `curator_source_enumerate`/`_iter` non-owned + missing-root + directory skip + ignore pattern skip + OSError swallow
+- `curator_source_read_bytes` non-owned + OSError + happy path with offset/length
+- `curator_source_stat` non-owned + OSError + happy path
+- `curator_source_move` non-owned + happy path
+- `curator_source_delete` non-owned + to_trash with send2trash (via fake `sys.modules` injection — send2trash isn't a hard dep) + to_trash ImportError fallback + direct os.remove
+- `curator_source_write` tmpfile cleanup unlink OSError
+- `_owns` DB lookup: source_type match / None / different type / exception swallow
+
+No source changes.
+
+### Notable iteration
+
+One small surprise: `from send2trash import send2trash` in the production code references the **PyPI** send2trash package, not the vendored copy at `curator._vendored.send2trash`. PyPI send2trash isn't installed in this environment, so lines 302-304 (the success path) were unreachable until I injected a fake `send2trash` module via `sys.modules`. The production code intentionally falls back to `os.remove` when send2trash isn't installed; the success-path lines are defensive for users who happen to have the PyPI package present.
+
+### Lesson captured
+
+No new lesson. The `sys.modules[name] = types.ModuleType(name)` pattern for injecting a fake optional-dep module is a small variant of the established `sys.modules[name] = None` ImportError-trigger pattern (v1.7.96 / v1.7.100 / v1.7.102 / v1.7.118). Carry-forward technique noted. Honest logging.
+
+### Files
+
+- `tests/unit/test_local_source_coverage.py` (+~310, new, 26 tests)
+- `docs/PLUGINS_MCP_SWEEP_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.124.md`
+
+### Next
+
+**v1.7.125** — `plugins/core/gdrive_source.py`. The riskiest ship of Tier 2 per the handoff watchpoint; may split into 125a + 125b if PyDrive2 mocking grows beyond 1.5x typical scope.
+
 ## [1.7.123] — 2026-05-13 — Tier 2 ship 7: `config/__init__.py` to 100%
 
 Closes 39 uncovered lines + 10 partial branches in `config/__init__.py` — the biggest config-loader sweep of the arc so far.
