@@ -4,6 +4,57 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.116] — 2026-05-13 — Round 2 Tier 2: scope plan for Plugins + MCP + Config Sweep arc
+
+Doc-only ship opening Tier 2 of Round 2: the Plugins + MCP + Config Sweep arc. 9 modules to take to 100% line + branch across three subsystems (plugin core, MCP server, config loader).
+
+### Scope
+
+| Ship | Module | Handoff prediction |
+|---|---|---|
+| v1.7.117 | `plugins/core/classify_filetype.py` | ~8 lines |
+| v1.7.118 | `plugins/core/lineage_fuzzy_dup.py` | ~17 lines |
+| v1.7.119 | `mcp/middleware.py` | ~5 lines |
+| v1.7.120 | `mcp/auth.py` | ~12 lines |
+| v1.7.121 | `mcp/tools.py` | ~18 lines |
+| v1.7.122 | `mcp/server.py` | ~20 lines |
+| v1.7.123 | `config/__init__.py` | ~39 lines, 10 branch partials |
+| v1.7.124 | `plugins/core/local_source.py` | ~50 lines |
+| v1.7.125 | `plugins/core/gdrive_source.py` | ~72 lines (riskiest; may split) |
+
+### Numbering slide
+
+Tier 2 ship numbers slid down by one from the handoff's predictions because Tier 1 skipped the redundant migration-closure ship (Lesson #93 caught migration.py already at 100% from v1.7.93b). Original handoff had Tier 2 starting at v1.7.117 and ending at v1.7.126; actual is v1.7.116 through v1.7.125.
+
+### Doctrine notes
+
+This is the **fourth multi-ship arc planned under the doctrine** (after Migration Phase Gamma, Coverage Sweep, and Round 2 Tier 1's implicit arc). Lesson #88 in action — scope plans are ships.
+
+Tier 2 has more infrastructure to build than Tier 1 had:
+- **MCP server tests** likely need FastMCP server fixtures + bearer auth scaffolding (new territory, no Round 1 precedent)
+- **gdrive_source.py** needs PyDrive2 mocking; may grow beyond a single ship and trigger Lesson #88's 1.5x split rule
+
+### Watchpoints (per handoff)
+
+- v1.7.125 (gdrive_source) is the riskiest — may split into 125a/125b if mocking architecture is substantial
+- v1.7.123 (config) has 10 branch partials — careful branch-by-branch test design
+- Lesson #93 re-measure step is load-bearing — predicted numbers may drift
+
+### Lesson captured
+
+No new lesson — this is the fourth instance of "scope plan opens a multi-ship arc" (per Lesson #88). Applying a settled pattern for the fourth time is doctrine-in-action, not a new principle. Honest logging.
+
+### Files
+
+- `docs/PLUGINS_MCP_SWEEP_SCOPE.md` (NEW, ~150 lines)
+- `docs/releases/v1.7.116.md` (release notes)
+
+No source changes. No tests added.
+
+### Next
+
+**v1.7.117** — `plugins/core/classify_filetype.py`. First sweep ship of Tier 2.
+
 ## [1.7.115] — 2026-05-13 — Round 2 Tier 1 FINAL: `plugins/core/lineage_filename.py` to 100%
 
 **Final sub-ship of Round 2 Tier 1.** Closes 7 uncovered lines + 4 partial branches in `plugins/core/lineage_filename.py`.
