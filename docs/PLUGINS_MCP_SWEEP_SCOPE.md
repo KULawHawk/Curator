@@ -104,7 +104,9 @@ Restart prompt: *"Resume Plugins + MCP + Config Sweep arc. Open docs/PLUGINS_MCP
 | v1.7.122 | ✅ Closed | `mcp/server.py` | **100.00%** (was 71.05%) | 2026-05-13 |
 | v1.7.123 | ✅ Closed | `config/__init__.py` | **100.00%** (was 61.18%) | 2026-05-13 |
 | v1.7.124 | ✅ Closed | `plugins/core/local_source.py` | **100.00%** (was 62.18%) | 2026-05-13 |
-| v1.7.125 | ⏳ Pending — possible split | `plugins/core/gdrive_source.py` | TBD | TBD |
+| v1.7.125 | ✅ Closed | `plugins/core/gdrive_source.py` | **100.00%** (was 77.69%) | 2026-05-13 |
+
+**ARC COMPLETE.** All 9 modules at 100% line + branch. Single ship (no split needed) — dict-like PyDrive2 file objects made the mocking tractable.
 
 ## Arc-level success criteria
 

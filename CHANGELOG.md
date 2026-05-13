@@ -4,6 +4,56 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.125] — 2026-05-13 — Tier 2 ship 9 (FINAL): `plugins/core/gdrive_source.py` to 100%
+
+Closes 72 uncovered lines + 11 partial branches in `plugins/core/gdrive_source.py` — the Google Drive source plugin. **Plugins + MCP + Config Sweep arc COMPLETE.**
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `plugins/core/gdrive_source.py` | 77.69% | **100.00%** (+22.31%) |
+
+307 statements, 92 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_gdrive_source_coverage.py` (NEW, 47 tests) covering the remaining surface that the existing two test files (`test_gdrive_source.py` + `test_gdrive_source_v151_config_resolution.py`) hadn't reached:
+
+- `_pydrive2_available` ImportError fallback (force ImportError via `sys.modules['pydrive2'] = None`)
+- `_build_drive_client` — the full body via injected fake `pydrive2.auth` + `pydrive2.drive` modules. Covers: missing config keys, no-credentials RuntimeError, access-token-expired (Refresh+Save), fresh-token (Authorize) branches
+- `_drive_file_to_file_info` / `_drive_file_to_file_stat` size-parse error arms (ValueError, TypeError, native-mime size-zero)
+- Every hookimpl's "client is None" short-circuit (via `monkeypatch.setattr(plugin, "_resolve_config", lambda *_: None)` → `_get_or_build_client` returns None)
+- `_iter_folder` ListFile exception arm — first folder explodes, BFS continues with empty result
+- `stat` / `read_bytes` / `delete` broad-except arms via an `_ExplodingDriveClient` whose CreateFile returns a MagicMock with all methods raising
+- `curator_source_rename` — every branch: non-owned, client-None, FetchMetadata failure, overwrite=False+collider raises `FileExistsError`, sibling query failure treated as no-colliders, self-id excluded from collision check, overwrite=True trashes colliders, overwrite=True collider-trash failure logged+continues, overwrite=True sibling-query failure logged+continues, Upload failure raises, and the **self-skip branch in the overwrite trash loop** (545->544 partial — the collider-id matches file_id)
+- `curator_source_write` — existence-check failure treated as no-existing, overwrite=True + existing-trash failure logged+continues, overwrite=False + collider raises `FileExistsError`, Upload failure wraps in RuntimeError
+- `_owns` DB-lookup arms: source matches → True, source None → False, source has different type → False, DB raises → False (defensive boundary)
+- `_get_or_build_client` exception branches for all three caught exception types (ImportError, FileNotFoundError, RuntimeError)
+- `_resolve_config` exception arms: source_repo.get raises (caught, falls through), disk-fallback `source_config_for_alias` raises (caught, returns None), and the bottom `return None` when the disk config lacks `client_secrets_path`
+
+No source changes. All 47 tests passed on first run; coverage diff after the first measurement showed two remaining branches (line 426 = delete non-owned-source short-circuit; 545->544 = rename overwrite-trash skip-self), added two more tests to close them. Final: 100% line + branch.
+
+### Notable iteration
+
+The mocking architecture turned out to be tractable as a single ship rather than the predicted split (v1.7.125a infrastructure + v1.7.125b coverage). The decisive insight: PyDrive2's `GoogleDriveFile` is a `dict` subclass with method attachments (`.Trash`, `.Upload`, `.FetchMetadata`, `.GetContentString`). A bare dict subclass or a configured `MagicMock` whose `__getitem__`/`get` map to a real metadata dict suffices. No PyDrive2 import is needed for the per-hook tests; `Plugin.set_drive_client()` from the existing test file is enough to inject mocks. Only `_build_drive_client` itself required the `sys.modules` shim (and even there, the shim is two `types.ModuleType` instances with two class attributes).
+
+Sub-ship at 47 tests is on the high end for this arc (compare 26 for local_source, 29 for config) but the modules are 307 vs 143 / 118 statements — proportional. Scope did NOT exceed 1.5x typical so Lesson #88 split criterion didn't trigger.
+
+### Lesson captured
+
+No new lesson. The patterns deployed are all settled: `sys.modules[name] = None` for ImportError; `sys.modules[name] = types.ModuleType(name)` with attached attributes for fake module injection (carries forward from v1.7.124); MagicMock with `__getitem__.side_effect = real_dict.__getitem__` to mimic dict-like API objects; `monkeypatch.setattr(plugin, "_resolve_config", lambda *_: None)` to short-circuit deep dependency chains. Honest logging.
+
+### Files
+
+- `tests/unit/test_gdrive_source_coverage.py` (+~580, new, 47 tests)
+- `docs/PLUGINS_MCP_SWEEP_SCOPE.md` (+1 line, tracker close)
+- `docs/releases/v1.7.125.md`
+
+### Next
+
+**Tier 2 closed.** 9 of 9 sub-ships complete; all 9 modules at 100% line + branch. Reporting in to Jake before opening Tier 3 (Storage Repositories Sweep).
+
 ## [1.7.124] — 2026-05-13 — Tier 2 ship 8: `plugins/core/local_source.py` to 100%
 
 Closes 50 uncovered lines + 7 partial branches in `plugins/core/local_source.py` — the local filesystem source plugin.
