@@ -4,6 +4,49 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.161] — 2026-05-13 — Round 3 Tier 3 ship 7: `cli/main.py` `watch`
+
+Closes ~52 uncovered lines in the `watch` command.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 36.78% | **39.59%** (+2.81%) |
+
+### What landed
+
+`tests/unit/test_cli_watch_coverage.py` (NEW, 13 tests):
+- Import-error (force `curator.services.watch` import failure)
+- WatchUnavailableError (exit 2)
+- NoLocalSourcesError (exit 1)
+- Human output (3 event kinds)
+- JSON-lines output
+- --apply triggers scan_paths + report counters
+- --apply scan_paths exception logged + continues
+- --apply with errors counter in report
+- KeyboardInterrupt graceful exit (human mode)
+- KeyboardInterrupt in JSON mode (skips "watch ended" message)
+- --apply with files_deleted + edges suffix (line 1624 + 1626)
+- --apply JSON mode skips suffix print (branch 1617->1592)
+- --apply with empty suffix skips print (branch 1629->1592)
+
+### Notable iteration
+
+KeyboardInterrupt test initially failed (exit code 130) because the stub generator without any `yield` is parsed by Python as a regular function — the raise fires at `service.watch()` call time, outside the inner try block. Fixed by yielding one event before raising, so the KeyboardInterrupt fires inside the for-loop iteration where it can be caught.
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_cli_watch_coverage.py` (+~270, new, 13 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.161.md`
+
+### Next
+
+**v1.7.162** — `doctor` + `safety_app` (~145 lines).
+
 ## [1.7.160] — 2026-05-13 — Round 3 Tier 3 ship 6: `cli/main.py` `audit`
 
 Closes ~30 uncovered lines in the `audit` command.

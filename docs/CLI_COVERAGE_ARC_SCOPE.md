@@ -176,7 +176,7 @@ Restart prompt: *"Resume CLI Coverage Arc. Open docs/CLI_COVERAGE_ARC_SCOPE.md, 
 | v1.7.158b | ✅ Closed | `sources_app` config subcommand + `_parse_set_value` | cli/main.py: 28.76% → 33.12% | 2026-05-13 |
 | v1.7.159 | ✅ Closed | `trash` + `restore` | cli/main.py: 33.12% → 35.16% | 2026-05-13 |
 | v1.7.160 | ✅ Closed | `audit` | cli/main.py: 35.16% → 36.78% | 2026-05-13 |
-| v1.7.161 | ⏳ Pending | `watch` | TBD | TBD |
+| v1.7.161 | ✅ Closed | `watch` | cli/main.py: 36.78% → 39.59% | 2026-05-13 |
 | v1.7.162 | ⏳ Pending | `doctor` + `safety_app` | TBD | TBD |
 | v1.7.163 | ⏳ Pending | `organize` + `organize-revert` | TBD | TBD |
 | v1.7.164 | ⏳ Pending | `cleanup_app` | TBD | TBD |
