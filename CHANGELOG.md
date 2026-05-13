@@ -4,6 +4,46 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.156] — 2026-05-13 — Round 3 Tier 3 ship 2: `cli/main.py` `scan` + `group` + `lineage`
+
+Second Tier 3 sub-ship of the CLI Coverage Arc. Closes ~90 uncovered lines across 3 top-level commands.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 14.05% | **19.19%** (+5.14%) |
+
+1863 statements, 23 partial branches remaining (was 27 — 4 partials closed too).
+
+### What landed
+
+`tests/unit/test_cli_scan_group_lineage_coverage.py` (NEW, 25 tests):
+- **scan**: nonexistent-path error, human output table, JSON output payload, error-row branch via stubbed `ScanService.scan` with `errors=2`, ignore-options forwarding
+- **`_pick_primary`**: oldest / newest / shortest_path / longest_path / invalid (raises typer.BadParameter)
+- **group**: empty (human + JSON), dry-run (human + JSON), apply (verifies `TrashService.send_to_trash` called), trash-error caught + logged, edges-with-missing-hash skipped (line 448), groups-with-only-one-live-file skipped after is_deleted filter (line 466)
+- **lineage**: no-match error, human with edges (both directions), human no-edges, JSON, CSV with header, CSV --no-header, CSV --csv-dialect tsv
+
+### Notable iteration
+
+One first-try assertion needed relaxing: `test_apply_calls_trash` initially asserted specific files b + c were trashed, but `_pick_primary` over equal-length paths uses Python set iteration order (non-deterministic). Relaxed to `len(sent) == 2 and trashed_ids.issubset(all_ids)`.
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. The "monkeypatch the service method to stub the report" pattern (used for `ScanService.scan` and `TrashService.send_to_trash`) is the same pattern as v1.7.150's mutmut-monkeypatching but applied to CLI integration tests — settled idiom.
+
+### Files
+
+- `tests/unit/test_cli_scan_group_lineage_coverage.py` (+~410, new, 25 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.156.md`
+
+### Next
+
+**v1.7.157** — `bundles_app` (4 subcommands: list/show/create/dissolve, ~150 lines).
+
 ## [1.7.155] — 2026-05-13 — Round 3 Tier 3 ship 1: `cli/main.py` top-level setup + helpers + `inspect`
 
 First Tier 3 sub-ship of the CLI Coverage Arc. Closes ~75 uncovered lines + finds and pragma's a real bug.
