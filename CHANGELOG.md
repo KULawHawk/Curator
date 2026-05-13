@@ -4,6 +4,61 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.179] — 2026-05-13 — Round 3 Tier 4 ship 4 (FINAL): `gui/cleanup_signals.py` to 100%
+
+**FINAL Tier 4 ship. FINAL Round 3 ship.** Closes 94 statements + 8 branches across two bridges and four QThread workers.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `gui/cleanup_signals.py` | 0.00% | **100.00%** (94 stmts, 8 branches) |
+
+### What landed
+
+`tests/unit/test_gui_cleanup_signals_coverage.py` (NEW, 15 tests):
+- **GroupProgressBridge**: 6 signals (find_started/completed/failed + apply_started/completed/failed) — emit + deliver
+- **CleanupProgressBridge**: same 6-signal shape — attribute existence verified
+- **GroupFindWorker.run()**: success path (find_duplicates → started + completed); failure path (find_duplicates raises → started + failed)
+- **GroupApplyWorker.run()**: success path (apply returns → started + completed with findings count); failure path
+- **CleanupFindWorker**: __init__ rejects unknown mode (`ValueError("unknown mode")`); mode dispatch covers `junk` (find_junk_files w/ patterns), `empty_dirs` (find_empty_dirs w/ ignore_system_junk), `broken_symlinks` (find_broken_symlinks); defensive unreachable branch covered by mutating `_mode` post-construction; failure path emits find_failed
+- **CleanupApplyWorker.run()**: success + failure paths
+- `__all__` exports all 6 classes
+
+Test infrastructure: module-scoped `qapp` fixture (carried from v1.7.177–178). `worker.run()` called directly for synchronous testing.
+
+No source changes. No new lesson.
+
+### Round 3 close-out
+
+This ship closes Round 3. 34 ships total across Tier 1 (6), Tier 2 (3), Tier 3 (21), Tier 4 (4).
+
+| Tier | Scope | Ships | Status |
+|---|---|---|---|
+| 1 | Stabilization (migration measurement, README badge, Dependabot pip, constellation, mutation report, v2.0 draft) | 6 | ✅ |
+| 2 | CLI Coverage Arc kickoff (scope + cli/mcp_keys + cli/mcp_orphans) | 3 | ✅ |
+| 3 | cli/main.py decomposition by command group (10.73% → 99.43%) | 21 | ✅ |
+| 4 | GUI signals (launcher + migrate_signals + scan_signals + cleanup_signals) | 4 | ✅ |
+
+**Coverage today vs Round 2 close:**
+- `cli/main.py`: 10.73% → 99.43% (+88.70%)
+- `cli/mcp_keys.py`: 78.11% → 100.00%
+- `cli/mcp_orphans.py`: 64.84% → 100.00%
+- `gui/launcher.py`: 0% → 100%
+- `gui/migrate_signals.py`: 0% → 100%
+- `gui/scan_signals.py`: 0% → 100%
+- `gui/cleanup_signals.py`: 0% → 100%
+- `services/migration.py`: 99.71% → 100.00% (Tier 1 closure)
+
+**Zero new numbered lessons** in Round 3 — doctrine at saturation. Lessons #79–95 carried the entire arc.
+
+**Deferred to Jake:** dead `_resolve_file` duplicate at `cli/main.py` lines 187–216 (3 options pragma'd: delete / merge feature / fix docstring).
+
+### Files
+
+- `tests/unit/test_gui_cleanup_signals_coverage.py` (+~340, new, 15 tests)
+- `docs/releases/v1.7.179.md`
+
 ## [1.7.178] — 2026-05-13 — Round 3 Tier 4 ship 3: `gui/scan_signals.py` to 100%
 
 Closes 25 statements covering ScanProgressBridge (4 signals) + ScanWorker (QThread wrapper around ScanService.scan).
