@@ -4,6 +4,66 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.153] — 2026-05-13 — Round 3 Tier 2 ship 2: `cli/mcp_keys.py` to 100%
+
+Closes 25 uncovered lines + 4 partial branches in `cli/mcp_keys.py`. First test-writing ship of the CLI Coverage Arc — establishes the CliRunner + isolated_keys_dir + monkeypatch fixture pattern that will propagate through Tier 3.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/mcp_keys.py` | 78.11% | **100.00%** (+21.89%) |
+
+131 statements, 38 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_cli_mcp_keys_coverage.py` (NEW, 13 tests). Existing `test_mcp_keys_cli.py` covered happy paths + human-output error messages. This ship adds:
+
+- **JSON-output error paths** for `generate` (duplicate_name), `revoke` (not_found, happy-path JSON), `show` (not_found)
+- **KeyFileError handlers** across all 4 commands (`generate`/`list`/`revoke`/`show`) via `monkeypatch.setattr` on `add_key` or `load_keys` to raise — both human + JSON output variants
+- **Defensive `removed=False` branch** in `revoke` (covers the post-existing-check race window): monkeypatch `remove_key` to return False after the existing-check passed
+
+No source changes.
+
+### Pattern established for the rest of the arc
+
+```python
+from typer.testing import CliRunner
+from curator.cli.main import app
+
+@pytest.fixture
+def runner():
+    return CliRunner()
+
+@pytest.fixture
+def isolated_keys_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("CURATOR_HOME", str(tmp_path))
+    return tmp_path / "mcp" / KEYS_FILE_NAME
+
+# Test:
+result = runner.invoke(app, ["--json", "mcp", "keys", "generate", "name"])
+assert result.exit_code == 0
+combined = result.stdout + (result.stderr or "")  # channel-agnostic
+assert '"ok": true' in combined
+```
+
+The CliRunner + `result.stdout + result.stderr` pattern is the channel-agnostic norm — modern Typer/Click splits stdout/stderr separately, so output assertions must combine them.
+
+### Lesson captured
+
+No new lesson — the test pattern is settled doctrine for CLI testing. The JSON-vs-human output mode split per command is real and previewed in the scope plan; this ship validates the test pattern handles both cleanly.
+
+### Files
+
+- `tests/unit/test_cli_mcp_keys_coverage.py` (+~205, new, 13 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.153.md`
+
+### Next
+
+**v1.7.154** — `cli/mcp_orphans.py` to 100%. Final Tier 2 ship.
+
 ## [1.7.152] — 2026-05-13 — Round 3 Tier 2 ship 1: CLI Coverage Arc scope plan
 
 Opens the CLI Coverage Arc — the final non-GUI coverage push toward v2.0. Scope plan only — no source or test changes.

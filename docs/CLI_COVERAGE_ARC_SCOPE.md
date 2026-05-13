@@ -165,7 +165,7 @@ Restart prompt: *"Resume CLI Coverage Arc. Open docs/CLI_COVERAGE_ARC_SCOPE.md, 
 | Sub-ship | Status | Module/scope | Final coverage | Date |
 |---|---|---|---|---|
 | v1.7.152 | ✅ This scope plan | — | n/a (doc-only) | 2026-05-13 |
-| v1.7.153 | ⏳ Pending | `cli/mcp_keys.py` | TBD | TBD |
+| v1.7.153 | ✅ Closed | `cli/mcp_keys.py` | **100.00%** (was 78.11%) | 2026-05-13 |
 | v1.7.154 | ⏳ Pending | `cli/mcp_orphans.py` | TBD | TBD |
 | v1.7.155 | ⏳ Pending | Top-level setup + `inspect` | TBD | TBD |
 | v1.7.156 | ⏳ Pending | `scan` + `group` + `lineage` | TBD | TBD |
