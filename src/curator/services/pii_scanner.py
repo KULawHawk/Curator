@@ -757,14 +757,12 @@ class PIIScanner:
                 error=f"{type(e).__name__}: {e}",
             )
 
-        try:
-            text = raw.decode("utf-8", errors="replace")
-        except Exception as e:  # noqa: BLE001 -- should be impossible w/ errors=replace
-            return PIIScanReport(
-                source=str(p),
-                bytes_scanned=len(raw), truncated=truncated,
-                error=f"Decode failed: {type(e).__name__}: {e}",
-            )
+        # Per Python's documented behavior, `bytes.decode("utf-8",
+        # errors="replace")` is total — it never raises UnicodeError;
+        # invalid sequences are replaced with U+FFFD. The defensive
+        # try/except that used to surround this call was provably
+        # unreachable and has been removed (v1.7.99).
+        text = raw.decode("utf-8", errors="replace")
 
         # Reuse scan_text but override source label and truncation flag
         rpt = self.scan_text(text, source=str(p))

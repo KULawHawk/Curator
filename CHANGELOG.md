@@ -4,6 +4,42 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.99] — 2026-05-13 — Coverage Sweep 5/12: `services/pii_scanner.py` to 100%
+
+Sub-ship 5 of the Coverage Sweep arc. Closes 5 uncovered lines + 1 partial branch in `services/pii_scanner.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/pii_scanner.py` | 97.94% | **100.00%** (+2.06%) |
+
+208 statements, 80 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_pii_scanner_coverage.py` (NEW, 2 tests):
+
+1. `test_parse_jwt_non_dict_payload_returns_none` — covers line 471 (the `isinstance(..., dict)` defensive return in `_parse_jwt`). Builds a syntactically valid JWT where the payload base64-decodes to a JSON array `[1,2,3]` instead of a dict.
+
+2. `test_scan_file_read_oserror_returns_report_with_error` — covers lines 752-758 (the `except Exception` around file read/stat). Patches `curator.services.pii_scanner.open` to raise OSError; the scanner returns a `PIIScanReport` with the error message instead of letting the exception propagate.
+
+**Small source refactor in `services/pii_scanner.py`:** the `try/except` around `raw.decode("utf-8", errors="replace")` (formerly lines 760-767) was provably unreachable per Python's documented behavior — `bytes.decode("utf-8", errors="replace")` is total (never raises UnicodeError; invalid sequences become U+FFFD). Removed the guard with an explanatory comment, same pattern as v1.7.95's `forecast.py` refactor. The source-side comment had already noted "should be impossible w/ errors=replace" — that author note + doctrine item 1 made the decision easy.
+
+### Lesson captured
+
+No new lesson this ship. The two patterns (refactor unreachable defensive code per doctrine item 1; patch module-level `open` to simulate I/O failure) are both well-established. Honest logging.
+
+### Files
+
+- `tests/unit/test_pii_scanner_coverage.py` (+~75, new, 2 tests)
+- `src/curator/services/pii_scanner.py` (+5 / -8, dead-guard removal + explanatory comment)
+- `docs/COVERAGE_SWEEP_SCOPE.md` (+1 line)
+
+### Next
+
+**v1.7.100** — `services/music.py`. Handoff: ~20 min, 6 lines. **🎉 100-ship milestone.**
+
 ## [1.7.98] — 2026-05-13 — Coverage Sweep 4/12: `services/audit.py` to 100%
 
 Sub-ship 4 of the Coverage Sweep arc. Closes lines 83-87 in `services/audit.py` — the entire body of `AuditService.insert(entry)`, an alternate API path for pre-built `AuditEntry` instances that no existing test exercised.
