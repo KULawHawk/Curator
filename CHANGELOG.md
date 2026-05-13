@@ -4,6 +4,46 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.200] — 2026-05-13 — Round 5 Tier 1 ship 2: `BundleEditorDialog`
+
+Closes the bundle create/edit modal — dual-list widget (Available files | In bundle), primary-member star indicator, filter inputs, and validation flow.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `gui/dialogs.py` | 29.63% | **39.20%** (+209 stmts) |
+
+### What landed
+
+`tests/unit/test_gui_dialogs_bundle_editor_coverage.py` (NEW, 34 tests):
+
+- **TestBundleEditorConstruction** (6) — create mode basic / with files / file query exception; edit mode with existing bundle / bundle with no name / get_memberships exception
+- **TestStaticHelpers** (7) — `_basename_for_sort` (forward/back/none); `_format_file_label` (short parent / long parent → `.../path/path` / no separator / backslash normalized)
+- **TestListManipulation** (5) — `_move_selected_to_bundle` happy + noop; `_move_selected_from_bundle` happy + noop; moving primary clears state
+- **TestPrimaryHandling** (3) — no selection → info dialog; multiple selection → info dialog; single selection sets primary + star prefix
+- **TestFiltering** (3) — available + bundle refilter hide non-matching; empty query shows all
+- **TestAcceptFlow** (7) — empty name → warning; no members → warning; happy path; explicit primary; primary not in members → first; empty description → None; edit mode → existing_bundle_id
+- **TestGetResultBeforeAccept** (1) — returns None before accept
+- **TestDoubleClickIntegration** (2) — handler delegation
+
+### Test infrastructure
+
+- `silence_qmessagebox` fixture stubs `QMessageBox.{information, warning, critical, question}`
+- `_make_file` / `_make_bundle` / `_make_membership` / `_make_runtime` factories
+- Item data accessed via Qt.ItemDataRole.UserRole = 0x100 / UserRole+1 = 0x101 (numeric values used in tests to avoid Qt enum dependency in assertions)
+
+### Files
+
+- `tests/unit/test_gui_dialogs_bundle_editor_coverage.py` (NEW, 34 tests, +~430 lines)
+- `docs/releases/v1.7.200.md`
+
+No source changes. No new lesson.
+
+### Next
+
+**v1.7.201** — `HealthCheckDialog` (medium, ~280 stmts; the diagnostic dialog with 8 internal health checks).
+
 ## [1.7.199] — 2026-05-13 — Round 5 Tier 1 ship 1: `VersionStackDialog` + `ScanDialog`
 
 **Round 5 begins.** Closes `VersionStackDialog` (read-only viewer) and `ScanDialog` (worker-spawning dialog). Pre-flight `del`-cleanup audit clean (only the v1.7.197 corrective `del cls.job_id` remains, which is the canonical pattern).
