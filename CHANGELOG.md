@@ -4,6 +4,67 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.194] — 2026-05-13 — Round 4 Tier 3 ship 4: `gui/main_window.py` Part 4 (context menus + trash/restore/bundle slots)
+
+Covers the remaining slot surface: context menus + their dispatches; `_slot_trash/restore/dissolve/inspect/bundle_*` slots; `_perform_*` helpers; bundle create/edit + `_reset_primary`; `_show_result_dialog`.
+
+### Coverage delta
+
+| Module | Before (Part 3) | After Part 4 |
+|---|---|---|
+| `gui/main_window.py` | 78.53% | **99.54%** (1089 stmts, **0 missing lines**, 6 partial branches) |
+
+**+228 new statements covered. Zero missing lines.** The 6 partial branches are defensive-boundary residue — perfect targets for v1.7.195's pragma audit.
+
+### What landed
+
+`tests/unit/test_gui_main_window_part4_coverage.py` (NEW, 65 tests):
+
+**Selection slots + inspect (10 tests):**
+- `TestSelectionSlots` (8) — 4 slot pairs (trash/restore/dissolve/bundle-edit) × no-selection + with-selection
+- `TestSlotInspectAtIndex` (3) — invalid index / None file / valid index opens dialog
+- `TestOpenInspectDialog` (1) — stubbed FileInspectDialog construction
+
+**Trash / restore / dissolve at row (10 tests):**
+- `TestSlotTrashAtRow` / `TestSlotRestoreAtRow` / `TestSlotDissolveAtRow` (3 each) — None entity / user cancels / user confirms; plus '(unnamed)' bundle dialog text
+
+**`_perform_*` helpers (9 tests):**
+- `TestPerformTrash` (2) — happy / exception
+- `TestPerformRestore` (3) — happy / generic exception / **RestoreImpossibleError special-case message**
+- `TestPerformDissolve` (2) — happy / exception
+
+**Bundle slots (15 tests):**
+- `TestSlotBundleNew` (2) — user cancels / accepts
+- `TestSlotBundleEditAtRow` (3) — None bundle / cancel / accept
+- `TestOpenBundleEditor` (2) — accepted returns result / cancelled returns None
+- `TestPerformBundleCreate` (2) — happy / exception
+- `TestPerformBundleApplyEdits` (5) — no longer exists / name changed → repo.update / metadata unchanged → no update / membership diff add+remove / exception
+- `TestResetPrimary` (3) — None primary_id / primary not in members / happy path
+
+**Result dialog + context menus (21 tests):**
+- `TestShowResultDialog` (2) — success → information; failure → warning
+- `TestContextMenus` (3) — invalid-index early-returns
+- `TestBrowserContextMenuDispatch` (2) — pick Inspect / pick Trash
+- `TestTrashContextMenuDispatch` (1) — pick Restore
+- `TestBundlesContextMenuDispatch` (4) — New (no row); Edit / Dissolve on valid row; dismissed → no action
+- `TestMigrateContextMenuDispatch` (3) — Abort on running; Resume on cancelled; valid index but None job → early return
+- `TestSourceContextMenuDispatch` (3) — no item / no SID item / dismissed; **Sources tab missing → warning (line 1320 defensive boundary)**
+
+### Pattern: QMenu dispatch stubbing
+
+The `_stub_menu_picking(monkeypatch, picked_idx)` helper replaces `QMenu` with a stub that records actions added and makes `exec()` return the action at `picked_idx` (or `None` for dismissed). Reused across all 5 context-menu dispatch test classes. Covers every chosen-action branch without an event loop.
+
+### Files
+
+- `tests/unit/test_gui_main_window_part4_coverage.py` (NEW, 65 tests, +~700 lines)
+- `docs/releases/v1.7.194.md`
+
+No source changes. No new lesson.
+
+### Next
+
+**v1.7.195** — Pragma audit close. The 6 remaining partial branches (490→488, 547→exit, 974→976, 1613→1617, 1647→exit, 1657→exit) are all defensive boundaries. Annotate with documented justifications per Lesson #91, close at **100% line + branch**.
+
 ## [1.7.193] — 2026-05-13 — Round 4 Tier 3 ship 3: `gui/main_window.py` Part 3 (migrate + sources slots) + 🐛 bug fix
 
 Covers the migrate-tab slot handlers and the sources-tab slot handlers. **Also fixes a real bug surfaced by coverage work** per the partnership directive.
