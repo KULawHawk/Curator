@@ -4,6 +4,38 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.117] — 2026-05-13 — Tier 2 ship 1: `plugins/core/classify_filetype.py` to 100%
+
+First sweep ship of Tier 2's Plugins + MCP + Config arc. Closes 8 uncovered lines + 4 partial branches in `plugins/core/classify_filetype.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `plugins/core/classify_filetype.py` | 66.67% | **100.00%** (+33.33%) |
+
+28 statements, 8 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_classify_filetype_coverage.py` (NEW, 8 tests) — covers every branch of `curator_classify_file`: non-local source, filetype ImportError, path-doesn't-exist, filetype.guess Exception, magic-byte happy path (with and without extension), text-extension fallback, unknown-extension None.
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. Settled patterns (sys.modules sentinel for optional-dep import, SimpleNamespace for fake Kind objects, monkeypatching module-level imports). Honest logging.
+
+### Files
+
+- `tests/unit/test_classify_filetype_coverage.py` (+~130, new, 8 tests)
+- `docs/PLUGINS_MCP_SWEEP_SCOPE.md` (+1 line tracker update)
+- `docs/releases/v1.7.117.md`
+
+### Next
+
+**v1.7.118** — `plugins/core/lineage_fuzzy_dup.py`.
+
 ## [1.7.116] — 2026-05-13 — Round 2 Tier 2: scope plan for Plugins + MCP + Config Sweep arc
 
 Doc-only ship opening Tier 2 of Round 2: the Plugins + MCP + Config Sweep arc. 9 modules to take to 100% line + branch across three subsystems (plugin core, MCP server, config loader).
