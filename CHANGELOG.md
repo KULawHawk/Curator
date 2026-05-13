@@ -4,6 +4,38 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.160] — 2026-05-13 — Round 3 Tier 3 ship 6: `cli/main.py` `audit`
+
+Closes ~30 uncovered lines in the `audit` command.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 35.16% | **36.78%** (+1.62%) |
+
+### What landed
+
+`tests/unit/test_cli_audit_coverage.py` (NEW, 12 tests):
+- Empty + human-with-entries
+- Singular count for 1 entry ("1 audit entry" vs "N audit entries")
+- JSON output
+- Filter by `--actor`, `--action`, `--since-hours`, `--limit`
+- CSV output (header / no-header / tsv)
+- Entry without entity_type/entity_id renders empty cell
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_cli_audit_coverage.py` (+~205, new, 12 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.160.md`
+
+### Next
+
+**v1.7.161** — `watch` command (~80 lines).
+
 ## [1.7.159] — 2026-05-13 — Round 3 Tier 3 ship 5: `cli/main.py` `trash` + `restore`
 
 Closes ~43 uncovered lines across the trash + restore commands.
