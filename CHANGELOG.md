@@ -4,6 +4,55 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.154] — 2026-05-13 — Round 3 Tier 2 ship 3 (FINAL): `cli/mcp_orphans.py` to 100%
+
+Final Tier 2 ship — CLI Coverage Arc kickoff complete. Closes 54 uncovered lines + 2 partial branches.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/mcp_orphans.py` | 64.84% | **100.00%** (+35.16%) |
+
+142 statements, 40 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_cli_mcp_orphans_coverage.py` (NEW, 13 tests). Existing `test_mcp_orphans.py` covered pure helpers + Typer command via monkeypatched enumerate/kill helpers. This ship adds:
+
+- **`_enumerate_curator_mcp_processes` body coverage** (lines 63-109) via a custom `_FakeProc` class + `_build_fake_psutil` helper that constructs a fake `psutil` module via `sys.modules[name] = types.ModuleType(name)` (carry-forward from v1.7.124's pattern). Tests: ImportError + happy enumeration with filtering + parent NoSuchProcess + parent AccessDenied + process_iter loop body NoSuchProcess skip.
+- **`_kill_orphans` body coverage** (lines 181-207) via MagicMock-based `psutil.Process` substitution with side_effects on terminate/wait/kill. Tests: graceful terminate succeeds; TimeoutExpired falls back to kill; kill also timing out marks failure; NoSuchProcess counted as idempotently killed; AccessDenied marks failure; generic Exception marks failure.
+- **Command-level lines 279 + 310** — JSON mode + empty-orphans returns after JSON emit (line 279); JSON mode + kill emits killed payload (line 310).
+
+No source changes.
+
+### Notable iteration
+
+The `_FakeProc` + `_build_fake_psutil(...)` factory pattern is the carry-forward of v1.7.124/125's sys.modules-based fake-module injection (used for `send2trash` and `pydrive2.auth/drive`). The same shape works for psutil — establishing this pattern locks in another reusable fake-module idiom for the Lesson #91 defensive-boundary catalog.
+
+### Lesson captured
+
+No new lesson. The fake-module-via-sys.modules pattern is now used in 3 places (`send2trash`, `pydrive2`, `psutil`) — settled idiom.
+
+### Files
+
+- `tests/unit/test_cli_mcp_orphans_coverage.py` (+~285, new, 13 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line, tracker + Tier 2 CLOSE marker)
+- `docs/releases/v1.7.154.md`
+
+### Tier 2 (CLI Coverage Arc Kickoff) CLOSED
+
+All 3 Tier 2 ships landed:
+- ✅ v1.7.152 — CLI Coverage Arc scope plan (23-25 ships projected)
+- ✅ v1.7.153 — cli/mcp_keys.py to 100% (78.11% → 100%, 13 tests)
+- ✅ v1.7.154 — cli/mcp_orphans.py to 100% (64.84% → 100%, 13 tests)
+
+**154 ships total** (was 151). **57 modules at 100% line + branch** (was 55, +2). CLI testing patterns validated: CliRunner + isolated_keys_dir + monkeypatch.setattr + sys.modules fake-module injection. Ready for Tier 3 (cli/main.py decomposition).
+
+### Next
+
+**Tier 3** — `cli/main.py` decomposition by Click command group (20-22 sub-ships v1.7.155-175). First sub-ship: top-level setup + helpers + `inspect` (predicted ~120 uncovered lines).
+
 ## [1.7.153] — 2026-05-13 — Round 3 Tier 2 ship 2: `cli/mcp_keys.py` to 100%
 
 Closes 25 uncovered lines + 4 partial branches in `cli/mcp_keys.py`. First test-writing ship of the CLI Coverage Arc — establishes the CliRunner + isolated_keys_dir + monkeypatch fixture pattern that will propagate through Tier 3.
