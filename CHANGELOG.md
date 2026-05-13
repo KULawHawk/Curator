@@ -4,6 +4,68 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.193] — 2026-05-13 — Round 4 Tier 3 ship 3: `gui/main_window.py` Part 3 (migrate + sources slots) + 🐛 bug fix
+
+Covers the migrate-tab slot handlers and the sources-tab slot handlers. **Also fixes a real bug surfaced by coverage work** per the partnership directive.
+
+### 🐛 Bug fix: missing `QDialog` import
+
+`_slot_source_add` at line 1164 referenced `QDialog.DialogCode.Accepted` but **`QDialog` was not imported** at the top of `main_window.py` (the imports block lines 44-57 omitted it). Whenever a user successfully closed `SourceAddDialog` with OK, this would have raised `NameError: name 'QDialog' is not defined`.
+
+**One-line fix:** added `QDialog` to the `from PySide6.QtWidgets import (...)` block. Behavior now matches the documented contract.
+
+This is **Lesson #100 / Doctrine #18 in action** — coverage work surfaced a latent bug. The fix wasn't deferred because the choice was mechanical (add the missing import), not a judgment call. Documented loudly in this entry per the partnership directive.
+
+**Likely never triggered in practice** because the `SourceAddDialog` flow requires navigating Tools → Sources Manager tab pivot → Add source... button → complete dialog → click OK. Most users probably use the CLI (`curator sources add`) instead. Static analysis (`ruff`, `pyflakes`) did not flag the missing reference — likely because `QDialog` is used inside a method body, not at module scope.
+
+### Coverage delta
+
+| Module | Before (Part 2) | After Part 3 |
+|---|---|---|
+| `gui/main_window.py` | 61.54% (722 stmts) | **78.53%** (889 stmts covered, 6 partial branches) |
+
++167 new statements covered. Remaining 200 lines are exactly the Part 4 territory (context menus + trash/restore/inspect/dissolve/bundle slots + their `_perform_*` helpers + `_show_result_dialog`).
+
+### What landed
+
+`tests/unit/test_gui_main_window_part3_coverage.py` (NEW, 51 tests):
+
+**Migrate slots (8 test classes, 27 tests):**
+- `TestMigrateJobSelected` (3) — no selection clears progress; valid selection populates progress + label; `job_at` returning None
+- `TestMigrateRefresh` (4) — no prior selection; restores selection on same job; falls through when job vanishes; `job_at` returning None
+- `TestMigrateContextMenu` (2) — invalid position returns; valid position but None job returns
+- `TestMigrateAbortAtRow` (3) — None job; user cancels; user confirms
+- `TestPerformMigrateAbort` (2) — happy path + exception
+- `TestMigrateResumeAtRow` (3) — None job; user cancels; user confirms
+- `TestPerformMigrateResume` (5) — status query exception / already running / already completed / happy path (thread spawn) / exception in worker runner / _migrate_resume_threads init when missing
+- `TestMigrateApplyProgressUpdate` (7) — defensive returns when models missing / jobs refresh exception / job_id mismatch / job_id match / progress refresh exception / get_job_id exception
+
+**Sources slots (4 test classes, 24 tests):**
+- `TestRefreshSourcesTable` (4) — populates / list_all exception / count exception / no created_at
+- `TestSourceSlots` (2) — `_slot_source_refresh`; `_slot_open_sources_tab` pivots correctly
+- `TestSlotSourceAdd` (3) — import error / **happy path Accepted (now works post-bug-fix)** / cancel path
+- `TestSlotSourceEditProperties` (5) — get exception / source not found / import error / happy Accepted / Rejected
+- `TestToggleSourceEnabled` (2) — happy path / exception
+- `TestRemoveSource` (3) — user cancels / happy path / exception → warning
+- `TestSourceContextMenu` (2) — empty position / no SID item
+
+### Helper fix
+
+`_make_source_config(created_at=None)` was unintentionally substituting a default datetime via the `or` operator. Replaced with a sentinel-default pattern so `None` is honored. Small but important — the production code's `if s.created_at else "?"` branch can now be tested.
+
+### Files
+
+- `src/curator/cli/...` — **none**
+- `src/curator/gui/main_window.py` — **+1 line** (`QDialog,` added to imports list)
+- `tests/unit/test_gui_main_window_part3_coverage.py` (NEW, 51 tests, +~580 lines)
+- `docs/releases/v1.7.193.md`
+
+No new lesson — application of Lesson #100 / Doctrine #18 (surface bugs found by coverage work).
+
+### Next
+
+**v1.7.194** — Part 4: remaining slot handlers (context menus + `_slot_trash_selected` / `_slot_restore_selected` / `_slot_inspect_at_index` / `_open_inspect_dialog` / `_slot_dissolve_selected` + the per-row variants + `_perform_*` helpers + bundle create/edit + `_show_result_dialog`).
+
 ## [1.7.192] — 2026-05-13 — Round 4 Tier 3 ship 2: `gui/main_window.py` Part 2 (action handlers)
 
 Covers the action-handler surface: all 7 `_slot_open_*` Tools-menu dialog slots, `_slot_tools_placeholder`, `_slot_run_workflow`, About dialogs, `refresh_all`, settings reload, all 4 audit-toolbar slots, all 4 lineage-slider slots.

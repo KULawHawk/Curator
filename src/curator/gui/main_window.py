@@ -42,6 +42,7 @@ from uuid import UUID
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
+    QDialog,
     QHeaderView,
     QHBoxLayout,
     QLabel,

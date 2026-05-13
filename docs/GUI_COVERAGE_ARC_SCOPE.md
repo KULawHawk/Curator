@@ -150,7 +150,7 @@ Each sub-ship's release notes will document this disclosure until DEFERRED_DECIS
 | v1.7.190 | models Part 3 + close | ✅ closed | 63.26% → **100%** (0 pragmas added) |
 | v1.7.191 | main_window Part 1 (construction + helpers) | ✅ closed | 7.57% → 45.87% |
 | v1.7.192 | main_window Part 2 (action handlers) | ✅ closed | 45.87% → 61.54% |
-| v1.7.193 | main_window Part 3 (Tier 3 opt-in) | pending | — |
+| v1.7.193 | main_window Part 3 (migrate + sources) + bug fix | ✅ closed | 61.54% → 78.53% |
 | v1.7.194 | main_window Part 4 (Tier 3 opt-in) | pending | — |
 | v1.7.195 | main_window pragma audit + close | pending | 100% target |
 | v1.7.196+ | dialogs.py (default Round 5) | deferred | — |
