@@ -4,6 +4,35 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.181] — 2026-05-13 — Round 4 Tier 1 ship 2: `docs/DEFERRED_DECISIONS.md` index
+
+**Doc-only.** Formalizes the deferred-decision pattern from Lesson #100 / Doctrine #18 as a single project index.
+
+### What landed
+
+`docs/DEFERRED_DECISIONS.md` (NEW, +~115 lines):
+- **How to add a new deferred decision** — the canonical entry template (location / surfaced / found / options / recommendation / decision / cost-of-waiting / detail-doc)
+- **Pending decisions** — 2 entries:
+  - **#1 Sandbox-fragile trash-flow tests** (the recycle-bin enumerator hang surfaced in v1.7.180; recommends `@pytest.mark.integration` + a `CURATOR_SANDBOX` env-var fixture)
+  - **#2 `dialogs.py` decomposition strategy** (Round 4 Tier 4 / Round 5 gate; recommends deferring strategy decision until Tier 3 closes)
+- **Resolved decisions** — 1 entry:
+  - **R1 Duplicate `_resolve_file`** — moved to resolved with full outcome record citing v1.7.180 and Lesson #102
+
+### Why this exists
+
+Round 3 carried the `_resolve_file` decision across 21 sub-ships as a `# pragma: no cover` with a scattered comment trail (release notes for v1.7.155, the pragma annotation in source itself, the v1.7.175 sweep ship, the v1.7.179 close-out). That worked but produced a "where do I look to know what's pending?" problem. This index is the answer: **one file lists all pending decisions, with pointers to the in-source comments or detail docs.**
+
+No source changes. No new lesson.
+
+### Files
+
+- `docs/DEFERRED_DECISIONS.md` (+~115 lines, new)
+- `docs/releases/v1.7.181.md`
+
+### Next
+
+**v1.7.182** — `docs/MUTATION_TESTING_DEFERRED.md` (formalize Lesson #97).
+
 ## [1.7.180] — 2026-05-13 — Round 4 Tier 1 ship 1: resolve `_resolve_file` duplicate (option b — merge prefix-match)
 
 **Round 4 begins.** Resolves the deferred decision flagged in v1.7.155, carried as a `# pragma: no cover` through 21 sub-ships, and explicitly surfaced in the Round 3 close-out (v1.7.179).
