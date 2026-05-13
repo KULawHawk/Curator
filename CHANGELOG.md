@@ -4,6 +4,49 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.197] — 2026-05-13 — Round 4 Tier 4 ship 2: dialog helpers + result classes + 🐛 test-pollution fix
+
+Closes the module-level helpers (`_make_kv_table`, `_make_table`, `_stringify`) and 3 result/data classes (`BundleEditorResult`, `_CheckResult`, `HealthCheckResult`) in `gui/dialogs.py`. **Also fixes a test-pollution bug** from v1.7.193.
+
+### 🐛 Test pollution fix
+
+While running the full suite to measure dialogs baseline, discovered that **`test_get_job_id_exception_returns`** in `test_gui_main_window_part3_coverage.py` (v1.7.193) used `del type(...).job_id` in its `finally` block. This deleted the `job_id` property from `MigrationProgressTableModel` entirely, breaking 3 tests in `test_gui_models_part3_coverage.py` that ran after it.
+
+**Fix:** capture the original property via `cls.__dict__.get("job_id")` before replacing, restore via `cls.job_id = original` in finally. Verified: all 120 tests pass in both isolation and full-suite order.
+
+Lesson captured inline: **never `del` a class attribute in a test cleanup; always restore the original.** The `del` works in isolation because there's no later access; in suite order it leaves the class in a permanently-broken state. Adding to the existing test-design heuristics; not a new numbered lesson because it's a generic Python practice, not Curator-specific doctrine.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `gui/dialogs.py` | 0.00% | **10.20%** (260 stmts covered of 2234) |
+
+### What landed
+
+`tests/unit/test_gui_dialogs_helpers_coverage.py` (NEW, 28 tests):
+
+- **`TestMakeKvTable`** (3) — empty / populated / headers set
+- **`TestMakeTable`** (3) — empty / populated / headers set
+- **`TestStringify`** (7) — None / datetime / bool True/False / int / string / float
+- **`TestBundleEditorResult`** (4) — construction defaults / full / `added_member_ids` / `removed_member_ids`
+- **`TestCheckResult`** (2) — defaults / full
+- **`TestHealthCheckResult`** (7) — empty defaults / total / passed / failed (severity=fail only) / all_green True/False / all_green with warnings only
+- **`TestModuleStructure`** (2) — helpers callable; dataclasses accessible
+
+### Files
+
+- `src/curator/gui/...` — **none**
+- `tests/unit/test_gui_dialogs_helpers_coverage.py` (NEW, 28 tests, +~290 lines)
+- `tests/unit/test_gui_main_window_part3_coverage.py` — **+9 lines** (test cleanup fix)
+- `docs/releases/v1.7.197.md`
+
+No source changes. No new numbered lesson (test-design heuristic captured inline).
+
+### Next
+
+**v1.7.198** — `FileInspectDialog` + `ForecastDialog` (small + small, 357 raw lines combined).
+
 ## [1.7.196] — 2026-05-13 — Round 4 Tier 4 ship 1: `docs/DIALOGS_DECOMPOSITION.md`
 
 **Tier 4 opens.** Doc-only. Inventories every dialog class in `gui/dialogs.py` (the largest single module Curator has opened a coverage arc on at 2234 statements) and proposes a 11-ship Tier 4 plan.

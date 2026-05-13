@@ -471,15 +471,22 @@ class TestMigrateApplyProgressUpdate:
     def test_get_job_id_exception_returns(self, window, monkeypatch):
         """If reading _migrate_progress_model.job_id raises, return."""
         window._migrate_jobs_model.refresh = MagicMock()
-        # Replace job_id with a property that raises
-        type(window._migrate_progress_model).job_id = property(
+        # Replace job_id with a property that raises — capture the
+        # original so we can restore it (NOT delete) in the finally.
+        cls = type(window._migrate_progress_model)
+        original = cls.__dict__.get("job_id")
+        cls.job_id = property(
             lambda self: (_ for _ in ()).throw(RuntimeError("job_id fail"))
         )
         try:
             window._slot_migrate_apply_progress_update(MagicMock())
         finally:
-            # Restore the original property
-            del type(window._migrate_progress_model).job_id
+            # Restore the original property (not delete — delete removes
+            # the property entirely and breaks tests in other files).
+            if original is not None:
+                cls.job_id = original
+            else:
+                del cls.job_id
 
 
 # ===========================================================================
