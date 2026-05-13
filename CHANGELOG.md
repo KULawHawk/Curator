@@ -4,6 +4,54 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.192] — 2026-05-13 — Round 4 Tier 3 ship 2: `gui/main_window.py` Part 2 (action handlers)
+
+Covers the action-handler surface: all 7 `_slot_open_*` Tools-menu dialog slots, `_slot_tools_placeholder`, `_slot_run_workflow`, About dialogs, `refresh_all`, settings reload, all 4 audit-toolbar slots, all 4 lineage-slider slots.
+
+### Coverage delta
+
+| Module | Before (Part 1) | After Part 2 |
+|---|---|---|
+| `gui/main_window.py` | 45.87% (550 stmts) | **61.54%** (722 stmts covered, 5 partial branches) |
+
++172 new statements covered.
+
+### What landed
+
+`tests/unit/test_gui_main_window_part2_coverage.py` (NEW, 52 tests):
+
+- **`TestOpenDialogSlots`** (14 parametrized) — 7 dialog slots × 2 paths each (happy: stub dialog, verify `.exec()`; error: monkeypatch dialogs `__getattr__` to raise, verify `QMessageBox.critical` called with correct title)
+- **`TestToolsPlaceholder`** (2) — known key ("sources" → guidance text); unknown key → "planned for v1.7" fallback
+- **`TestRunWorkflow`** (4) — happy path (real tmp_path-backed script + `os.startfile` mock); path resolution exception (patches `Path` to raise); script not found; `os.startfile` raises
+- **`TestShowAbout`** (3) — `_show_about` happy + version import failure; `_show_workflows_about`
+- **`TestRefreshAll`** (2) — every model.refresh called + lineage view + migrate slot; defensive branch when `_lineage_view` is None
+- **`TestSettingsReload`** (5) — `_perform_settings_reload` happy (no source / with source / failure); `_slot_settings_reload` happy path updates model+header / failure shows warning + doesn't touch model
+- **`TestAuditDropdowns`** (3) — populate from distinct values; exception → empty; selection preserved across rebuild
+- **`TestAuditApplyClearFilter`** (5) — hours > 0 builds `since` datetime; hours = 0 → since None; entity_id stripped; empty entity_id → None; clear resets all widgets
+- **`TestUpdateAuditCountLabel`** (3) — no filters / with filters / since filter formatted
+- **`TestLineageSliderSlots`** (11) — slider_changed at max → clear_time_filter; below max → refresh with dt; dt=None defensive; clear_time_filter resets slider + stops play timer; clear when no timer; play_toggle starts when idle / pauses when playing / restarts from end; play_tick increments / stops at max / at max with no timer
+
+### Key fixtures
+
+- **`silence_qmessagebox`** (autouse-via-request) — monkeypatches `QMessageBox.{about, critical, warning, information, question}` to MagicMocks so tests don't actually pop dialogs. Returns the dict so tests can assert on calls.
+- **`stub_dialog_factory`** — given a dialog class name, replaces `curator.gui.dialogs.<name>` with a stub that records `.exec()` calls. Reusable for any of the 7 Tools-menu slots.
+- **`lineage_window`** — alternate window fixture with populated time range so the lineage slider is enabled (most slot tests need this).
+
+### Pattern: parametrize across uniform slot families
+
+The 7 `_slot_open_*` slots share the exact same shape (try-import-dialog, construct, exec, except → QMessageBox.critical). Parametrized with two separate `@pytest.mark.parametrize` decorators (one per happy/error pair), covers all 14 cases in 2 method definitions. Saves ~100 lines vs explicit per-slot tests.
+
+### Files
+
+- `tests/unit/test_gui_main_window_part2_coverage.py` (NEW, 52 tests, +~620 lines)
+- `docs/releases/v1.7.192.md`
+
+No source changes. No new lesson.
+
+### Next
+
+**v1.7.193** — Part 3: migrate slot handlers (`_slot_migrate_*`, `_perform_migrate_*`, context menu) + sources slot handlers (`_slot_source_*`, `_refresh_sources_table`, source edit dialogs).
+
 ## [1.7.191] — 2026-05-13 — Round 4 Tier 3 ship 1: `gui/main_window.py` Part 1 (construction + helpers)
 
 **Tier 3 opens.** Covers the window construction surface: `__init__`, `_build_ui`, all 9 `_build_*_tab` methods, the static helpers (`_make_table_view`, `_wrap_table`, `_build_lineage_legend_html`), the settings header updater, the status bar refresher, and the lineage time-slider helpers.
