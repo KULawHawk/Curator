@@ -4,6 +4,38 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.174] — 2026-05-13 — Round 3 Tier 3 ship 20: `cli/main.py` `audit-export`
+
+Closes ~57 uncovered lines in the `audit-export` command. **97.93% on cli/main.py — last command before arc close.**
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 94.90% | **97.93%** (+3.03%) |
+
+### What landed
+
+`tests/unit/test_cli_audit_export_coverage.py` (NEW, 16 tests):
+- **Validation:** invalid --format exits 1, --older-than + --before mutually exclusive, negative --older-than exits 1, bad --before/--since ISO exits 1, --since after --before exits 1, refuses .db file extension
+- **Formats:** JSONL to file (parses cleanly), CSV to file (header), TSV to file (tab-delimited header), stdout output (`--to -` suppresses summary)
+- **Filters:** --older-than 5 excludes recent events, --actor/--action/--entity-type combined filter
+- **Counting:** singular "1 audit entry" for 1 row
+- **JSON output mode:** summary payload with rows_exported + format
+- **Meta-audit:** the export operation itself creates an `audit.exported` event in the live audit log
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_cli_audit_export_coverage.py` (+~265, new, 16 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.174.md`
+
+### Next
+
+**v1.7.175** — Final cleanup ship: close remaining stragglers (25 lines + 31 partial branches), ARC CLOSE ceremony.
+
 ## [1.7.173] — 2026-05-13 — Round 3 Tier 3 ship 19: `cli/main.py` `audit-summary`
 
 Closes ~99 uncovered lines in the `audit-summary` command. **Crosses 90% threshold on cli/main.py.**
