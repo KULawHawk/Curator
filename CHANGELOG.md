@@ -4,6 +4,41 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.162] — 2026-05-13 — Round 3 Tier 3 ship 8: `cli/main.py` `doctor` + `safety_app`
+
+Closes ~91 uncovered lines across `doctor` + `safety check` + `safety paths`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 39.59% | **44.29%** (+4.70%) |
+
+### What landed
+
+`tests/unit/test_cli_doctor_safety_coverage.py` (NEW, 13 tests):
+- **doctor**: clean run (empty DB), sources section appears, missing send2trash → exit 1 with issue, PyPI ppdeep fallback path, missing ppdeep doesn't accumulate issue
+- **safety check**: nonexistent path errors, SAFE human + JSON (stub check_path), CAUTION with concerns + project_root, --handles renders open-by holders
+- **safety paths**: human with paths (default platform list populated on Windows), empty paths show "(none)" twice via SafetyService.__init__ wrap, JSON output
+
+### Notable iteration
+
+`monkeypatch.setitem(sys.modules, "curator._vendored.send2trash", None)` alone wasn't enough — the `from curator._vendored import send2trash` statement falls through to attribute lookup on the package module. Also needed `monkeypatch.delattr(curator._vendored, "send2trash")` to defeat that path.
+
+For `SafetyService.app_data` / `os_managed`: these are instance attributes (set in `__init__`), not class properties. Solved by wrapping `__init__` to overwrite the attrs after the original construction.
+
+No source changes. No new lesson — fake-module-injection variant + init-wrapping are both within established idioms.
+
+### Files
+
+- `tests/unit/test_cli_doctor_safety_coverage.py` (+~280, new, 13 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.162.md`
+
+### Next
+
+**v1.7.163** — `organize` + `organize-revert` (~200 lines).
+
 ## [1.7.161] — 2026-05-13 — Round 3 Tier 3 ship 7: `cli/main.py` `watch`
 
 Closes ~52 uncovered lines in the `watch` command.
