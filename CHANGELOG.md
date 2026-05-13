@@ -4,6 +4,48 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.132] — 2026-05-13 — Tier 3 ship 6: `storage/repositories/migration_job_repo.py` to 100%
+
+Closes 6 uncovered lines + 5 partial branches in `storage/repositories/migration_job_repo.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `storage/repositories/migration_job_repo.py` | 91.54% | **100.00%** (+8.46%) |
+
+106 statements, 24 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_storage_migration_job_repo_coverage.py` (NEW, 6 tests):
+- `update_job_status(status="queued")` exercises the catchall else branch
+- `next_pending_progress` `BEGIN IMMEDIATE` exception swallow (lines 266-269) — uses a custom `_ExecuteRaisingConn` wrapper that raises on the first `BEGIN IMMEDIATE` call and delegates everything else
+- `update_progress(outcome=None)` branch 324->326 (skip outcome SET)
+- `update_progress(src_xxhash="...")` line 331
+- `update_progress(status="in_progress")` branch 333->336 (skip completed_at SET)
+- `query_progress(limit=N)` lines 401-402
+
+No source changes.
+
+### Notable iteration
+
+`sqlite3.Connection.execute` is read-only — can't `monkeypatch.setattr(conn, "execute", ...)`. Worked around by wrapping the entire connection with a custom class (`_ExecuteRaisingConn`) that intercepts `BEGIN IMMEDIATE` and delegates everything else via `__getattr__`. Hooks into `db.conn` so `next_pending_progress` gets the wrapped instance.
+
+### Lesson captured
+
+No new lesson. Wrapper-connection-via-`__getattr__` is a small pattern variant of the standard "monkeypatch the factory, not the instance" idiom — settled.
+
+### Files
+
+- `tests/unit/test_storage_migration_job_repo_coverage.py` (+~165, new, 6 tests)
+- `docs/STORAGE_SWEEP_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.132.md`
+
+### Next
+
+**v1.7.133** — `storage/exceptions.py` (9 lines, currently 0%).
+
 ## [1.7.131] — 2026-05-13 — Tier 3 ship 5: `storage/repositories/trash_repo.py` to 100%
 
 Closes 6 uncovered lines + 1 partial branch in `storage/repositories/trash_repo.py`.
