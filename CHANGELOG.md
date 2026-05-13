@@ -4,6 +4,52 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.151] — 2026-05-13 — Round 3 Tier 1 ship 6 (FINAL): v2.0 release notes draft
+
+Final Tier 1 ship — completes the stabilization sprint. `docs/RELEASE_NOTES_v2.0_DRAFT.md` is a planning artifact for The Log, not the actual v2.0 release.
+
+### What landed
+
+`docs/RELEASE_NOTES_v2.0_DRAFT.md` (NEW, ~180 lines). Structured as v2.0 release notes but marked **DRAFT** everywhere. Sections:
+- **Highlights** — what v2.0 represents (150+ ships, 58+ modules at 100%, 6 arcs, 95+ lessons)
+- **What's new since v1.0** — feature evolution by subsystem (Migration tool, Plugin ecosystem, MCP server, source plugins, GUI, Coverage discipline, Six closed arcs table)
+- **Breaking changes** — none at v1.7.x; leaning toward strictly additive v2.0
+- **Known limitations** — GUI coverage 0%, mutation testing deferred (per v1.7.150), CLI main.py pending Tier 3
+- **Roadmap to v2.0** — 6-step path through remaining Round 3 tiers + release ceremony
+- **TODO** — decisions for The Log (version number, breaking changes, PyPI, GUI strategy arc, mutation testing arc)
+
+No source changes. No test changes. Doc-only ship.
+
+### Tier 1 (Stabilization Sprint) CLOSED
+
+All 6 Tier 1 ships landed:
+- ✅ v1.7.146 — migration.py 99.71% discrepancy resolved (added 2 unit tests; unit-only now 100%)
+- ✅ v1.7.147 — README coverage badge + maturity update
+- ✅ v1.7.148 — Dependabot pip ecosystem expansion (deferred Round 1 item closed)
+- ✅ v1.7.149 — Constellation docs update (Curator section)
+- ✅ v1.7.150 — Mutation testing report (honest deferral; report is the deliverable)
+- ✅ v1.7.151 — v2.0 release notes draft
+
+**151 ships total** (was 145). **Foundation verified.** Ready for Tier 2 (CLI Coverage Arc kickoff).
+
+### Lesson captured
+
+No new lesson.
+
+### Files
+
+- `docs/RELEASE_NOTES_v2.0_DRAFT.md` (NEW, ~180 lines)
+- `docs/releases/v1.7.151.md` (NEW)
+
+### Next
+
+**Tier 2 — CLI Coverage Arc kickoff:**
+- v1.7.152: `docs/CLI_COVERAGE_ARC_SCOPE.md` (scope plan, doc-only ship)
+- v1.7.153: `cli/mcp_keys.py` to 100%
+- v1.7.154: `cli/mcp_orphans.py` to 100%
+
+Then Tier 3 — cli/main.py decomposition by Click command group (12-18 ships).
+
 ## [1.7.150] — 2026-05-13 — Round 3 Tier 1 ship 5: Mutation testing spot-check (HONEST DEFERRAL)
 
 **The report IS the deliverable (per handoff). Honest negative result + methodology learning + recommended deferral to a separate dedicated arc.**
