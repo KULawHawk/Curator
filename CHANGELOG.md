@@ -4,6 +4,45 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.113] — 2026-05-13 — Round 2 Tier 1 ship 7: `cli/runtime.py` to 100%
+
+Sub-ship 7 of Round 2 Tier 1. Closes 7 uncovered lines + 5 partial branches in `cli/runtime.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/runtime.py` | 91.61% | **100.00%** (+8.39%) |
+
+129 statements, 14 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_cli_runtime_coverage.py` (NEW, 7 tests):
+
+1. `test_build_runtime_with_config_none_loads_default_config` — covers line 134 (the `if config is None: Config.load()` arm).
+2. `test_build_runtime_when_optional_plugins_not_registered` — `pluggy.PluginManager.get_plugin` returns None for all queries; covers branches 163→174, 175→185, 186→190 in one shot.
+3. `test_build_fuzzy_index_returns_none_on_import_error` — `sys.modules["curator.services.fuzzy_index"] = None` sentinel.
+4. `test_build_fuzzy_index_returns_none_on_unavailable_error` — `FuzzyIndex()` raises `FuzzyIndexUnavailableError`.
+5. `test_build_fuzzy_index_swallows_malformed_hash_value_error` — stubbed `_BadIndex.add` raises ValueError; covers lines 308-311.
+6. `test_build_fuzzy_index_skips_entries_without_fuzzy_hash` — entity with `fuzzy_hash=None`; covers branch 304→303 False arm.
+7. `test_build_fuzzy_index_populates_and_logs_when_entries_succeed` — happy-path validation.
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. Settled patterns from Round 1 + Round 2 Tier 1 ship 4 (sys.modules sentinels, MagicMock file_repo, monkeypatched class constructors). Honest logging.
+
+### Files
+
+- `tests/unit/test_cli_runtime_coverage.py` (+~170, new, 7 tests)
+- `docs/releases/v1.7.113.md`
+
+### Next
+
+**v1.7.114** — `plugins/core/lineage_hash_dup.py`.
+
 ## [1.7.112] — 2026-05-13 — Round 2 Tier 1 ship 6: `cli/util.py` to 100%
 
 Sub-ship 6 of Round 2 Tier 1. Closes lines 184-191 (the entire `build_csv_writer` function body — csv dialect, tsv dialect, ValueError on unknown dialect).
