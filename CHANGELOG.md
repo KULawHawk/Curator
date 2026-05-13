@@ -4,6 +4,47 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.136] — 2026-05-13 — Tier 3 ship 10: `storage/repositories/_helpers.py` to 100%
+
+Closes 16 uncovered lines + 6 partial branches in `storage/repositories/_helpers.py` — the shared utilities all repositories use.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `storage/repositories/_helpers.py` | 57.58% | **100.00%** (+42.42%) |
+
+46 statements, 20 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_storage_helpers_coverage.py` (NEW, 19 tests):
+- `_json_default` UUID + naive-datetime + aware-datetime (UTC normalization) + TypeError arms
+- `json_dumps` round-trips UUID + datetime via `_json_default`
+- `json_loads` None / bytes / bytearray / empty-string / valid-str arms
+- `uuid_to_str` None / passthrough-string / real-UUID arms
+- `str_to_uuid` None / valid-UUID arms
+- `save_flex_attrs` + `load_flex_attrs` round-trip against a real CuratorDB
+- `save_flex_attrs` empty-dict noop
+- `clear_flex_attrs` removes rows
+- `row_to_dict` with a real Row + with None
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. Pure utility-function testing — straightforward.
+
+### Files
+
+- `tests/unit/test_storage_helpers_coverage.py` (+~175, new, 19 tests)
+- `docs/STORAGE_SWEEP_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.136.md`
+
+### Next
+
+**v1.7.137** — `storage/repositories/bundle_repo.py` (28 lines — biggest of Tier 3, FINAL).
+
 ## [1.7.135] — 2026-05-13 — Tier 3 ship 9: `storage/repositories/hash_cache_repo.py` to 100%
 
 Closes 14 uncovered lines in `storage/repositories/hash_cache_repo.py` — the hash cache used by the scan/dedupe pipeline.
