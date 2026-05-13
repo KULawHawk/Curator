@@ -4,6 +4,58 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.143] — 2026-05-13 — Tier 4 ship 6: `services/organize.py` to 100%
+
+Closes 56 uncovered lines + 10 partial branches in `services/organize.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/organize.py` | 80.29% | **100.00%** (+19.71%) |
+
+336 statements, 80 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_services_organize_coverage.py` (NEW, 26 tests) covering:
+- `OrganizePlan.duration_seconds` + `RevertReport.duration_seconds` None branches
+- `plan()` ValueError when organize_type set without target_root
+- `plan()` code mode: discovery with root_prefix, discovery failure, drive-anchor fallback, code_walk_root stays None when no files
+- `plan()` music: MB enrichment trigger when `_filename_source=="true"` + missing album, MB enrich exception swallowed, MB enrich NOT triggered when `_filename_source` is False
+- `plan()` photo: propose with metadata, skip propose when read_metadata returns None
+- `plan()` document: propose with metadata, skip when read_metadata returns None
+- `plan()` code: propose with project, no-project skip, dest=None skip
+- `stage()` proposal not under target_root → FAILED outcome
+- `_write_manifest` existing manifest valid list (preserved), non-list (replaced), unreadable (warning + rewrite), write failure (logged)
+- `revert_stage()` unreadable manifest raises RuntimeError, malformed entries preserved in remaining, shutil.move failure → FAILED outcome
+- `_sync_index_after_move` malformed UUID + entity is None branches
+
+No source changes.
+
+### Notable iteration
+
+Two false-start fixes:
+1. `OrganizePlan` requires both `source_id` AND `root_prefix` (not just source_id).
+2. `StageReport` doesn't have `target_root` or `mode` fields — only `stage_root`, `started_at`, `completed_at`, `moves`.
+3. Line 251 was RevertReport.duration_seconds (not OrganizePlan's). Easy to miss in a file with three classes that all have duration_seconds.
+
+After first measurement, 1 line + 7 partial branches remained. Each partial was an "Optional path returns None" branch (photo meta None, document meta None, code project None, code dest None, etc.). Added one focused test per branch.
+
+### Lesson captured
+
+No new lesson. The "test each Optional-returns-None branch separately" pattern is standard.
+
+### Files
+
+- `tests/unit/test_services_organize_coverage.py` (+~440, new, 26 tests)
+- `docs/MID_SIZE_SERVICES_SWEEP_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.143.md`
+
+### Next
+
+**v1.7.144** — `services/hash_pipeline.py` (52 lines + 12 partial branches).
+
 ## [1.7.142] — 2026-05-13 — Tier 4 ship 5: `services/cleanup.py` to 100%
 
 Closes 50 uncovered lines + 9 partial branches in `services/cleanup.py`.
