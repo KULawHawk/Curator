@@ -1,10 +1,29 @@
 # Migration Phase Gamma — Scope Plan
 
-**Status:** Active arc plan
+> ## 🔴 PRIORITY COMMITMENT (per Jake, 2026-05-12)
+>
+> **This arc MUST be completed. No abandonment, no indefinite deferral.**
+>
+> Sub-ships v1.7.90 through v1.7.93 are non-optional follow-through on the apex-accuracy doctrine (Lesson #71) and the no-mid-arc rule (Lesson #88). Leaving migration.py at 68% indefinitely would violate the standard the doctrine was built to enforce.
+>
+> **Resume protocol when picking back up:**
+> 1. Open this document — current sub-ship status is in the tracker below.
+> 2. The next pending sub-ship's stubs are already in `tests/unit/test_migration_plan_apply.py` (v1.7.89). Reuse, don't redesign.
+> 3. Read the target cluster's source code in `src/curator/services/migration.py` (line ranges in the structural inventory below).
+> 4. Write tests, hit 100% on target lines/branches, ship cleanly per Lesson #86 (commit + tag + push, no mid-ship).
+> 5. Update the status tracker in this doc. Update revised coverage estimates if actual delta differs.
+> 6. Repeat until v1.7.93 lands at 100%.
+>
+> If picking this up in a new session, the restart prompt is: *"Resume Migration Phase Gamma arc. Open docs/MIGRATION_PHASE_GAMMA_SCOPE.md, next sub-ship per tracker."*
+
+---
+
+**Status:** Active arc plan — sub-ship 1 of 5 closed at v1.7.89
 **Owner:** Curator engineering doctrine
 **Created:** 2026-05-12 (v1.7.88)
 **Module:** `src/curator/services/migration.py`
 **Starting coverage:** 66.74% line + branch (319 missing lines, 53 partial branches)
+**Current coverage:** 68.18% (after v1.7.89)
 **Target:** 100.00% line + branch (per apex-accuracy doctrine, see v1.7.84)
 
 ## Why this needs a plan, not a single ship
