@@ -4,6 +4,45 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.164] — 2026-05-13 — Round 3 Tier 3 ship 10: `cli/main.py` `cleanup_app`
+
+Closes ~100 uncovered lines across 4 cleanup subcommands + 4 rendering/conversion helpers. **Crosses 50% coverage threshold on cli/main.py.**
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 49.09% | **54.86%** (+5.77%) |
+
+### What landed
+
+`tests/unit/test_cli_cleanup_coverage.py` (NEW, 19 tests):
+- **cleanup empty-dirs**: dry-run empty, dry-run with findings (incl. system_junk_present detail), --strict flag passes ignore_system_junk=False, --apply triggers apply, JSON output (with + without --apply)
+- **cleanup broken-symlinks**: findings render with `-> target` detail
+- **cleanup junk**: matched_pattern detail, --apply --no-trash passes use_trash=False
+- **_render_cleanup_report**: 25-finding report shows "and 5 more" cap, errors list renders "Errors during walk" section
+- **_render_cleanup_apply**: deleted + skipped + failed all rendered with errors
+- **cleanup duplicates**: no-dupes message, exact-mode rendering with groups + keepers + dups, fuzzy-mode label, 25-group cap with "and 5 more", errors section, JSON output, --apply with --source/--root/--keep-strategy/--keep-under/--similarity-threshold all pass through to find_duplicates
+
+Test infrastructure built:
+- `_build_report(kind, root, findings, errors)` factory for any CleanupKind
+- `_apply_report(kind, deleted, skipped, failed, with_errors)` factory
+- `_dup_findings(n_groups, per_group, match_kind)` factory for duplicate sets
+
+Pattern: monkeypatch `CleanupService.{find_empty_dirs, find_broken_symlinks, find_junk_files, find_duplicates, apply}`.
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_cli_cleanup_coverage.py` (+~485, new, 19 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.164.md`
+
+### Next
+
+**v1.7.165** — `gui` + `gdrive_app` (~145 lines predicted).
+
 ## [1.7.163] — 2026-05-13 — Round 3 Tier 3 ship 9: `cli/main.py` `organize` + `organize-revert`
 
 Closes ~79 uncovered lines + 13 partial branches across `organize`, `organize-revert`, `_organize_plan_to_dict`, `_render_organize_plan`, `_stage_report_to_dict`, `_render_stage_report`.
