@@ -4,6 +4,33 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.147] — 2026-05-13 — Round 3 Tier 1 ship 2: README coverage badge + maturity update
+
+Documentation-only ship. Updates README to reflect Round 2 close-out state (146 ships, 55 modules at 100%, 5 arcs closed, current coverage 54.65%).
+
+### What landed
+
+- Coverage badge added to README top (manual shield since Codecov isn't wired): `coverage-54.65%-yellow`
+- Python version badge: `3.11 | 3.12 | 3.13`
+- Ships badge: `146` (links to CHANGELOG)
+- Status paragraph rewritten to reflect v1.7.146 maturity (was stuck at v1.4.0): cites 146 versioned releases, 55 modules at 100%, the 5 closed arcs, the remaining uncovered subsystems (cli/main.py, gui/*)
+- New "Coverage discipline" section between Project layout and Contributing — points at CLAUDE.md and the lesson library, lists the 5 closed arcs, mentions the 3 `# pragma` annotations with their Lesson #91 justification pattern, clarifies that `pytest tests/` is the canonical measurement vs `pytest tests/unit/` for fast feedback
+
+No source changes. No test changes.
+
+### Lesson captured
+
+No new lesson.
+
+### Files
+
+- `README.md` (+~25 lines, 1 status paragraph rewrite + 1 new section)
+- `docs/releases/v1.7.147.md` (NEW)
+
+### Next
+
+**v1.7.148** — Dependabot pip ecosystem expansion (completes deferred Round 1 item).
+
 ## [1.7.146] — 2026-05-13 — Round 3 Tier 1 ship 1: `services/migration.py` measurement discrepancy resolved
 
 Investigates the 99.71% reading reported in CLAUDE.md after Round 2 close. **Diagnosis: real coverage gap in unit-only measurement; integration tests covered the dispatch + plan-arg branch. Closed by adding 2 focused unit tests so `pytest tests/unit/` alone now shows 100%.**

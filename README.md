@@ -1,10 +1,13 @@
 # Curator
 
 [![tests](https://github.com/KULawHawk/Curator/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/KULawHawk/Curator/actions/workflows/test.yml)
+[![coverage](https://img.shields.io/badge/coverage-54.65%25-yellow)](#coverage-discipline)
+[![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](#install)
+[![ships](https://img.shields.io/badge/ships-146-blueviolet)](CHANGELOG.md)
 
 A content-aware artifact intelligence layer for files.
 
-**Status:** v1.4.0 stable (released 2026-05-08). v1.0.0rc1 was the stability anchor; v1.1.0 shipped the Migration tool ("Tracer") with persistent resumable jobs, worker-pool concurrency, cross-source migration, and a PySide6 Migrate tab. v1.1.1 → v1.1.2 → v1.1.3 added the plugin ecosystem hookspecs that let third-party plugins enforce constitutional invariants (Atrium Principles 2 & 4) over Curator's plugin surface. v1.2.0 added an optional `[mcp]` extra exposing a Model Context Protocol server (`curator-mcp`) so LLM clients (Claude Desktop, Claude Code, third-party agents) can query Curator's index, audit log, and lineage programmatically. v1.3.0 closed Tracer's two highest-value Phase 2 deferrals: quota-aware retry with exponential backoff for cross-source transient errors (`--max-retries`) and four-mode destination-collision handling (`--on-conflict={skip,fail,overwrite-with-backup,rename-with-suffix}`). v1.4.0 closes the v1.3.0 cross-source simplification: the new `curator_source_rename` hookspec lets `overwrite-with-backup` and `rename-with-suffix` work end-to-end across source boundaries (local↔gdrive); plugins not implementing the new hook automatically retain v1.3.0 degrade-to-skip behavior (strictly additive). See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
+**Status:** v1.7.146 stable (released 2026-05-13). **146 versioned releases.** **55 modules at 100% line + branch coverage** under the apex-accuracy doctrine. **5 multi-ship arcs closed**: Migration Phase Gamma (v1.7.93b), Coverage Sweep (v1.7.106), Plugins + MCP + Config Sweep (v1.7.125), Storage Repositories Sweep (v1.7.137), Mid-Size Services Sweep (v1.7.145). Overall coverage 54.65% (unit-only; full-suite higher). Storage subpackage fully covered. All Phase Gamma services, all MCP/plugins/config, all mid-size services at 100%. Remaining at <100%: `cli/main.py` (10.73% — separate CLI Coverage Arc opening in Round 3), `cli/mcp_keys.py` (78%), `cli/mcp_orphans.py` (65%), all `gui/*` (0% — strategy conversation pending). The v1.7.x line evolved through: v1.0.0rc1 stability anchor → v1.1.0 Migration tool ("Tracer") with persistent resumable jobs + cross-source migration + PySide6 Migrate tab → v1.1.x plugin ecosystem hookspecs (Atrium Principles 2 & 4) → v1.2.0 optional MCP server (`curator-mcp`) for LLM clients → v1.3.0 quota-aware retry + four-mode `--on-conflict` resolution → v1.4.0 cross-source `curator_source_rename` hookspec → v1.5.x-v1.7.x: 100+ engineering ships under the apex-accuracy doctrine. See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
 
 Curator gives every file a stable identity, tracks relationships and lineage between files with confidence scores, knows where files belong, and makes every destructive operation reversible.
 
@@ -64,6 +67,25 @@ python -m venv .venv
 
 pip install -e .[dev]
 ```
+
+## Coverage discipline
+
+Curator operates under an **apex-accuracy doctrine**: every module touched in an engineering arc is brought to 100% line + branch coverage. Across 146 versioned releases (v1.0.0rc1 → v1.7.146), 55 modules are at 100% line + branch, captured under 5 closed multi-ship arcs:
+
+- **Migration Phase Gamma** (v1.7.89–93b) — 19 services modules
+- **Coverage Sweep** (v1.7.95–106) — 12 sweep targets
+- **Plugins + MCP + Config Sweep** (v1.7.116–125) — 9 modules
+- **Storage Repositories Sweep** (v1.7.126–137) — 11 storage modules (entire `storage/` subpackage)
+- **Mid-Size Services Sweep** (v1.7.140–145) — 5 service modules
+
+The methodology is captured in:
+
+- [`CLAUDE.md`](CLAUDE.md) — the doctrine, lesson adoption protocol, and ship workflow (read by AI assistants at session start)
+- The `CHANGELOG.md` "Lesson captured" sections — 95 numbered lessons documenting patterns that compounded across the arc
+
+When 100% isn't reachable (defensive boundaries protected by upstream layers, thread-race fallthrough, etc.), specific lines are marked `# pragma: no cover` or `# pragma: no branch` with documented justification in source per Lesson #91. Three such annotations exist in the codebase, all with documented rationale.
+
+**Canonical coverage measurement:** `pytest tests/` (full suite). The `pytest tests/unit/` invocation is the fast feedback loop and may show slightly lower numbers when integration tests cover orchestration code that unit tests bypass (see v1.7.146 release notes).
 
 ## Contributing — dev setup
 
