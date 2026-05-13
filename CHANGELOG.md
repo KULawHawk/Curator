@@ -4,6 +4,45 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.127] — 2026-05-13 — Tier 3 ship 1: `storage/connection.py` to 100%
+
+Closes 2 uncovered lines + 1 partial branch in `storage/connection.py` — the SQLite connection manager.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `storage/connection.py` | 91.53% | **100.00%** (+8.47%) |
+
+51 statements, 8 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_storage_connection_coverage.py` (NEW, 7 tests) covering:
+
+- `_adapt_datetime` tz-aware branch — verifies UTC conversion + tzinfo strip
+- `_adapt_datetime` naive datetime passthrough
+- `_convert_timestamp` round-trip + str-input branch (incidental coverage)
+- `CuratorDB.init` early-return when already initialized — uses `monkeypatch`-style attribute swap on `migrations.apply_migrations` to detect a second call
+- `CuratorDB.close_thread_connection` no-op when no prior `conn()`
+- `CuratorDB.close_thread_connection` clears thread-local after a real `conn()` call
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. Honest logging.
+
+### Files
+
+- `tests/unit/test_storage_connection_coverage.py` (+~90, new, 7 tests)
+- `docs/STORAGE_SWEEP_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.127.md`
+
+### Next
+
+**v1.7.128** — `storage/repositories/audit_repo.py` (3 lines).
+
 ## [1.7.126] — 2026-05-13 — Tier 3 scope plan: Storage Repositories Sweep
 
 Opens the Round 2 Tier 3 arc. Scope plan only — no source or test changes.

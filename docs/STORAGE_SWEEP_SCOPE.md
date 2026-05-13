@@ -118,7 +118,7 @@ Restart prompt: *"Resume Storage Repositories Sweep arc. Open docs/STORAGE_SWEEP
 | Sub-ship | Status | Module | Final coverage | Date |
 |---|---|---|---|---|
 | v1.7.126 | ✅ This scope plan | — | n/a (doc-only) | 2026-05-13 |
-| v1.7.127 | ⏳ Pending | `storage/connection.py` | TBD | TBD |
+| v1.7.127 | ✅ Closed | `storage/connection.py` | **100.00%** (was 91.53%) | 2026-05-13 |
 | v1.7.128 | ⏳ Pending | `storage/repositories/audit_repo.py` | TBD | TBD |
 | v1.7.129 | ⏳ Pending | `storage/migrations.py` | TBD | TBD |
 | v1.7.130 | ⏳ Pending | `storage/repositories/source_repo.py` | TBD | TBD |
