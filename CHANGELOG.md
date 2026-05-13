@@ -4,6 +4,42 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.158a] — 2026-05-13 — Round 3 Tier 3 ship 4a: `cli/main.py` `sources_app` simple subcommands
+
+Scope plan v1.7.152 predicted `sources_app` (~410 lines, 7 subcommands) would likely need splitting per Lesson #88. Confirmed: `sources config` alone is 203 lines; the other 6 subcommands total ~283 lines. **Split executed.** This ship (158a) covers the 6 simpler subcommands; v1.7.158b covers `config`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 23.73% | **28.76%** (+5.03%) |
+
+### What landed
+
+`tests/unit/test_cli_sources_simple_coverage.py` (NEW, 25 tests):
+- **list**: empty / human / JSON / CSV (header / no-header / tsv)
+- **show**: no-match / JSON / human with display_name + config / human without display_name + empty config (branch coverage)
+- **add**: happy / --disabled / duplicate-errors / JSON
+- **enable**: no-match / already-enabled / enables-disabled
+- **disable**: no-match / already-disabled / disables-enabled
+- **remove**: no-match / dry-run-with-files-warns / dry-run-empty-says-would-remove / --apply-with-files-errors / --apply-empty-removes
+
+No source changes.
+
+### Lesson captured
+
+No new lesson — Lesson #88 split worked exactly as designed: the predicted >1.5x trigger condition was met, the scope plan flagged it, and the split was clean. The `config` subcommand's complexity (JSON-parsing --set values, audit emission, multi-modal output) is genuinely a single concern worth its own ship.
+
+### Files
+
+- `tests/unit/test_cli_sources_simple_coverage.py` (+~400, new, 25 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+2 lines, split tracker entries)
+- `docs/releases/v1.7.158a.md`
+
+### Next
+
+**v1.7.158b** — `sources config` subcommand (203 lines).
+
 ## [1.7.157] — 2026-05-13 — Round 3 Tier 3 ship 3: `cli/main.py` `bundles_app`
 
 Closes ~87 uncovered lines across 4 bundle subcommands (list/show/create/dissolve) + `_resolve_bundle` helper.
