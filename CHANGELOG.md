@@ -4,6 +4,38 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.165] — 2026-05-13 — Round 3 Tier 3 ship 11: `cli/main.py` `gui` + `gdrive_app`
+
+Closes ~66 uncovered lines across `gui` + 3 gdrive subcommands.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 54.86% | **57.82%** (+2.96%) |
+
+### What landed
+
+`tests/unit/test_cli_gui_gdrive_coverage.py` (NEW, 18 tests):
+- **gui**: PySide6 not installed → exit 2, run_gui success (exit 0), run_gui returns non-zero (propagates)
+- **gdrive paths**: human default alias, human explicit alias, JSON
+- **gdrive status**: all 3 states (no_client_secrets, no_credentials, credentials_present) + JSON
+- **gdrive auth**: already-authed skips (human + JSON), PyDrive2NotInstalled exits 2, ClientSecretsMissing exits 1 with tip, RuntimeError exits 1, success path (human + JSON), --force re-runs even when credentials_present
+
+Pattern: monkeypatch `curator.gui.launcher.is_pyside6_available` / `run_gui` and `curator.services.gdrive_auth.run_interactive_auth` to control flow; use `CURATOR_HOME` env var to isolate auth filesystem state.
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_cli_gui_gdrive_coverage.py` (+~280, new, 18 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.165.md`
+
+### Next
+
+**v1.7.166** — `migrate` Part 1 (list/status/abort/plan rendering, ~280 lines predicted).
+
 ## [1.7.164] — 2026-05-13 — Round 3 Tier 3 ship 10: `cli/main.py` `cleanup_app`
 
 Closes ~100 uncovered lines across 4 cleanup subcommands + 4 rendering/conversion helpers. **Crosses 50% coverage threshold on cli/main.py.**
