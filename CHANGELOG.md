@@ -4,6 +4,42 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.130] — 2026-05-13 — Tier 3 ship 4: `storage/repositories/source_repo.py` to 100%
+
+Closes 6 uncovered lines in `storage/repositories/source_repo.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `storage/repositories/source_repo.py` | 86.96% | **100.00%** (+13.04%) |
+
+44 statements, 2 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_storage_source_repo_coverage.py` (NEW, 6 tests):
+- `delete()` removes a source row + delete-missing-id is no-op
+- `list_by_type()` filters by source_type + empty list when no match
+- `_row_to_source` defensive fallback when row lacks `share_visibility` (pre-migration-004 schema snapshot guard) — pass a dict row without the key, KeyError triggers fallback to `"private"`
+- Round-trip via insert/get confirms populated `share_visibility` path also works (defaults to `"private"` on insert)
+
+No source changes.
+
+### Lesson captured
+
+No new lesson.
+
+### Files
+
+- `tests/unit/test_storage_source_repo_coverage.py` (+~95, new, 6 tests)
+- `docs/STORAGE_SWEEP_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.130.md`
+
+### Next
+
+**v1.7.131** — `storage/repositories/trash_repo.py` (6 lines + 1 partial branch).
+
 ## [1.7.129] — 2026-05-13 — Tier 3 ship 3: `storage/migrations.py` to 100%
 
 Closes 4 uncovered lines in `storage/migrations.py` — the schema migration runner.
