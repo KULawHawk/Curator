@@ -4,6 +4,44 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.168] — 2026-05-13 — Round 3 Tier 3 ship 14: `cli/main.py` `forecast`
+
+Closes ~36 uncovered lines in the `forecast` command. **Crosses 70% threshold on cli/main.py.**
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 68.43% | **70.57%** (+2.14%) |
+
+### What landed
+
+`tests/unit/test_cli_forecast_coverage.py` (NEW, 11 tests):
+- No drives found message
+- Single drive argument triggers `compute_disk_forecast` for that drive
+- Human output: all 5 status colors (fit_ok/past_95pct/past_99pct/insufficient_data/no_growth)
+- History section renders last 6 monthly buckets
+- Without slope skips Rate line
+- JSON output with all fields
+- JSON with None slope/eta -> null
+- CSV header + no-header + tsv dialect + None values
+
+Test infrastructure: `_forecast(drive, status, used_gb, total_gb, slope, r2, days_95, days_99, eta_95, eta_99, history)` factory.
+
+Pattern: monkeypatch `ForecastService.{compute_all_drives, compute_disk_forecast}`.
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_cli_forecast_coverage.py` (+~245, new, 11 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.168.md`
+
+### Next
+
+**v1.7.169** — `status_app` (set/get/report, ~125 lines).
+
 ## [1.7.167] — 2026-05-13 — Round 3 Tier 3 ship 13: `cli/main.py` `migrate` Part 2
 
 Closes ~67 uncovered lines covering Phase 1/Phase 2 apply execution paths + `_migrate_resume` full + `_render_migration_report`. **Completes the v1.7.166/167 Lesson #88 pre-split.**
