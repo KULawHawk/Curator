@@ -4,6 +4,44 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.166] — 2026-05-13 — Round 3 Tier 3 ship 12: `cli/main.py` `migrate` Part 1
+
+Closes ~130 uncovered lines covering `_parse_job_id`, `_migrate_list`, `_migrate_status`, `_migrate_abort`, `_migrate_resume` (lookup branch), `_render_migration_plan`, plus the `migrate_cmd` validation + lifecycle dispatch + plan-only path.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 57.82% | **64.70%** (+6.88%) |
+
+Biggest single-ship coverage gain of Tier 3 so far. First of two migrate ships per Lesson #88 pre-split.
+
+### What landed
+
+`tests/unit/test_cli_migrate_part1_coverage.py` (NEW, 24 tests):
+- **--list**: empty (human + with status filter), populated human (all 7 status colors), populated JSON
+- **--status**: invalid UUID (exit 2), job not found (exit 1), full status human (with progress_histogram + options + error), minimal status (started_at None / no progress / no options / no error), JSON
+- **--abort**: human + JSON + invalid UUID
+- **--resume** lookup: invalid UUID (exit 2), job not found (exit 1), repo lookup exception (exit 1)
+- **migrate_cmd validation**: missing positional args (exit 2), cross-source unwritable (exit 2), plan ValueError (exit 2)
+- **Plan-only mode**: human with safe moves + bucket counts + --apply hint, > 20 moves cap with "and N more", empty SAFE → "Nothing to do" hint, JSON, --ext parsing, --include/--exclude/--path-prefix pass-through
+
+Test infrastructure: `_make_job(status, files_total, ...)`, `_make_move(path, level, size)`, `_make_plan(n_safe, n_caution, n_refuse)` factories.
+
+Pattern: monkeypatch `MigrationService.{list_jobs, get_job_status, abort_job, plan, _can_write_to_source}` and `MigrationJobRepository.get_job`.
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_cli_migrate_part1_coverage.py` (+~410, new, 24 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.166.md`
+
+### Next
+
+**v1.7.167** — `migrate` Part 2 (apply/resume execution + `_render_migration_report`, ~230 lines).
+
 ## [1.7.165] — 2026-05-13 — Round 3 Tier 3 ship 11: `cli/main.py` `gui` + `gdrive_app`
 
 Closes ~66 uncovered lines across `gui` + 3 gdrive subcommands.
