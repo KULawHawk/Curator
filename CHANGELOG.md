@@ -4,6 +4,37 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.114] — 2026-05-13 — Round 2 Tier 1 ship 8: `plugins/core/lineage_hash_dup.py` to 100%
+
+Sub-ship 8 of Round 2 Tier 1. Closes 1 partial branch (50→53) — the canonicalization-swap True arm where `file_a.curator_id > file_b.curator_id`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `plugins/core/lineage_hash_dup.py` | 96.00% | **100.00%** (+4.00%) |
+
+17 statements, 8 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_lineage_hash_dup_coverage.py` (NEW, 2 tests): the swap-required case (file_a's UUID > file_b's UUID, both with same hash) and the canonical-order sanity check.
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. Honest logging.
+
+### Files
+
+- `tests/unit/test_lineage_hash_dup_coverage.py` (+~60, new, 2 tests)
+- `docs/releases/v1.7.114.md`
+
+### Next
+
+**v1.7.115** — `plugins/core/lineage_filename.py`. Final Tier 1 ship.
+
 ## [1.7.113] — 2026-05-13 — Round 2 Tier 1 ship 7: `cli/runtime.py` to 100%
 
 Sub-ship 7 of Round 2 Tier 1. Closes 7 uncovered lines + 5 partial branches in `cli/runtime.py`.
