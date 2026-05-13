@@ -4,6 +4,52 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.196] — 2026-05-13 — Round 4 Tier 4 ship 1: `docs/DIALOGS_DECOMPOSITION.md`
+
+**Tier 4 opens.** Doc-only. Inventories every dialog class in `gui/dialogs.py` (the largest single module Curator has opened a coverage arc on at 2234 statements) and proposes a 11-ship Tier 4 plan.
+
+### What landed
+
+`docs/DIALOGS_DECOMPOSITION.md` (NEW):
+
+#### File inventory
+
+- **3 module-level helpers** (`_make_kv_table`, `_make_table`, `_stringify`)
+- **3 result/data classes** (`BundleEditorResult`, `_CheckResult`, `HealthCheckResult`)
+- **10 dialog classes** spanning 4286 raw lines / 2234 statements / 432 branches
+
+#### Dialog complexity tiers
+
+| Tier | Count | Examples |
+|---|---:|---|
+| Small (<250 stmts) | 3 | FileInspectDialog, VersionStackDialog, ForecastDialog |
+| Medium (250-300) | 3 | BundleEditorDialog, HealthCheckDialog, ScanDialog |
+| Large (300-400) | 4 | GroupDialog, CleanupDialog, SourceAddDialog |
+| Largest | 1 | TierDialog (~450 stmts; possibly splits per Lesson #88) |
+
+#### Sub-ship plan: v1.7.197 → v1.7.207 (11 ships)
+
+Helpers + result classes → small dialogs grouped → medium dialogs individually → large dialogs individually → TierDialog (possibly split) → pragma audit close.
+
+#### Test strategy
+
+Foundation: Qt headless (Lesson #98). Extension: pytest-qt's `qtbot` for modal interaction. **Workers stubbed via `_SyncWorker`** pattern (same as main_window.py Tier 3). Modal dialogs tested via `dialog.accept()`/`reject()` direct calls rather than `.exec()` blocking.
+
+#### Pragma budget
+
+Original Lesson #101 prediction: 5-15 pragmas. **Revised post-Tier-3 observation: 0-5 pragmas.** Curator's GUI pattern (4 modules in a row at 100% with 0 new pragmas) suggests this large dialog module will probably also close pragma-free or close to it.
+
+### Files
+
+- `docs/DIALOGS_DECOMPOSITION.md` (NEW)
+- `docs/releases/v1.7.196.md`
+
+No source changes. No new lesson.
+
+### Next
+
+**v1.7.197** — Helpers (`_make_kv_table`, `_make_table`, `_stringify`) + 3 result/data classes.
+
 ## [1.7.195] — 2026-05-13 — Round 4 Tier 3 ship 5 (FINAL): `gui/main_window.py` close → **100%**
 
 **`gui/main_window.py` closed at 100% line + branch.** Zero new pragmas added — every partial branch surfaced at the end of Part 4 was reachable in principle and closed with real tests rather than pragmas (apex-accuracy doctrine: prefer tests to pragmas where reachable).
