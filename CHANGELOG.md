@@ -4,6 +4,42 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.133] — 2026-05-13 — Tier 3 ship 7: `storage/exceptions.py` to 100%
+
+Closes 9 uncovered lines in `storage/exceptions.py` — pure exception class definitions previously at 0%.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `storage/exceptions.py` | 0.00% | **100.00%** (+100.00%) |
+
+9 statements, 0 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_storage_exceptions_coverage.py` (NEW, 10 tests) covering each class's inheritance + constructor:
+- `StorageError` — base class, is an Exception, can be raised with a message
+- `EntityNotFoundError(entity_type, entity_id)` — stores both attrs; message format includes type + repr of id; catchable as StorageError
+- `DuplicateEntityError` — inherits StorageError, can be raised
+- `MigrationError` — inherits StorageError, can be raised
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. Exception-class testing is straightforward — verify inheritance + constructor attrs + message format.
+
+### Files
+
+- `tests/unit/test_storage_exceptions_coverage.py` (+~65, new, 10 tests)
+- `docs/STORAGE_SWEEP_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.133.md`
+
+### Next
+
+**v1.7.134** — `storage/repositories/job_repo.py` (11 lines + 1 partial branch).
+
 ## [1.7.132] — 2026-05-13 — Tier 3 ship 6: `storage/repositories/migration_job_repo.py` to 100%
 
 Closes 6 uncovered lines + 5 partial branches in `storage/repositories/migration_job_repo.py`.
