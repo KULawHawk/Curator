@@ -4,6 +4,58 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.146] — 2026-05-13 — Round 3 Tier 1 ship 1: `services/migration.py` measurement discrepancy resolved
+
+Investigates the 99.71% reading reported in CLAUDE.md after Round 2 close. **Diagnosis: real coverage gap in unit-only measurement; integration tests covered the dispatch + plan-arg branch. Closed by adding 2 focused unit tests so `pytest tests/unit/` alone now shows 100%.**
+
+### Coverage delta
+
+| Module | Before (unit) | Before (full) | After (unit) | After (full) |
+|---|---|---|---|---|
+| `services/migration.py` | 99.71% | 100.00% | **100.00%** | **100.00%** |
+
+1031 statements, 358 branches, 0 misses, 0 partials. Now 100% across both measurement modes.
+
+### Investigation outcomes
+
+Per Lesson #93 + Lesson #90 procedure:
+
+| Invocation | Result | Comment |
+|---|---|---|
+| `pytest tests/unit/ --cov=curator.services.migration` | **99.71%** | Missed lines 505→509 + 984-988 |
+| `pytest tests/ -k "migrat" --cov=curator.services.migration` | **100.00%** | Includes integration tests |
+| `pytest tests/ --cov=curator.services.migration` | **100.00%** | Full suite, 2717 tests, 12-minute run |
+
+The "100%" reported at v1.7.107 used the `-k "migrat"` invocation (the canonical migration-focused test selection from CLAUDE.md's `## Test discipline` section). When running unit-only — the typical fast feedback loop — two regions weren't reached:
+
+- **Line 505 → 509 (False branch):** `if dst_source_id is None:` skip-the-default-assignment arm. Unit tests called `plan()` without explicit `dst_source_id` (defaulting to None → True branch). Integration `test_cli_migrate.py` exercises the explicit dst-source path.
+- **Lines 984-988:** the `_execute_one` dispatcher's cross-source arm (`self._execute_one_cross_source(...)` then `return`). Existing cross-source unit tests in `test_migration_cross_source.py` call `_execute_one_cross_source` directly, bypassing the dispatcher. Integration tests go through the full `apply() → _execute_one → dispatch → execute_one_cross_source` chain.
+
+This is a textbook Lesson #90 + Lesson #93 instance: direct-call unit tests give precise coverage of specific methods but bypass orchestration; integration tests cover orchestration but are slow; the canonical measurement needs both, AND it's worth closing the gap with targeted unit tests so the fast feedback loop also shows 100%.
+
+### What landed
+
+`tests/unit/test_migration_dispatcher_coverage.py` (NEW, 2 tests):
+- `test_plan_with_explicit_dst_source_id_skips_default` — calls `plan(src_source_id="local", dst_source_id="gdrive:x", ...)` to hit the 505→509 False branch
+- `test_dispatcher_routes_to_cross_source_helper` — calls `_execute_one` with cross-source IDs; stubs `_execute_one_cross_source` and `_execute_one_same_source` to verify dispatch routing without setting up the full plugin pipeline
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. The pattern (dispatcher dispatch coverage missing from direct-call unit tests) is already captured by Lessons #90 and #93. The fact that this gap was caught by re-measurement in a new session validates Lesson #93's value — re-measuring catches stale claims even on modules previously marked "done".
+
+**Reinforcement:** CLAUDE.md's "Test discipline" section already mentions `pytest tests/ -k "migrat"` as the canonical migration test selection, but doesn't explicitly state which selection yields the canonical coverage measurement. Future arcs should treat `pytest tests/` (or the focused `-k` equivalent) as the canonical measurement; `pytest tests/unit/` is the fast feedback loop.
+
+### Files
+
+- `tests/unit/test_migration_dispatcher_coverage.py` (+~95, new, 2 tests)
+- `docs/releases/v1.7.146.md` (NEW)
+
+### Next
+
+**v1.7.147** — README coverage badge + maturity update.
+
 ## [1.7.145] — 2026-05-13 — Tier 4 FINAL: `services/trash.py` to 100%
 
 **ROUND 2 COMPLETE.** Closes 90 uncovered lines in `services/trash.py` — the largest single-module surface in Tier 4 and the worst-covered remaining service (24.69% baseline). Mid-Size Services Sweep arc CLOSED.
