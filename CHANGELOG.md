@@ -4,6 +4,51 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.100] — 2026-05-13 — 🎉 Coverage Sweep 6/12: `services/music.py` to 100% — **v1.7.100 MILESTONE**
+
+Sub-ship 6 of the Coverage Sweep arc. Closes 6 uncovered lines + 5 partial branches in `services/music.py`. **This is the v1.7.100 milestone tag** — see milestone reflection in `docs/releases/v1.7.100.md`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/music.py` | 94.55% | **100.00%** (+5.45%) |
+
+187 statements, 70 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_music_coverage.py` (NEW, 6 tests):
+
+1. `test_mutagen_available_returns_false_when_module_missing` — `sys.modules['mutagen'] = None` (same pattern as v1.7.96 fuzzy_index). Covers 177-178.
+
+2. `test_first_returns_none_when_list_has_only_empty_values` — trivial direct call to `_first` with empty-only inputs. Covers 193.
+
+3. `test_parse_filename_defensive_arms_via_custom_patterns` — monkeypatches `_FILENAME_MUSIC_PATTERNS` to include a synthetic regex with a non-numeric `(?P<track>[A-Z]+)` capture; covers the `int(value)` → ValueError → pass arm (lines 290-293) and the field-skip arm.
+
+4. `test_parse_filename_empty_capture_falls_through` — monkeypatches with a synthetic regex whose `.*?` capture matches empty; exercises `if not value: continue` (line 288) AND the `if out:` False arm (branch 297->280, loop continues to next pattern).
+
+5. `test_read_tags_filename_rescue_skips_when_meta_already_has_artist` — monkeypatches `_parse_music_filename` to return only `{"title": "..."}`; covers branches 395→397 (no artist) and 399→401 (no track).
+
+6. `test_read_tags_filename_rescue_skips_when_from_name_lacks_title` — monkeypatches `_parse_music_filename` to return only `{"artist": "..."}`; covers branch 397→399 False arm.
+
+7. `test_enrich_via_musicbrainz_without_mbid_or_score` — stub MB client whose `lookup_recording` returns a match without `recording_mbid` or `score`; covers branches 541→543 and 543→545.
+
+No source changes.
+
+### Lesson captured
+
+No new lesson this ship. The `_FILENAME_MUSIC_PATTERNS` monkeypatch trick is mildly novel — using a module-level data structure as a test seam to exercise defensive arms that the production patterns can't reach. Worth noting as carry-forward technique but doesn't rise to lesson level on its own (it's the table-driven-pattern variant of the long-established "patch a singleton/constant to test edge cases" pattern). Honest logging.
+
+### Files
+
+- `tests/unit/test_music_coverage.py` (+~225, new, 6 tests)
+- `docs/COVERAGE_SWEEP_SCOPE.md` (+1 line, tracker update)
+
+### Next
+
+**v1.7.101** — `services/metadata_stripper.py`. Handoff: ~30 min, 7 lines.
+
 ## [1.7.99] — 2026-05-13 — Coverage Sweep 5/12: `services/pii_scanner.py` to 100%
 
 Sub-ship 5 of the Coverage Sweep arc. Closes 5 uncovered lines + 1 partial branch in `services/pii_scanner.py`.
