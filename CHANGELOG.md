@@ -4,6 +4,37 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.112] — 2026-05-13 — Round 2 Tier 1 ship 6: `cli/util.py` to 100%
+
+Sub-ship 6 of Round 2 Tier 1. Closes lines 184-191 (the entire `build_csv_writer` function body — csv dialect, tsv dialect, ValueError on unknown dialect).
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/util.py` | 85.42% | **100.00%** (+14.58%) |
+
+36 statements, 12 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_cli_util_coverage.py` (NEW, 4 tests): csv dialect write, tsv dialect write, unknown-dialect ValueError, lineterminator='\\n' assertion (the v1.7.36 Windows blank-line fix).
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. Honest logging.
+
+### Files
+
+- `tests/unit/test_cli_util_coverage.py` (+~45, new, 4 tests)
+- `docs/releases/v1.7.112.md`
+
+### Next
+
+**v1.7.113** — `cli/runtime.py`.
+
 ## [1.7.111] — 2026-05-13 — Round 2 Tier 1 ship 5: `plugins/manager.py` to 100%
 
 Sub-ship 5 of Round 2 Tier 1. Closes 2 uncovered lines + 2 partial branches in `plugins/manager.py`.
