@@ -4,6 +4,40 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.159] — 2026-05-13 — Round 3 Tier 3 ship 5: `cli/main.py` `trash` + `restore`
+
+Closes ~43 uncovered lines across the trash + restore commands.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 33.12% | **35.16%** (+2.04%) |
+
+### What landed
+
+`tests/unit/test_cli_trash_restore_coverage.py` (NEW, 17 tests):
+- **trash**: no-match, dry-run, apply happy (human + JSON), Send2TrashUnavailableError, TrashVetoed, TrashError
+- **restore**: non-UUID identifier, no-record, dry-run (default / explicit --to / restore_path_override fallback), apply happy + JSON, NotInTrashError, RestoreImpossibleError (exit code 2 not 1), TrashError
+
+Test pattern: monkeypatch `TrashService.send_to_trash` / `TrashService.restore` to inject return values + the 5 different exception types.
+
+### Notable iteration
+
+Two first-try assertions failed on Windows due to Path normalization (`/the/destination.txt` → `\the\destination.txt`). Relaxed to substring match on the unique part (e.g., `destination.txt` rather than the full path).
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_cli_trash_restore_coverage.py` (+~330, new, 17 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.159.md`
+
+### Next
+
+**v1.7.160** — `audit` command (~70 lines predicted).
+
 ## [1.7.158b] — 2026-05-13 — Round 3 Tier 3 ship 4b: `cli/main.py` `sources config` subcommand
 
 Closes the 203-line `sources config` subcommand + `_parse_set_value` helper. Completes the v1.7.158 Lesson #88 split.
