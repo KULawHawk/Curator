@@ -4,6 +4,44 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.172] — 2026-05-13 — Round 3 Tier 3 ship 18: `cli/main.py` `tier`
+
+Closes ~133 uncovered lines in the `tier` command. **Biggest single-ship gain of the entire CLI Coverage Arc (+7.39%).** Scope plan flagged this for Lesson #88 split; landed as single ship cleanly because the scan/render and --apply halves share factory infrastructure.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 82.33% | **89.72%** (+7.39%) |
+
+### What landed
+
+`tests/unit/test_cli_tier_coverage.py` (NEW, 23 tests):
+
+**Recipe validation:** Unknown recipe exits 2
+
+**Scan/render:** No-candidates message, with-candidates rendering, all 3 recipes (cold/expired/archive), expired skips "Min age:" label, --show-files paths + --limit cap, --source-id / --root / --min-age-days pass-through to TierCriteria, archive default min_age_days=365, JSON, CSV (header/no-header/tsv)
+
+**`--apply`:** Missing --target/--root exits 2, no-candidates early return, makedirs OSError exits 2, filtered-moves-empty warning, --dry-run preview, --dry-run 10-move cap, --yes executes + tally, confirm declined exits 1, failures + skipped tallied + Failures section, --keep-source switches MOVE -> COPY label
+
+Test infrastructure: `_file`, `_candidate`, `_report`, `_mig_move`, `_mig_report` factories.
+
+### Notable iteration
+
+Scope plan predicted tier might need split per Lesson #88. Reading revealed the scan/apply halves share scan-report infrastructure: one set of factories suffices for both. Single ship landed cleanly with 23 tests. The "1.5x typical scope" trigger should account for shared test infrastructure — if a large ship reuses the same factories across its halves, splitting adds ceremony without reducing complexity.
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_cli_tier_coverage.py` (+~540, new, 23 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.172.md`
+
+### Next
+
+**v1.7.173** — `audit-summary` (~200 lines).
+
 ## [1.7.171] — 2026-05-13 — Round 3 Tier 3 ship 17: `cli/main.py` `export-clean`
 
 Closes ~69 uncovered lines in the `export-clean` command. **Crosses 80% threshold on cli/main.py.**
