@@ -4,6 +4,41 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.157] — 2026-05-13 — Round 3 Tier 3 ship 3: `cli/main.py` `bundles_app`
+
+Closes ~87 uncovered lines across 4 bundle subcommands (list/show/create/dissolve) + `_resolve_bundle` helper.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 19.19% | **23.73%** (+4.54%) |
+
+### What landed
+
+`tests/unit/test_cli_bundles_coverage.py` (NEW, 23 tests):
+- **list**: empty (human), with bundles (human + unnamed handling), JSON, CSV with header / no-header / tsv dialect
+- **show**: no-match, with description, with members + JSON, without description (branch 736->738)
+- **create**: happy path (human), JSON, member-not-found error, with --primary, primary-not-found error
+- **dissolve**: no-match, dry-run preserves bundle, --apply removes it
+- **`_resolve_bundle`**: UUID match, prefix unique match, non-UUID no-match, ambiguous prefix returns None
+
+No source changes.
+
+### Lesson captured
+
+No new lesson.
+
+### Files
+
+- `tests/unit/test_cli_bundles_coverage.py` (+~355, new, 23 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.157.md`
+
+### Next
+
+**v1.7.158** — `sources_app` (7 subcommands, ~410 lines; planned split per Lesson #88).
+
 ## [1.7.156] — 2026-05-13 — Round 3 Tier 3 ship 2: `cli/main.py` `scan` + `group` + `lineage`
 
 Second Tier 3 sub-ship of the CLI Coverage Arc. Closes ~90 uncovered lines across 3 top-level commands.
