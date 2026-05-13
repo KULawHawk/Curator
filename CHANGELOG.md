@@ -4,6 +4,57 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.199] — 2026-05-13 — Round 5 Tier 1 ship 1: `VersionStackDialog` + `ScanDialog`
+
+**Round 5 begins.** Closes `VersionStackDialog` (read-only viewer) and `ScanDialog` (worker-spawning dialog). Pre-flight `del`-cleanup audit clean (only the v1.7.197 corrective `del cls.job_id` remains, which is the canonical pattern).
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `gui/dialogs.py` | 16.84% | **29.63%** (+148 stmts, 709/2234 covered) |
+
+### What landed
+
+`tests/unit/test_gui_dialogs_versionstack_scan_coverage.py` (NEW, 35 tests):
+
+**VersionStackDialog (10 tests):**
+- Basic construction (empty + populated)
+- No kinds picked → error label
+- `find_version_stacks` exception → error label
+- Zero-stacks "No stacks found" message
+- Multi-stack summary
+- Refresh button re-queries
+- Close button rejects
+- Confidence spin-box value propagated to query
+- Single-kind filter (NEAR_DUPLICATE only)
+
+**ScanDialog (25 tests):**
+- Construction: no sources / with sources / source list exception
+- State: `_selected_source_id` for disabled / valid / non-string data; scan button enabled only when path+source set
+- Browse: no-path → home / existing-path → that / chosen path updates
+- Scan flow: no sid short-circuits / no path short-circuits / completes (renders report) / fails (shows error) / worker-import failure / errors >0 (red bold styling) / >50 error paths (truncate)
+- Close button rejects
+- Progress helpers: set_indeterminate on/off / clear_results / on_scan_started no-op / reenable_controls (no-sources / normal-source)
+
+### Test infrastructure
+
+- `_make_sync_worker_classes` factory builds `_SyncWorker`/`_StubBridge` that fire scan_completed/scan_failed signals synchronously in `start()` — the canonical pattern from Round 4 Tier 3
+- Monkeypatches `curator.gui.scan_signals.ScanWorker` + `ScanProgressBridge` at the import site
+- `_make_source`, `_make_scan_report`, `_make_file` factories for repo stubbing
+- QFileDialog.getExistingDirectory stubbed for Browse-button tests
+
+### Files
+
+- `tests/unit/test_gui_dialogs_versionstack_scan_coverage.py` (NEW, 35 tests, +~480 lines)
+- `docs/releases/v1.7.199.md`
+
+No source changes. No new lesson — application of Lesson #98 (Qt headless), #84 (stub vocabulary reuse), #94 (sync executor pattern for QThread).
+
+### Next
+
+**v1.7.200** — `BundleEditorDialog` (~250 stmts). Skipping the original v1.7.200 plan (ScanDialog Part 2) because the worker stubbing strategy covered ScanDialog in one ship.
+
 ## [1.7.198] — 2026-05-13 — Round 4 Tier 4 ship 3: `FileInspectDialog` + `ForecastDialog`
 
 Closes the two smallest dialog classes (both read-only viewers): `FileInspectDialog` (file detail viewer with 3 tabs) and `ForecastDialog` (drive capacity forecast viewer).
