@@ -4,6 +4,38 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.118] — 2026-05-13 — Tier 2 ship 2: `plugins/core/lineage_fuzzy_dup.py` to 100%
+
+Closes 17 uncovered lines + 3 partial branches in `plugins/core/lineage_fuzzy_dup.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `plugins/core/lineage_fuzzy_dup.py` | 48.94% | **100.00%** (+51.06%) |
+
+35 statements, 12 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_lineage_fuzzy_dup_coverage.py` (NEW, 11 tests) — covers the module-level ppdeep import-fallback chain via `importlib.reload` with `sys.modules` patched (two tests: PyPI fallback succeeds, both fail), and every branch of `curator_compute_lineage` (compare unavailable, missing fuzzy_hash, same curator_id, xxhash match, compare raises, similarity None/below-threshold, edge emission, canonicalization swap).
+
+No source changes.
+
+### Lesson captured
+
+No new lesson, but worth noting a carry-forward: **`importlib.reload` + `monkeypatch.setitem(sys.modules, name, None)` is the idiom for testing module-level import-fallback chains.** The vendored→PyPI→None cascade pattern shows up elsewhere in Curator (it's a recurring graceful-degradation idiom), and this is the cleanest way to exercise the secondary fallback. The pattern is settled — sys.modules sentinel from v1.7.96 / v1.7.100 / v1.7.102 plus `importlib.reload` for module-level state. Honest logging.
+
+### Files
+
+- `tests/unit/test_lineage_fuzzy_dup_coverage.py` (+~210, new, 11 tests)
+- `docs/PLUGINS_MCP_SWEEP_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.118.md`
+
+### Next
+
+**v1.7.119** — `mcp/middleware.py`. First MCP-server module of Tier 2.
+
 ## [1.7.117] — 2026-05-13 — Tier 2 ship 1: `plugins/core/classify_filetype.py` to 100%
 
 First sweep ship of Tier 2's Plugins + MCP + Config arc. Closes 8 uncovered lines + 4 partial branches in `plugins/core/classify_filetype.py`.
