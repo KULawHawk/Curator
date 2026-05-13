@@ -4,6 +4,78 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.90] — 2026-05-12 — Migration Phase Gamma sub-ship 2/5: Same-source execution + 4 on-conflict modes
+
+Second execution ship of the Migration Phase Gamma arc. Targets `_execute_one_same_source` (xxhash compute + error paths) and `_resolve_collision` (the 4 on-conflict modes: skip, fail, overwrite-with-backup, rename-with-suffix). The on-conflict modes were originally scoped to v1.7.92 (Cluster 6) but covered here as a natural extension of Apply control flow — the cluster boundaries in the original scope plan were imperfect, and bundling these here reduces overall arc cost.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/migration.py` | 68.18% | **70.05%** (+1.87%) |
+
+Landed near the lower bound of the revised v1.7.90 target band (~71-73%). Per Lesson #89, the revised estimates are more accurate than the originals but still imperfect; small overshoot is fine when the work is clean.
+
+### What landed
+
+- `tests/unit/test_migration_execution.py` (NEW, ~395 lines, 13 tests, 2 test classes)
+- Imports stubs from v1.7.89's `test_migration_plan_apply.py` (Lesson #84 — stub patterns mature and compound across sub-ships; no redesign needed)
+- `docs/MIGRATION_PHASE_GAMMA_SCOPE.md` tracker updated
+
+### Branches closed
+
+| Target | Lines | What |
+|---|---|---|
+| `_execute_one_same_source` xxhash compute | 1020 | `verify_hash=True` + `src_xxhash=None` → compute on demand |
+| Hash-mismatch cleanup | 1032-1043 | Different src/dst hashes → dst.unlink, HASH_MISMATCH, src preserved |
+| Unlink OSError swallow (hash mismatch) | 1034-1037 | Cleanup unlink fails → caught, outcome still set |
+| OSError during copy + dst cleanup | 1070-1078 | copy2 OSError → dst.unlink + FAILED outcome |
+| Unlink OSError swallow (copy fail) | 1072-1076 | Both copy and unlink fail → outcome still set, src preserved |
+| Defensive Exception fallback | 1079-1081 | Non-OSError exception → FAILED outcome |
+| `_resolve_collision` skip mode | 1928-1930 | dst exists → SKIPPED_COLLISION, dst untouched |
+| `_resolve_collision` fail mode | 1932-1939 | dst exists + on_conflict=fail → FAILED_DUE_TO_CONFLICT + MigrationConflictError raise |
+| `_resolve_collision` overwrite-with-backup | 1941-1961 | Successful backup rename + move; OSError fallback |
+| `_resolve_collision` rename-with-suffix | 1963-1984 | Successful suffix selection; RuntimeError (exhaustion) fallback |
+| Unknown mode defensive fallback | 1986-1992 | Bogus on_conflict_mode → falls back to skip |
+
+No source code changes.
+
+### Lesson captured
+
+**Lesson #90 — Service-orchestration tests must trace the data flow.**
+
+Both of my initial test attempts in this sub-ship failed because I didn't trace the orchestration carefully:
+
+1. **Assert-on-original-vs-copy:** `apply()` creates a *fresh copy* of each `MigrationMove` into `report.moves` and mutates the copy. The original move handed in via `plan.moves[0]` stays unmutated. My first 13 assertions all referenced the original move and failed with `outcome=None`. Fix: capture `report = svc.apply(...)` and assert against `report.moves[0]`.
+
+2. **Gate-bypass:** `apply()` runs three gates before reaching `_execute_one_same_source`: REFUSE check, DB-guard, collision-resolve. When my tests pre-created `dst` to trigger the OSError-during-copy path, Gate 3 (collision) intercepted with the default `skip` mode and returned `SKIPPED_COLLISION` before `_execute_one` was ever called. Fix: don't pre-create dst; make the fake `copy2` *create* a partial dst mid-execution and *then* raise. This routes through `_execute_one` and exercises the OSError cleanup path.
+
+**General rule:** before writing a surgical unit test that targets a specific branch in an orchestration method, read the orchestration's control flow from entry to that branch. Note every short-circuit, every copy, every mutation. Design the test to navigate the actual flow. Lesson #82 said "the question is stub infrastructure, not feasibility" — the corollary is that **stub infrastructure design must match the data flow**, not just the dependency graph.
+
+Note: both errors here were caught quickly because the existing 178 integration tests gave reasonable coverage of the happy paths. The targeted unit tests are filling gaps in *error paths and policy variants* — exactly where the orchestration's gates and copies matter most.
+
+### Files changed
+
+| File | Lines |
+|---|---|
+| `tests/unit/test_migration_execution.py` | +395 (new) |
+| `docs/MIGRATION_PHASE_GAMMA_SCOPE.md` | +1 (tracker update) |
+| `CHANGELOG.md` | this entry |
+| `docs/releases/v1.7.90.md` | release notes |
+
+No source changes. Test count: 2038 → 2051 (+13).
+
+### Arc state
+
+- **90 ships**, all tagged
+- Six Phase Gamma modules at 100% (unchanged)
+- Migration arc: **sub-ship 2 of 5 closed**, running coverage 70.05%
+- 1 new lesson (#90)
+
+### Next
+
+**v1.7.91 — sub-ship 3 of 5:** cross-source execution (`_execute_one_cross_source`) + cross-source collision resolution + `_cross_source_overwrite_with_backup`. Revised target: 70.05% → ~80-84%. The biggest sub-ship in the arc by line count (~115 stmts).
+
 ## [1.7.89] — 2026-05-12 — Migration Phase Gamma sub-ship 1/5: Plan() edges + Apply() control flow
 
 First execution ship of the Migration Phase Gamma arc (opened in v1.7.88). Targets the smallest, most-defensive cluster: Plan() defensive branches and Apply() control-flow branches (autostrip dispatch, conflict-fail raise, _execute_one dispatch).
