@@ -4,6 +4,40 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.115] — 2026-05-13 — Round 2 Tier 1 FINAL: `plugins/core/lineage_filename.py` to 100%
+
+**Final sub-ship of Round 2 Tier 1.** Closes 7 uncovered lines + 4 partial branches in `plugins/core/lineage_filename.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `plugins/core/lineage_filename.py` | 83.08% | **100.00%** (+16.92%) |
+
+49 statements, 16 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_lineage_filename_coverage.py` (NEW, 5 tests):
+1. `_parse_versioned` falls through all patterns when name has no version marker.
+2. `_version_sort_key` ValueError fallback on non-numeric versions like "alpha".
+3. Same `curator_id` short-circuit returns None.
+4. One file matches no version pattern → returns None.
+5. file_a's version > file_b's → swap so file_b is the older "from" and file_a is the newer "to".
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. Honest logging.
+
+### Files
+
+- `tests/unit/test_lineage_filename_coverage.py` (+~110, new, 5 tests)
+- `docs/releases/v1.7.115.md`
+
+### 🎯 Round 2 Tier 1 complete — full report follows below
+
 ## [1.7.114] — 2026-05-13 — Round 2 Tier 1 ship 8: `plugins/core/lineage_hash_dup.py` to 100%
 
 Sub-ship 8 of Round 2 Tier 1. Closes 1 partial branch (50→53) — the canonicalization-swap True arm where `file_a.curator_id > file_b.curator_id`.
