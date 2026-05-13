@@ -250,12 +250,12 @@ class TestArcCloseValidation:
         assert app is not None
         assert hasattr(app, "registered_commands") or hasattr(app, "info")
 
-    def test_resolve_file_helpers_both_present(self):
-        """v1.7.155 documented two `_resolve_file` definitions.
-        Verify both still exist (the first is `# pragma: no cover`'d
-        dead code; the second is the live one)."""
+    def test_resolve_file_is_callable(self):
+        """v1.7.155 documented two `_resolve_file` definitions; v1.7.180
+        resolved that deferral by deleting the dead duplicate and merging
+        its prefix-match feature into the live definition. Now there is
+        exactly one ``_resolve_file`` at module level."""
         from curator.cli import main as main_mod
-        # The live one is what's exposed at module level
         assert callable(main_mod._resolve_file)
 
 

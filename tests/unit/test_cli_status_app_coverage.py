@@ -2,9 +2,9 @@
 
 Tier 3 sub-ship 15 of the CLI Coverage Arc.
 
-Also covers the SECOND `_resolve_file` definition at line 3721 (the one
-that actually executes — the first at line 187 is pragma'd dead code
-per v1.7.155).
+Also covers the live ``_resolve_file`` helper (the duplicate that used
+to live at line 187 was deleted in v1.7.180 after Jake's decision to
+merge its prefix-match feature into this definition).
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ def _setup(repos, path: str = "/file.txt",
 
 
 # ---------------------------------------------------------------------------
-# _resolve_file (the live second definition at line 3721+)
+# _resolve_file (UUID + exact path + prefix-match per v1.7.180)
 # ---------------------------------------------------------------------------
 
 
@@ -96,6 +96,35 @@ class TestResolveFile:
             source_id="local", source_type="local", display_name="L",
         ))
         assert _resolve_file(rt, "/nonexistent.txt") is None
+
+    def test_prefix_match_unambiguous(self, isolated_cli_db):
+        """v1.7.180: when exactly one indexed file starts with the
+        given prefix, return it (the path-prefix feature restored
+        from the v1.0.0rc1 dead duplicate)."""
+        f = _setup(isolated_cli_db, "/very/long/path/uniquely_named_file.pdf")
+        from types import SimpleNamespace
+        rt = SimpleNamespace(
+            file_repo=isolated_cli_db["files"],
+            source_repo=isolated_cli_db["sources"],
+        )
+        # Prefix doesn't match exact path; falls through to LIKE 'prefix%'
+        result = _resolve_file(rt, "/very/long/path/uniquely")
+        assert result is not None
+        assert result.curator_id == f.curator_id
+
+    def test_prefix_match_ambiguous_returns_none(self, isolated_cli_db):
+        """v1.7.180: ambiguous prefix (>= 2 matches) returns None so the
+        caller can surface 'No file matches' rather than auto-picking.
+        limit=2 in the query ensures we short-circuit at 2 matches."""
+        _setup(isolated_cli_db, "/dup/path/file_a.txt")
+        _setup(isolated_cli_db, "/dup/path/file_b.txt")
+        from types import SimpleNamespace
+        rt = SimpleNamespace(
+            file_repo=isolated_cli_db["files"],
+            source_repo=isolated_cli_db["sources"],
+        )
+        # Both files share this prefix.
+        assert _resolve_file(rt, "/dup/path/") is None
 
 
 # ---------------------------------------------------------------------------

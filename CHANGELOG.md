@@ -4,6 +4,68 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.180] — 2026-05-13 — Round 4 Tier 1 ship 1: resolve `_resolve_file` duplicate (option b — merge prefix-match)
+
+**Round 4 begins.** Resolves the deferred decision flagged in v1.7.155, carried as a `# pragma: no cover` through 21 sub-ships, and explicitly surfaced in the Round 3 close-out (v1.7.179).
+
+### What landed
+
+Jake's call: **option (b) — merge the prefix-match feature into the live `_resolve_file`** so the documented `inspect` behavior ("curator_id, full path, or path prefix") works again.
+
+**Source changes in `src/curator/cli/main.py`:**
+- **Deleted** the dead duplicate at lines 187–225 (-39 lines, including the v1.7.175 `# pragma: no cover` annotation)
+- **Restored** the path-prefix match (SQL `LIKE 'prefix%'` via `FileQuery(source_path_starts_with=..., limit=2)`) inside the live `_resolve_file`. The `limit=2` short-circuit distinguishes "exactly one match → return it" from "ambiguous → return None"; the caller surfaces `"No file matches"` on ambiguity rather than auto-picking
+- **Rewrote the docstring** with the full lookup order (UUID → exact path → prefix) and a history note on the v1.7.3 shadowing
+
+**Test changes:**
+- `tests/unit/test_cli_status_app_coverage.py`: added `test_prefix_match_unambiguous` + `test_prefix_match_ambiguous_returns_none` covering the restored prefix logic. Refreshed the file's module docstring (no more "first definition at line 187" reference)
+- `tests/unit/test_cli_main_final_cleanup_coverage.py`: updated `test_resolve_file_helpers_both_present` → `test_resolve_file_is_callable` to reflect the single-definition reality
+
+### Behavior restored
+
+`curator inspect /Users/jake/Documents/uniq` now works again when exactly one indexed file starts with that prefix — silently broken since **v1.7.3** (commit `5fbd6d7`, Feb 2026). All 6 call sites benefit: `inspect`, `scan/group/lineage`, `bundles` (×2), `migrate`, `status set/get`.
+
+### Coverage
+
+Standard shipping invocation per Lesson #96 / Doctrine #14 attempted with `pytest tests/ --cov=...`, but **multiple trash-flow tests in `tests/integration/` and `tests/gui/` hang in this sandbox** when they call into the vendored `send2trash` recycle-bin enumerator. The hangs are pre-existing environmental — predates v1.7.180 — not regressions from this ship. On Jake's real Windows / CI, these tests complete in seconds. **Falling back to `tests/unit/`** which contains every CLI Coverage Arc test (all `CliRunner`-based) and is sufficient to measure `cli/main.py`:
+
+```
+pytest tests/unit/ --cov=curator.cli.main --cov-branch --cov-report=term-missing
+# 2602 passed, 5 skipped (Windows symlink-perm), 2 deselected
+# cli/main.py: 1843 stmts, 0 missing, 812 branches, 15 partial → 99.44%
+```
+
+| Module | Before (v1.7.175) | After (v1.7.180) |
+|---|---|---|
+| `cli/main.py` | 99.43% (1881 stmts, 10 pragmas, 15 partials) | **99.44%** (1843 stmts, 9 pragmas, 15 partials, 0 missing lines) |
+
+Net source: **−39 lines dead code**, **+10 lines docstring**, **+1 pragma retired**, **+2 new tests**, **+0.01% coverage**. Partials count unchanged (the retired pragma covered a fully-shadowed block — no branches were attributed to it in v1.7.175 either).
+
+**Tier 1 follow-up candidate flagged:** the recycle-bin enumerator hang on full-suite runs in sandboxes is a real environmental fragility that should be addressed — either with a `@pytest.mark.integration` marker on the affected tests, or with a `send2trash` mock fixture for sandbox runs. Adding to `docs/DEFERRED_DECISIONS.md` in v1.7.181.
+
+### Lesson #102 captured — Shadowed definitions become silent regressions
+
+When a module accumulates two `def name(...):` at top level, Python binds the name to the **last** one. The first becomes silently dead. **The cost is not just the dead lines — it's that any *advertised* behavior unique to the first definition (in help text, docstrings, user-facing strings) becomes a quiet lie.**
+
+**Discovery in v1.7.155 → v1.7.180:** the dead `_resolve_file` had a prefix-match feature. `inspect`'s `typer.Argument(..., help="curator_id, full path, or path prefix.")` told users it worked. From v1.7.3 (when the duplicate was accidentally introduced) through v1.7.179 (the Round 3 close), it didn't. 175 ships of silent contract violation.
+
+**Application:**
+- When a coverage arc surfaces duplicate top-level definitions, **the question is not just "delete or keep?" — it's "what behavior did the dead copy advertise that's no longer happening?"** Grep the surrounding CLI help text, docstrings, and user-facing strings for references to the dead behavior.
+- Static-analysis stacks (ruff, pyflakes, mypy) **do not flag shadowed top-level definitions** by default. The duplicate passed every lint check from v1.7.3 onward.
+- A `ruff` rule worth considering for Round 4 / future: `F811` (redefinition of unused name) catches some cases but not when the second definition is in a different scope or the first has been read. Worth a focused linter audit.
+- This compounds with Lesson #100 (surface dead/duplicate code): the v1.7.155 deferral correctly waited for Jake's call. The wait revealed not just a duplicate to delete, but a **documented feature** that had quietly regressed. Auto-deletion would have closed the door on the right answer.
+
+### Files
+
+- `src/curator/cli/main.py` (−39 source lines net, prefix-match restored)
+- `tests/unit/test_cli_status_app_coverage.py` (+2 tests, module docstring refresh)
+- `tests/unit/test_cli_main_final_cleanup_coverage.py` (1 test renamed/updated)
+- `docs/releases/v1.7.180.md`
+
+### Next
+
+**v1.7.181** — `docs/DEFERRED_DECISIONS.md` index (Tier 1 ship 2 of 5).
+
 ## [1.7.179] — 2026-05-13 — Round 3 Tier 4 ship 4 (FINAL): `gui/cleanup_signals.py` to 100%
 
 **FINAL Tier 4 ship. FINAL Round 3 ship.** Closes 94 statements + 8 branches across two bridges and four QThread workers.

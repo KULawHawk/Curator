@@ -184,47 +184,6 @@ def _err_console(rt: CuratorRuntime) -> Console:
     return Console(no_color=rt.no_color, stderr=True)
 
 
-def _resolve_file(rt: CuratorRuntime, identifier: str):  # pragma: no cover -- shadowed by duplicate definition at line 3711+
-    """Resolve a CLI identifier to a FileEntity.
-
-    DEAD CODE — shadowed by the second ``_resolve_file`` definition at
-    line 3711+. v1.7.155 discovered this: at module load time, Python
-    binds ``_resolve_file`` to whichever definition appears last (line
-    3711), so the substring-match feature advertised here is never
-    actually invoked. Callers (``inspect``, ``status_*``, etc.) hit the
-    simpler line-3711 version which only supports UUID + exact path.
-
-    Left as ``# pragma: no cover`` rather than removed pending Jake's
-    decision: (a) delete this dead definition, or (b) merge the
-    substring-match feature into the line-3711 version so it works.
-    Either is a real source change with user-visible behavior
-    implications; surfaced in v1.7.155 release notes for review.
-    """
-    # Try UUID first.
-    try:
-        cid = UUID(identifier)
-        return rt.file_repo.get(cid)
-    except ValueError:
-        pass
-
-    # Try absolute path against any source.
-    sources = rt.source_repo.list_all()
-    for src in sources:
-        f = rt.file_repo.find_by_path(src.source_id, identifier)
-        if f is not None:
-            return f
-
-    # Substring search via FileQuery (uses LIKE escaping).
-    q = FileQuery(source_path_starts_with=identifier, limit=2)
-    matches = rt.file_repo.query(q)
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        # Ambiguous; the caller surfaces this.
-        return None
-    return None
-
-
 def _emit_json(rt: CuratorRuntime, payload: object) -> None:
     """Write JSON to stdout for ``--json`` mode."""
     typer.echo(json.dumps(payload, default=str, indent=2))
@@ -3719,23 +3678,52 @@ def forecast_cmd(
 # ------------------------------------------------------------------
 
 def _resolve_file(rt: "CuratorRuntime", target: str):
-    """Resolve a path-or-UUID target to a FileEntity.
+    """Resolve a CLI identifier to a FileEntity.
 
-    Tries UUID first (cheap); falls back to find_by_path against every
-    registered source. Returns None if not found.
+    Tries (in order):
+
+    1. **UUID** — fastest, exact identity.
+    2. **Exact absolute path** — looked up against every registered source
+       via ``find_by_path``.
+    3. **Path prefix** — SQL ``LIKE 'prefix%'`` via
+       :class:`~curator.storage.queries.FileQuery`. Returns the file if
+       exactly one match exists; returns ``None`` if no matches or if
+       the prefix is ambiguous (≥ 2 matches — caller surfaces this as
+       "No file matches" rather than auto-picking).
+
+    Returns ``None`` if no unambiguous match is found.
+
+    History: v1.0.0rc1 introduced this helper with UUID + exact-path +
+    prefix-match. v1.7.3 added a second ``_resolve_file`` at the bottom
+    of the module (for the new ``status`` taxonomy) that silently
+    shadowed the original via Python's last-binding rule, dropping the
+    prefix-match feature. v1.7.155 (Round 3 Tier 3) discovered the
+    duplicate; v1.7.180 deleted the dead copy and restored prefix-match
+    here. The ``inspect`` command's help text ("curator_id, full path,
+    or path prefix") has always advertised this; now it works again.
     """
     from uuid import UUID as _UUID
-    # Try UUID first
+    # Try UUID first (fastest, exact identity).
     try:
         cid = _UUID(target)
         return rt.file_repo.get(cid)
     except (ValueError, AttributeError):
         pass
-    # Try path lookup across sources
+    # Try exact path lookup across sources.
     for source in rt.source_repo.list_all():
         f = rt.file_repo.find_by_path(source.source_id, target)
         if f is not None:
             return f
+    # Fall back to path-prefix match via FileQuery (SQL LIKE 'prefix%').
+    # limit=2 distinguishes "exactly one" (return it) from "ambiguous"
+    # (≥ 2 matches → return None; caller emits "No file matches"). We
+    # don't load all matches because the prefix feature is for
+    # disambiguation by typing more characters, not for enumeration.
+    matches = rt.file_repo.query(
+        FileQuery(source_path_starts_with=target, limit=2),
+    )
+    if len(matches) == 1:
+        return matches[0]
     return None
 
 
