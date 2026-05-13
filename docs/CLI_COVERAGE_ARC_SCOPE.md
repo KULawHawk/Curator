@@ -182,7 +182,7 @@ Restart prompt: *"Resume CLI Coverage Arc. Open docs/CLI_COVERAGE_ARC_SCOPE.md, 
 | v1.7.164 | ✅ Closed | `cleanup_app` (4 subcmds + 4 helpers) | cli/main.py: 49.09% → **54.86%** | 2026-05-13 |
 | v1.7.165 | ✅ Closed | `gui` + `gdrive_app` (paths/status/auth) | cli/main.py: 54.86% → 57.82% | 2026-05-13 |
 | v1.7.166 | ✅ Closed | `migrate` Part 1 (list/status/abort/resume-lookup/plan) | cli/main.py: 57.82% → **64.70%** | 2026-05-13 |
-| v1.7.167 | ⏳ Pending | `migrate` Part 2 | TBD | TBD |
+| v1.7.167 | ✅ Closed | `migrate` Part 2 (apply + resume + report render) | cli/main.py: 64.70% → 68.43% | 2026-05-13 |
 | v1.7.168 | ⏳ Pending | `forecast` | TBD | TBD |
 | v1.7.169 | ⏳ Pending | `status_app` | TBD | TBD |
 | v1.7.170 | ⏳ Pending | `scan-pii` | TBD | TBD |

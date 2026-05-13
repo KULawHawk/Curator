@@ -4,6 +4,40 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.167] — 2026-05-13 — Round 3 Tier 3 ship 13: `cli/main.py` `migrate` Part 2
+
+Closes ~67 uncovered lines covering Phase 1/Phase 2 apply execution paths + `_migrate_resume` full + `_render_migration_report`. **Completes the v1.7.166/167 Lesson #88 pre-split.**
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 64.70% | **68.43%** (+3.73%) |
+
+### What landed
+
+`tests/unit/test_cli_migrate_part2_coverage.py` (NEW, 16 tests):
+- **Phase 1 apply**: no-eligible-files (human + JSON), happy path human + JSON, `--keep-source` switches MOVED → COPIED heading, failed_count → exit 1 with Failures section, ValueError → exit 2, MigrationConflictError → exit 1, unexpected exception propagates
+- **Phase 2** (`--workers > 1`): happy path with create_job + run_job + job_id in heading, failed_count → exit 1, JSON includes job_id
+- **`--resume` full**: existing job → run + report, with failures → exit 1
+- **`_render_migration_report`**: 25-failure cap "... and N more", skipped moves rendered
+
+Notable iteration: two test stubs initially used `lambda self, **kw:` for `create_job` but the real signature uses positional `plan` arg + keyword-only `options/db_path_guard/include_caution`. Fixed to match: `lambda self, plan, *, options, db_path_guard, include_caution: ...`.
+
+Migrate sub-arc complete: **v1.7.166 + v1.7.167 combined +10.61% on cli/main.py**.
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_cli_migrate_part2_coverage.py` (+~340, new, 16 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.167.md`
+
+### Next
+
+**v1.7.168** — `forecast` command (~130 lines predicted).
+
 ## [1.7.166] — 2026-05-13 — Round 3 Tier 3 ship 12: `cli/main.py` `migrate` Part 1
 
 Closes ~130 uncovered lines covering `_parse_job_id`, `_migrate_list`, `_migrate_status`, `_migrate_abort`, `_migrate_resume` (lookup branch), `_render_migration_plan`, plus the `migrate_cmd` validation + lifecycle dispatch + plan-only path.
