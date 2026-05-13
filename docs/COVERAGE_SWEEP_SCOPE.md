@@ -85,7 +85,7 @@ If picking this up in a new session, the restart prompt is: *"Resume Coverage Sw
 | Sub-ship | Status | Module | Final coverage | Date |
 |---|---|---|---|---|
 | v1.7.94 | ✅ This scope plan | — | n/a (doc-only) | 2026-05-13 |
-| v1.7.95 | ⏳ Pending | `services/forecast.py` | TBD | TBD |
+| v1.7.95 | ✅ Closed | `services/forecast.py` | **100.00%** (was 98.45%) | 2026-05-13 |
 | v1.7.96 | ⏳ Pending | `services/fuzzy_index.py` | TBD | TBD |
 | v1.7.97 | ⏳ Pending | `services/watch.py` | TBD | TBD |
 | v1.7.98 | ⏳ Pending | `services/audit.py` | TBD | TBD |

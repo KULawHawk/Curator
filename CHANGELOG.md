@@ -4,6 +4,38 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.95] — 2026-05-13 — Coverage Sweep 1/12: `services/forecast.py` to 100%
+
+Sub-ship 1 of the Coverage Sweep arc. Closes the one uncovered statement + one partial branch in `services/forecast.py` (was 98.45% → **100.00%**).
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/forecast.py` | 98.45% | **100.00%** (+1.55%) |
+
+109 statements, 20 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_forecast_coverage.py` (NEW, 1 test) — covers the `denom == 0` path in `_linear_fit` (triggered by two month buckets with the same `YYYY-MM`, producing identical xs and a zero least-squares denominator).
+
+**Small source refactor in `services/forecast.py`:** the `if n else 0.0` defensive guard inside the `denom == 0` return was provably unreachable — line 266-267 raises `ValueError` when `len(history) < 2`, so n is always ≥ 2 inside the function. Removed the dead guard per doctrine item 1 ("untested code is untrusted code"), preferring honest code over speculative defensiveness. Added an inline comment explaining the removal so future readers don't re-add the guard.
+
+### Lesson captured
+
+No new lesson this ship. The refactor decision (remove dead defensive code vs. annotate with pragma) is well-covered by doctrine item 1 + Lesson #91 — when defensive code is *provably* unreachable, removing it is cleaner than annotating around it. Both options would have satisfied apex-accuracy; I went with refactor because it produces cleaner code AND because the upstream guard (`len(history) < 2` raise) is the genuine load-bearing boundary, making the inner guard genuinely redundant.
+
+### Files
+
+- `tests/unit/test_forecast_coverage.py` (+33, new)
+- `src/curator/services/forecast.py` (+6 / -1, dead-guard removal + explanatory comment)
+- `docs/COVERAGE_SWEEP_SCOPE.md` (+1 line, tracker update)
+
+### Next
+
+**v1.7.96** — `services/fuzzy_index.py`. Handoff predicts ~5 min, 2 lines.
+
 ## [1.7.94] — 2026-05-13 — Coverage Sweep arc: scope plan for the 12-module sweep
 
 Doc-only ship that opens a new arc immediately following the closure of Migration Phase Gamma. The Coverage Sweep arc applies the apex-accuracy doctrine — now mature after the 7-sub-ship migration arc — to the 12 services modules that are closest to 100% but not yet there. Each module is a sub-ship; ordered by ascending effort; trimmed ceremony per ship.

@@ -293,7 +293,11 @@ def _linear_fit(
 
     denom = n * sum_xx - sum_x * sum_x
     if denom == 0:
-        return 0.0, sum_y / n if n else 0.0, 0.0
+        # All xs identical (e.g. two buckets in the same month) - no linear
+        # fit possible. n >= 2 is guaranteed by the length-check above, so
+        # the `if n else 0.0` defensive guard that used to live here was
+        # provably unreachable and has been removed.
+        return 0.0, sum_y / n, 0.0
 
     slope = (n * sum_xy - sum_x * sum_y) / denom
     intercept = (sum_y - slope * sum_x) / n
