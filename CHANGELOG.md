@@ -4,6 +4,37 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.177] — 2026-05-13 — Round 3 Tier 4 ship 2: `gui/migrate_signals.py` to 100%
+
+Smallest GUI module (5 statements) closed.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `gui/migrate_signals.py` | 0.00% | **100.00%** |
+
+### What landed
+
+`tests/unit/test_gui_migrate_signals_coverage.py` (NEW, 4 tests):
+- Instantiate `MigrationProgressBridge` under module-scoped `qapp` fixture
+- Connect a slot, verify emit delivers payload
+- Signal(object) accepts arbitrary payloads (str/int/dict/None)
+- `__all__` exports the class
+
+Test infrastructure: `qapp` fixture (`QApplication.instance() or QApplication(sys.argv)`) under `QT_QPA_PLATFORM=offscreen` for headless Qt. Pattern carries forward to v1.7.178/179.
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_gui_migrate_signals_coverage.py` (+~60, new, 4 tests)
+- `docs/releases/v1.7.177.md`
+
+### Next
+
+**v1.7.178** — `gui/scan_signals.py` (25 statements).
+
 ## [1.7.176] — 2026-05-13 — Round 3 Tier 4 ship 1: `gui/launcher.py` to 100%
 
 First Tier 4 (stretch) ship. Opens GUI signals testing — proves the Qt-backed test seam works without launching a real window.
