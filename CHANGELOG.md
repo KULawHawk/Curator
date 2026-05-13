@@ -4,6 +4,38 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.119] — 2026-05-13 — Tier 2 ship 3: `mcp/middleware.py` to 100%
+
+First MCP-server module of Tier 2. Closes 5 uncovered lines + 1 partial branch in `mcp/middleware.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `mcp/middleware.py` | 93.33% | **100.00%** (+6.67%) |
+
+76 statements, 14 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_mcp_middleware_coverage.py` (NEW, 5 tests): `_remote_addr` None branch, `update_last_used` exception swallow during dispatch (with `asyncio.run` since pytest-asyncio isn't installed), `_emit_failure` audit-emitter exception swallow, `_emit_success` audit-emitter exception swallow.
+
+No source changes.
+
+### Lesson captured
+
+No new lesson, but a small carry-forward observation: **`asyncio.run(mw.dispatch(...))`** works fine for testing single async dispatch calls when pytest-asyncio isn't available. The pattern slots cleanly into existing sync tests without adding a dependency. Honest logging.
+
+### Files
+
+- `tests/unit/test_mcp_middleware_coverage.py` (+~120, new, 5 tests)
+- `docs/PLUGINS_MCP_SWEEP_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.119.md`
+
+### Next
+
+**v1.7.120** — `mcp/auth.py`.
+
 ## [1.7.118] — 2026-05-13 — Tier 2 ship 2: `plugins/core/lineage_fuzzy_dup.py` to 100%
 
 Closes 17 uncovered lines + 3 partial branches in `plugins/core/lineage_fuzzy_dup.py`.

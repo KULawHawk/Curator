@@ -98,7 +98,7 @@ Restart prompt: *"Resume Plugins + MCP + Config Sweep arc. Open docs/PLUGINS_MCP
 | v1.7.116 | ✅ This scope plan | — | n/a (doc-only) | 2026-05-13 |
 | v1.7.117 | ✅ Closed | `plugins/core/classify_filetype.py` | **100.00%** (was 66.67%) | 2026-05-13 |
 | v1.7.118 | ✅ Closed | `plugins/core/lineage_fuzzy_dup.py` | **100.00%** (was 48.94%) | 2026-05-13 |
-| v1.7.119 | ⏳ Pending | `mcp/middleware.py` | TBD | TBD |
+| v1.7.119 | ✅ Closed | `mcp/middleware.py` | **100.00%** (was 93.33%) | 2026-05-13 |
 | v1.7.120 | ⏳ Pending | `mcp/auth.py` | TBD | TBD |
 | v1.7.121 | ⏳ Pending | `mcp/tools.py` | TBD | TBD |
 | v1.7.122 | ⏳ Pending | `mcp/server.py` | TBD | TBD |
