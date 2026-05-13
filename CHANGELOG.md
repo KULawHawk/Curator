@@ -4,6 +4,38 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.120] — 2026-05-13 — Tier 2 ship 4: `mcp/auth.py` to 100%
+
+Closes 12 uncovered lines + 3 partial branches in `mcp/auth.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `mcp/auth.py` | 90.38% | **100.00%** (+9.62%) |
+
+124 statements, 32 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_mcp_auth_coverage.py` (NEW, 5 tests): `_set_secure_permissions` chmod OSError swallow (with `sys.platform` monkeypatched to "linux"), `load_keys` and `save_keys` default-path arms (via `default_keys_file` monkeypatch), `save_keys` tmp-file cleanup on rename failure (+ swallowing unlink failure).
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. Honest logging.
+
+### Files
+
+- `tests/unit/test_mcp_auth_coverage.py` (+~115, new, 5 tests)
+- `docs/PLUGINS_MCP_SWEEP_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.120.md`
+
+### Next
+
+**v1.7.121** — `mcp/tools.py`.
+
 ## [1.7.119] — 2026-05-13 — Tier 2 ship 3: `mcp/middleware.py` to 100%
 
 First MCP-server module of Tier 2. Closes 5 uncovered lines + 1 partial branch in `mcp/middleware.py`.
