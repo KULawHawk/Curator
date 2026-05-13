@@ -4,6 +4,73 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.94] — 2026-05-13 — Coverage Sweep arc: scope plan for the 12-module sweep
+
+Doc-only ship that opens a new arc immediately following the closure of Migration Phase Gamma. The Coverage Sweep arc applies the apex-accuracy doctrine — now mature after the 7-sub-ship migration arc — to the 12 services modules that are closest to 100% but not yet there. Each module is a sub-ship; ordered by ascending effort; trimmed ceremony per ship.
+
+This is the **second multi-ship arc planned under the doctrine** (per Lesson #88 — multi-ship arcs need explicit scope plans; the plan IS a ship). Modeled directly on `docs/MIGRATION_PHASE_GAMMA_SCOPE.md`.
+
+### Target modules
+
+12 sweep targets ordered by handoff-doc effort estimate (handoff numbers will be re-measured at each sub-ship's start — Lesson #93, coverage-continuity discipline):
+
+| Ship | Module | Effort | Lines (handoff) |
+|---|---|---|---|
+| v1.7.95 | `services/forecast.py` | ~5 min | 1 |
+| v1.7.96 | `services/fuzzy_index.py` | ~5 min | 2 |
+| v1.7.97 | `services/watch.py` | ~10 min | 3 |
+| v1.7.98 | `services/audit.py` | ~15 min | 3 |
+| v1.7.99 | `services/pii_scanner.py` | ~15 min | 5 |
+| **v1.7.100** | `services/music.py` | ~20 min | 6 | **🎉 100-ship milestone** |
+| v1.7.101 | `services/metadata_stripper.py` | ~30 min | 7 |
+| v1.7.102 | `services/musicbrainz.py` | ~30 min | 12 |
+| v1.7.103 | `services/classification.py` | ~30 min | 12 |
+| v1.7.104 | `services/migration_retry.py` | ~45 min | 17 |
+| v1.7.105 | `services/code_project.py` | ~45 min | 17 |
+| v1.7.106 | `services/document.py` | ~60 min | 22 |
+
+**Total handoff estimate:** 5-6 hours of clean execution. **Each module's baseline re-measured at sub-ship start** (Lesson #93 — don't trust historical coverage numbers, especially for modules adjacent to recent work).
+
+### Out of scope (deferred)
+
+- `services/hash_pipeline.py` (moderate work; own ship)
+- `services/organize.py` (moderate; own ship)
+- `services/cleanup.py` (moderate; own ship)
+- `services/trash.py` (substantial; defer)
+- All `plugins/core/*` (separate plugin arc)
+- All `gui/*` (needs strategy first)
+- `cli/main.py` (standalone CLI arc with `click.testing.CliRunner`)
+- `mcp/*` (low priority)
+
+### Doctrine notes
+
+This arc differs in character from Migration Phase Gamma:
+
+- **Migration Phase Gamma** was *deep* — one giant module, 7 sub-ships, structurally complex code requiring new stub infrastructure (`StubMigrationPluginManager`, `StubMigrationJobRepository`) and novel test design (`_SyncExecutor` shim per Lesson #94).
+- **Coverage Sweep** is *wide* — 12 modules, one sub-ship each, mostly trivial-to-easy. The stub vocabulary is already built. The patterns are mature. The work is systematic application of doctrine, not invention.
+
+If a sub-ship turns out to need substantial mocking that wasn't predicted, **stop and ask** — that's a signal the module belongs to a deferred arc instead. Per the partnership directive: surface scope issues before burning effort.
+
+### Reporting cadence
+
+Per handoff: report back after every 3 sub-ships with a status line. At **v1.7.100**: pause for milestone reflection in `docs/releases/v1.7.100.md`.
+
+### Lessons captured
+
+**No new lesson this ship.** This is the second instance of "scope plan opens a multi-ship arc" — Lesson #88 was captured at v1.7.88 specifically for the first instance. Applying the same pattern a second time is doctrine-in-action, not a new lesson. Honest logging per the v1.7.93a precedent.
+
+### Files
+
+- `docs/COVERAGE_SWEEP_SCOPE.md` (NEW, ~140 lines)
+- `CHANGELOG.md` (this entry)
+- `docs/releases/v1.7.94.md` (release notes, trimmed)
+
+No source changes. No tests added.
+
+### Next
+
+**v1.7.95 — sub-ship 1 of 12:** `services/forecast.py` to 100%. Handoff predicts ~5 min, 1 uncovered line. Real baseline measured at sub-ship start.
+
 ## [1.7.93b] — 2026-05-13 — 🎯 Migration Phase Gamma ARC CLOSED: Persistent job lifecycle + worker pool → `migration.py` at 100.00%
 
 Sub-ship 5b/6 (final) of the Migration Phase Gamma arc. **Closes the arc.** Targets Group B of the v1.7.93 split: the persistent-job lifecycle (`create_job`, `run_job` options resolution + threading orchestration, `_worker_loop` per-row dispatch, `_execute_one_persistent` dispatcher, `_execute_one_persistent_same_source`, `_execute_one_persistent_cross_source`, `abort_job`, `list_jobs`, `get_job_status`, `_build_report_from_persisted`). Lands `services/migration.py` at **100.00% line + branch** — the seventh Phase Gamma module at 100%.
