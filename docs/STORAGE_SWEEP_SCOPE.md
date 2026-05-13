@@ -130,7 +130,16 @@ Restart prompt: *"Resume Storage Repositories Sweep arc. Open docs/STORAGE_SWEEP
 | v1.7.136 | ✅ Closed | `storage/repositories/_helpers.py` | **100.00%** (was 57.58%) | 2026-05-13 |
 | v1.7.137 | ✅ Closed | `storage/repositories/bundle_repo.py` | **100.00%** (was 52.94%) | 2026-05-13 |
 
-**ARC COMPLETE.** All 11 modules at 100% line + branch.
+**Tier 3 ARC COMPLETE.** All 11 modules at 100% line + branch.
+
+## Tier 4 follow-up (storage sweep finish)
+
+| Sub-ship | Status | Module | Final coverage | Date |
+|---|---|---|---|---|
+| v1.7.138 | ✅ Closed | `storage/repositories/lineage_repo.py` | **100.00%** (was 38.67%) | 2026-05-13 |
+| v1.7.139 | ⏳ Pending | `storage/repositories/file_repo.py` | TBD | TBD |
+
+With v1.7.139, **the entire `storage/` subpackage** will be at 100% line + branch.
 
 ## Arc-level success criteria
 

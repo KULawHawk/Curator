@@ -4,6 +4,51 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.138] — 2026-05-13 — Tier 4 ship 1: `storage/repositories/lineage_repo.py` to 100%
+
+Closes 38 uncovered lines in `storage/repositories/lineage_repo.py`. First of two storage modules deferred from Tier 3 to Tier 4 (opt-in stretch). Jake explicitly approved Tier 4.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `storage/repositories/lineage_repo.py` | 38.67% | **100.00%** (+61.33%) |
+
+67 statements, 8 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_storage_lineage_repo_coverage.py` (NEW, 17 tests):
+- `insert` on_conflict arms: ignore (duplicate -> False), replace (overwrites), raise (propagates IntegrityError), FK-violation under "ignore" mode returns False (covers line 72)
+- `delete(edge_id)` removes a row
+- `delete_for_file` removes both directions (returns rowcount)
+- `get(edge_id)` returns edge / None for missing
+- `get_edges_from` / `get_edges_to` direction-specific reads
+- `get_edges_for` both-direction read
+- `get_edges_between` with + without kind filter
+- `list_by_kind` with min_confidence + limit
+- `query_by_confidence` range semantics (inclusive lower, exclusive upper) + limit
+
+Uses shared `repos`/`local_source` fixtures. No source changes.
+
+### Notable iteration
+
+First measurement caught line 72 as still uncovered (the `return False` in `except sqlite3.IntegrityError:` when `on_conflict != "raise"`). The standard insert tests used `on_conflict="ignore"` with PK conflicts, but `INSERT OR IGNORE` SUPPRESSES PK conflicts entirely — the IntegrityError handler never fires. The FK-violation test forces the path: bogus from/to UUIDs trigger an FK error which `OR IGNORE` does NOT suppress, the handler catches it, and line 72 returns False.
+
+### Lesson captured
+
+No new lesson. The `INSERT OR IGNORE` semantic distinction (it ignores PK/UNIQUE conflicts but NOT FK violations) is a SQLite detail worth noting, but doesn't rise to the level of a captured lesson — it's already implicit in the existing IntegrityError handler.
+
+### Files
+
+- `tests/unit/test_storage_lineage_repo_coverage.py` (+~200, new, 17 tests)
+- `docs/STORAGE_SWEEP_SCOPE.md` (+~10 lines, Tier 4 follow-up section + lineage_repo tracker)
+- `docs/releases/v1.7.138.md`
+
+### Next
+
+**v1.7.139** — `storage/repositories/file_repo.py` (96 lines, BIGGEST single Round 2 ship). May split per Lesson #88 if scope grows beyond 1.5x typical.
+
 ## [1.7.137] — 2026-05-13 — Tier 3 ship 11 (FINAL): `storage/repositories/bundle_repo.py` to 100%
 
 Closes 28 uncovered lines in `storage/repositories/bundle_repo.py` — the biggest of Tier 3 and the final sub-ship. **Storage Repositories Sweep arc COMPLETE.**
