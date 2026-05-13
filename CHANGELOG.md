@@ -4,6 +4,36 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.178] — 2026-05-13 — Round 3 Tier 4 ship 3: `gui/scan_signals.py` to 100%
+
+Closes 25 statements covering ScanProgressBridge (4 signals) + ScanWorker (QThread wrapper around ScanService.scan).
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `gui/scan_signals.py` | 0.00% | **100.00%** |
+
+### What landed
+
+`tests/unit/test_gui_scan_signals_coverage.py` (NEW, 6 tests):
+- ScanProgressBridge: instantiation under qapp; all 4 signals (scan_started/completed/failed/progress) emit + deliver
+- ScanWorker: __init__ stores args; `run()` success path (scan returns report → started + completed); `run()` exception path (scan raises → started + failed, NOT completed)
+- `__all__` exports both classes
+
+Test infrastructure: same qapp fixture pattern from v1.7.177. Calls `worker.run()` directly (synchronous) instead of `start()` so no QThread event loop is needed.
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_gui_scan_signals_coverage.py` (+~120, new, 6 tests)
+- `docs/releases/v1.7.178.md`
+
+### Next
+
+**v1.7.179** — `gui/cleanup_signals.py` (94 statements, final Tier 4 ship).
+
 ## [1.7.177] — 2026-05-13 — Round 3 Tier 4 ship 2: `gui/migrate_signals.py` to 100%
 
 Smallest GUI module (5 statements) closed.
