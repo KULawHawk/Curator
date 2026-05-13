@@ -4,6 +4,44 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.170] — 2026-05-13 — Round 3 Tier 3 ship 16: `cli/main.py` `scan-pii`
+
+Closes ~82 uncovered lines in the `scan-pii` command.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 73.60% | **78.30%** (+4.70%) |
+
+### What landed
+
+`tests/unit/test_cli_scan_pii_coverage.py` (NEW, 13 tests):
+- Target not found exits 1
+- Single file no matches (human "No PII detected")
+- Single file with matches (human Per-file findings + HIGH severity)
+- Directory recursive with --no-recursive + --ext flags
+- --high-only filter
+- --head-bytes triggers fresh PIIScanner instance
+- --show-matches renders match lines + high-risk metadata
+- Error report rendered with warning + Errors counter
+- JSON output with all fields
+- CSV per-file (header + truncated) / per-match (metadata) / no-header / tsv
+
+Test infrastructure: `_match(pattern, severity, line, metadata)` and `_report(source, matches, truncated, error)` factories.
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_cli_scan_pii_coverage.py` (+~340, new, 13 tests)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.170.md`
+
+### Next
+
+**v1.7.171** — `export-clean` (~190 lines).
+
 ## [1.7.169] — 2026-05-13 — Round 3 Tier 3 ship 15: `cli/main.py` `status_app`
 
 Closes ~60 uncovered lines across `status set`, `status get`, `status report`, plus the LIVE `_resolve_file` definition at line 3721 (the one that actually executes — the duplicate at line 187 was pragma'd in v1.7.155).
