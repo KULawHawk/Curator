@@ -4,6 +4,45 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.140] — 2026-05-13 — Tier 4 ship 3: Mid-Size Services Sweep scope plan
+
+Opens the Mid-Size Services Sweep arc — the second sub-arc within Round 2 Tier 4. Scope plan only — no source or test changes.
+
+### What landed
+
+`docs/MID_SIZE_SERVICES_SWEEP_SCOPE.md` (NEW) — 5-module sweep scope. Baselines re-measured per Lesson #93; all 5 handoff predictions verified exactly.
+
+### Targets
+
+| Ship | Module | Uncovered |
+|---|---|---|
+| v1.7.141 | `services/photo.py` | 11 lines |
+| v1.7.142 | `services/cleanup.py` | 50 lines + 9 br |
+| v1.7.143 | `services/organize.py` | 56 lines + 10 br |
+| v1.7.144 | `services/hash_pipeline.py` | 52 lines + 12 br |
+| v1.7.145 | `services/trash.py` | 90 lines (worst, 24.69%) |
+
+Total: 259 lines + 31 partial branches across 5 modules. Combined 75.64% → target ~100%.
+
+### Watchpoints carried from Round 2 handoff
+
+- v1.7.145 (trash.py) is riskiest — may split per Lesson #88
+- cleanup.py + organize.py share collaborators — pattern dividends expected (Lesson #87)
+- hash_pipeline.py has 12 partial branches — careful design
+
+### Lesson captured
+
+No new lesson. Scope-plan-as-ship pattern (Lesson #88) is settled.
+
+### Files
+
+- `docs/MID_SIZE_SERVICES_SWEEP_SCOPE.md` (NEW)
+- `docs/releases/v1.7.140.md` (NEW)
+
+### Next
+
+**v1.7.141** — `services/photo.py` (11 lines).
+
 ## [1.7.139] — 2026-05-13 — Tier 4 ship 2: `storage/repositories/file_repo.py` to 100%
 
 Closes 96 uncovered lines + 5 partial branches in `storage/repositories/file_repo.py` — the biggest single ship in Round 2. **Entire `storage/` subpackage now at 100% line + branch.**
