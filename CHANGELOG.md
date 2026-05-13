@@ -4,6 +4,36 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.148] — 2026-05-13 — Round 3 Tier 1 ship 3: Dependabot pip ecosystem expansion
+
+Completes the deferred Round 1 item ("add pip ecosystem when we have CI signal stable enough to absorb dependabot PR churn"). The deferral rationale at v1.7.71 was 25 ships from now; we are at 148 ships, 55 modules at 100%, 5 arcs closed.
+
+### What landed
+
+`.github/dependabot.yml` updated:
+- Header comments rewritten to reflect 2-ecosystem watching + the deferral closure
+- New `pip` ecosystem block added:
+  - `directory: /` (where pyproject.toml lives)
+  - `schedule.interval: weekly`, Mondays at 08:30 America/Chicago (offset 30 min from github-actions to spread load)
+  - `labels: [dependencies, python]`
+  - `groups`: split into `production-deps` and `development-deps` via `dependency-type` so production-dep updates land separately from dev-dep updates in review
+  - `open-pull-requests-limit: 5` (matches github-actions cap)
+
+No source changes. No test changes. Config-only ship.
+
+### Lesson captured
+
+No new lesson.
+
+### Files
+
+- `.github/dependabot.yml` (rewritten header + new pip ecosystem block)
+- `docs/releases/v1.7.148.md` (NEW)
+
+### Next
+
+**v1.7.149** — Constellation docs update (Curator section in `..\AD_ASTRA_CONSTELLATION.md`).
+
 ## [1.7.147] — 2026-05-13 — Round 3 Tier 1 ship 2: README coverage badge + maturity update
 
 Documentation-only ship. Updates README to reflect Round 2 close-out state (146 ships, 55 modules at 100%, 5 arcs closed, current coverage 54.65%).
