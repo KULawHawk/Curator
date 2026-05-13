@@ -4,6 +4,48 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.184] — 2026-05-13 — Round 4 Tier 1 ship 5 (FINAL): pytest-qt smoke test
+
+**FINAL Tier 1 ship.** Validates that `pytest-qt`'s `qtbot` fixture is available and that the 3 idioms the GUI Coverage Arc will rely on actually work. Tier 1 closes.
+
+### What landed
+
+`tests/unit/test_pytest_qt_smoke.py` (NEW, 3 tests, +~75 lines):
+- **`test_qtbot_fixture_is_available`** — `qtbot` fixture exposes `addWidget`, `mouseClick`, `waitSignal` (all callable)
+- **`test_widget_click_drives_signal`** — real `QPushButton` + `qtbot.mouseClick` drives the `clicked` signal (the canonical pattern Tier 2+ will use for menu/action/button testing)
+- **`test_wait_signal_with_existing_qt_signal_class`** — `qtbot.waitSignal` works against a `Signal(object)` bridge (the Round 3 Tier 4 pattern), with `blocker.args` payload capture
+
+### Why a gate ship
+
+If pytest-qt or PySide6 break the idioms in a future upgrade, this small file catches it before the much-larger module-coverage tests fail confusingly. Per Lesson #93's spirit: a focused gate test surfaces the failure at the right level.
+
+### pyproject.toml already current
+
+`pytest-qt>=4.2` was already declared as a dev dependency from earlier work. Verified installed at version **4.5.0**. No `pip install` needed.
+
+### Tier 1 complete
+
+| Ship | Title | Status |
+|---|---|---|
+| v1.7.180 | resolve `_resolve_file` duplicate (option b) | ✅ |
+| v1.7.181 | `docs/DEFERRED_DECISIONS.md` index | ✅ |
+| v1.7.182 | `docs/MUTATION_TESTING_DEFERRED.md` | ✅ |
+| v1.7.183 | `docs/GUI_TESTING_STRATEGY.md` | ✅ |
+| v1.7.184 | pytest-qt smoke test | ✅ |
+
+**184 ships total** (was 179 at Round 3 close). Ready for Tier 2. **Stopping here per handoff: report Tier 1 status to Jake; await confirmation before opening Tier 2.**
+
+No source changes. No new lesson.
+
+### Files
+
+- `tests/unit/test_pytest_qt_smoke.py` (NEW, 3 tests)
+- `docs/releases/v1.7.184.md`
+
+### Next
+
+**Tier 1 close-out report → Jake.** Tier 2 (GUI Coverage Arc opening) begins on explicit go-ahead.
+
 ## [1.7.183] — 2026-05-13 — Round 4 Tier 1 ship 4: `docs/GUI_TESTING_STRATEGY.md`
 
 **Doc-only.** Formalizes the Qt headless pattern (Lesson #98 / Doctrine #16) as the foundation, plans the `pytest-qt` extension for the remaining big GUI modules, and **carries a critical baseline correction** per Lesson #93 / Doctrine #11.
