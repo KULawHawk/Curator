@@ -4,6 +4,46 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.103] — 2026-05-13 — Coverage Sweep 9/12: `services/classification.py` to 100%
+
+Sub-ship 9 of the Coverage Sweep arc. Closes line 86 + 2 partial branches in `services/classification.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/classification.py` | 91.89% | **100.00%** (+8.11%) |
+
+31 statements, 6 branches, 0 misses, 0 partials.
+
+### Baseline divergence from handoff
+
+Handoff predicted **54.05% / 12 lines** for `classification.py`. Actual baseline was **91.89% / 1 line + 2 branches**. Big divergence — but in the *beneficial* direction. The handoff was written before recent test-suite improvements covered most of the surface. This is the kind of drift Lesson #93 (re-measure baseline before each sub-ship) is meant to catch.
+
+### What landed
+
+`tests/unit/test_classification_coverage.py` (NEW, 4 tests):
+
+1. `test_apply_with_no_classifications_returns_none` — covers line 54 (`if chosen is None: return None`).
+2. `test_apply_with_extension_none_keeps_existing_extension` — covers branch 57→61 False arm.
+3. `test_apply_with_extension_set_overrides_file_extension` — covers line 60 (the True arm body).
+4. `test_select_best_specificity_returns_one_for_concrete_mime` — covers line 86 (`return 1` for non-fallback MIME types).
+
+No source changes.
+
+### Lesson captured
+
+No new lesson per se, but a confirmation of **Lesson #93's load-bearing role**. Without re-measuring baseline, I'd have approached this module expecting 12 uncovered lines and started building elaborate test infrastructure. Quick re-measure showed 91.89% / 1 line — a 5-minute job, not a 30-minute one. The lesson saves time on every sweep ship.
+
+### Files
+
+- `tests/unit/test_classification_coverage.py` (+~80, new, 4 tests)
+- `docs/COVERAGE_SWEEP_SCOPE.md` (+1 line)
+
+### Next
+
+**v1.7.104** — `services/migration_retry.py`. Handoff: ~45 min, 17 lines (will re-measure).
+
 ## [1.7.102] — 2026-05-13 — Coverage Sweep 8/12: `services/musicbrainz.py` to 100%
 
 Sub-ship 8 of the Coverage Sweep arc. Closes 12 uncovered lines + 7 partial branches in `services/musicbrainz.py`.
