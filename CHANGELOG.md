@@ -4,6 +4,47 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.141] — 2026-05-13 — Tier 4 ship 4: `services/photo.py` to 100%
+
+Closes 11 uncovered lines in `services/photo.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/photo.py` | 93.21% | **100.00%** (+6.79%) |
+
+134 statements, 28 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_services_photo_coverage.py` (NEW, 5 tests):
+- `_parse_exif_datetime` ValueError arm — "2026:02:30 12:00:00" matches regex but datetime(2026,2,30) raises
+- `_pillow_available` ImportError via `sys.modules['PIL'] = None`
+- `read_metadata` stat OSError in mtime fallback — uses a call-counter monkeypatch on Path.stat to let `exists()` succeed but fail the second stat call
+- `_read_exif` unexpected-exception arm — monkeypatch PIL.Image.open to raise RuntimeError
+- `_read_exif` `meta.raw` build failure — fake EXIF with `.items()` raising
+
+No source changes.
+
+### Notable iteration
+
+First attempt at the stat-failure test naively monkeypatched Path.stat globally for the photo. But `read_metadata` calls `p.exists()` first (which itself calls stat()), so the first stat failed too. Worked around with a call counter: pass through first stat (for exists), raise on second (for mtime).
+
+### Lesson captured
+
+No new lesson. Call-counter pattern for selective monkeypatch is a small variant of established stub patterns (sys.modules sentinel, MagicMock side-effects).
+
+### Files
+
+- `tests/unit/test_services_photo_coverage.py` (+~145, new, 5 tests)
+- `docs/MID_SIZE_SERVICES_SWEEP_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.141.md`
+
+### Next
+
+**v1.7.142** — `services/cleanup.py` (50 lines + 9 partial branches).
+
 ## [1.7.140] — 2026-05-13 — Tier 4 ship 3: Mid-Size Services Sweep scope plan
 
 Opens the Mid-Size Services Sweep arc — the second sub-arc within Round 2 Tier 4. Scope plan only — no source or test changes.
