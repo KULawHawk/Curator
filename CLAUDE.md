@@ -2,7 +2,7 @@
 
 This file is read automatically by Claude Code at session start. It encodes the project conventions Claude must respect without being re-asked every session.
 
-**Owner:** Jake Leese · **Updated:** 2026-05-13 (post-Round 3 lessons retrospective)
+**Owner:** Jake Leese · **Updated:** 2026-05-13 (post-Round 4 mid-Tier-4 — lessons #103-105 retrospective)
 
 ---
 
@@ -10,7 +10,7 @@ This file is read automatically by Claude Code at session start. It encodes the 
 
 - **Name:** Curator. Repo: `https://github.com/KULawHawk/Curator.git`. Local root: `C:\Users\jmlee\Desktop\AL\Curator\`.
 - **Brand context:** Curator is one pillar within **Ad Astra** (the overarching umbrella). Governance constitution at `..\Atrium\CONSTITUTION.md` (v0.3 RATIFIED 2026-05-08). Constellation map at `..\AD_ASTRA_CONSTELLATION.md`.
-- **Status:** v1.7.179 shipped (HEAD `a26396d`). **198 tags / 179 ships total.** **ROUND 3 COMPLETE.** Round 3 closed 34 ships across 4 tiers (v1.7.146 → v1.7.179): Tier 1 stabilization (6 ships, services/migration.py → 100%), Tier 2 CLI Coverage Arc kickoff (3 ships, cli/mcp_keys + cli/mcp_orphans → 100%), Tier 3 cli/main.py decomposition (21 ships, 10.73% → 99.43%), Tier 4 GUI signals (4 ships, all 0% → 100%). **63 modules at 100% line + branch** now (was 55 at Round 2 close). Remaining at <100%: `cli/main.py` (99.43% — pragma-bound on documented defensive boundaries + dead `_resolve_file` duplicate deferred to Jake), `gui/*` widgets (not in scope yet — Round 4 candidate). **Zero new numbered lessons captured in Round 3** — doctrine at saturation; Lessons #79–95 carried the entire arc.
+- **Status:** v1.7.198 shipped (HEAD `b368f3e`). **218 tags / 198 ships total.** **ROUND 4 IN PROGRESS — Tier 4 mid-arc.** Round 4 progress: Tier 1 stabilization (5 ships, v1.7.180-184 — `_resolve_file` resolved, mutation testing deferred, GUI strategy doc, pytest-qt installed), Tier 2 GUI smaller modules (6 ships, v1.7.185-190 — lineage_view + models at 100%), Tier 3 main_window.py (5 ships, v1.7.191-195 — closed at 100% with 1 real bug surfaced & fixed), Tier 4 dialogs.py in progress (3 of 11 ships, v1.7.196-198 — at 16.84%). **66 modules at 100% line + branch** now (was 63 at Round 3 close, +3: lineage_view, models, main_window). **2 real bugs surfaced and fixed** in Round 4 (QDialog import missing in main_window v1.7.193, _resolve_file shadowed regression v1.7.180). **Remaining**: 8 more dialogs.py sub-ships to close Tier 4 (target: v1.7.199-206 + pragma audit close at v1.7.207). **Lessons through #105** (#102 Round 4 from v1.7.180; #103-105 captured this retrospective from Round 4 implicit patterns).
 - **Python:** 3.13.12 in `.venv`. Windows 11 only (see Doctrine principle 3 below).
 
 ---
@@ -83,7 +83,7 @@ Claude should *proactively recommend* moving work to a different tool when:
 
 ## Doctrine
 
-These are non-negotiable. Read once, apply always. Lessons #79–102 below (#96–101 captured retroactively from Round 3 implicit patterns; #102 from Round 4 v1.7.180); check CHANGELOG for #103+.
+These are non-negotiable. Read once, apply always. Lessons #79–105 below (#96–101 captured retroactively from Round 3 implicit patterns; #102 from Round 4 v1.7.180; #103–105 captured retroactively from Round 4 mid-Tier-4 implicit patterns); check CHANGELOG for #106+.
 
 ### 1. APEX PRINCIPLE — ACCURACY
 
@@ -267,6 +267,75 @@ When a module accumulates two `def name(...):` declarations at the same scope, P
 4. Surface to the human (per Lesson #100) with the silent-regression evidence in the recommendation
 
 **Compounds with Lesson #100 (surface dead/duplicate code):** the v1.7.155 deferral correctly waited for Jake's call. The wait revealed not just a duplicate to delete, but a documented feature that had quietly regressed. Auto-deletion would have closed the door on the right answer.
+
+### 21. GUI code is pragma-light when decomposition + testability seams are consistent (Lesson #103 — Round 4 retrospective)
+
+The original Lesson #101 / Doctrine #19 estimate said large modules accumulate 1 pragma per 150-200 statements of mature application code. That held for `cli/main.py` (10 pragmas / 1881 stmts = ~1 per 188). But for GUI code in Curator, the actual figure has been **0 pragmas across 2300+ statements** so far.
+
+**Pattern observed:** 4 modules closed in a row with 0 new pragmas added:
+- `gui/launcher.py` (17 stmts), `gui/migrate_signals.py` (5 stmts), `gui/scan_signals.py` (25 stmts), `gui/cleanup_signals.py` (94 stmts) — Round 3 Tier 4
+- `gui/lineage_view.py` (246 stmts) — Round 4 Tier 2
+- `gui/models.py` (774 stmts, 380 branches) — Round 4 Tier 2
+- `gui/main_window.py` (1089 stmts, 206 branches) — Round 4 Tier 3
+
+**Why GUI is pragma-light here:** Curator's GUI was written with consistent patterns — every dialog/view has the same try/except → empty fallback shape for repo failures; every Qt protocol method follows the same DisplayRole/ToolTipRole/headerData structure; defensive boundaries are explicit (`if not hasattr(...)`) rather than implicit (`try:/except Exception:`). The uniformity makes every defensive path reachable via standard test patterns: stub-repo + createIndex + role-parameterized data() calls.
+
+**Implication for scope planning:** when opening a GUI coverage arc, **set pragma budget to 0-2** (revised from #101's 5-15). If Code starts accumulating pragmas in GUI work, that's a signal that either (a) a defensive boundary is genuinely unreachable and the pragma is correct, or (b) the test strategy is wrong and needs revisiting. The default expectation is zero.
+
+**Lesson #101 still holds for non-GUI mature application code** (CLI, service orchestration). This refinement applies specifically to GUI / Qt modules with consistent decomposition.
+
+### 22. MagicMock can't honor property semantics; use a real class for property-access defensive tests (Lesson #104 — Round 4 retrospective)
+
+To test defensive `except Exception:` clauses around property accesses on a stub (e.g. `runtime.config.source_path` where the property might raise), `MagicMock` is insufficient. `MagicMock.__getattr__` returns child mocks regardless of property semantics. The defensive boundary is unreachable through a MagicMock-based stub.
+
+**Pattern (v1.7.191):** replace the stub with a **real class** that has an actual `@property` raising the desired exception:
+
+```python
+class _RaisingConfig:
+    @property
+    def source_path(self):
+        raise AttributeError("simulated config access failure")
+
+stub_runtime.config = _RaisingConfig()
+# Now `runtime.config.source_path` actually raises, exercising the defensive except.
+```
+
+**How this differs from Lesson #95 (Pydantic `__dict__` bypass):**
+- Lesson #95: target is a **Pydantic v2 field with validate_assignment=True**. Inject bad value via `instance.__dict__[field] = bad_value`. Used for `except (AttributeError, TypeError):` triggered by wrong-type-at-runtime.
+- Lesson #104: target is a **regular Python `@property` on a stub class**. Replace the stub object entirely with a real class. Used for `except Exception:` triggered by property-access raises.
+
+Both address "defensive boundary unreachable through standard mocking." Different mechanisms; same family of problems.
+
+**When to use which:**
+- Pydantic model field needs bad value → Lesson #95 (`__dict__` bypass)
+- Stub service with `@property` that should raise → Lesson #104 (replace stub with real class)
+- Plugin hook that should raise → Lesson #91 (monkeypatch `_hook_first_result` to raise)
+
+### 23. Never `del` a class attribute in test cleanup; always restore the original (Lesson #105 — Round 4 retrospective)
+
+When a test temporarily replaces a class attribute (especially a property) to inject failure behavior, the cleanup must **restore the original**, not `del` the attribute. `del type(instance).attr` works in isolation because the test doesn't access the attribute later, but in pytest suite order it leaves the class permanently broken for every subsequent test that touches that class.
+
+**Discovery in v1.7.197:** `test_get_job_id_exception_returns` in `test_gui_main_window_part3_coverage.py` (v1.7.193) used `del type(model).job_id` in its `finally` block. The first time it ran, the `job_id` property was deleted from `MigrationProgressTableModel` entirely. Three tests in `test_gui_models_part3_coverage.py` that ran after it (in v1.7.190's file, which ran before v1.7.193's file alphabetically but **after** v1.7.197 ran the polluting test) failed with AttributeError.
+
+**The trap:** the polluting test passes in isolation (`pytest test_gui_main_window_part3_coverage.py`). It only manifests when run alongside other tests that touch the same class. **Coverage measurement runs the full suite**, which is when the pollution surfaces.
+
+**Pattern (correct):**
+```python
+cls = type(model)
+original = cls.__dict__.get("job_id")  # capture BEFORE replacement
+try:
+    cls.job_id = property(lambda self: (_ for _ in ()).throw(RuntimeError("boom")))
+    # ... test the defensive except path
+finally:
+    if original is None:
+        del cls.job_id  # OK only if it didn't exist before
+    else:
+        cls.job_id = original  # restore
+```
+
+Or simpler: use `monkeypatch.setattr(cls, "job_id", ...)` which auto-restores. The `monkeypatch` fixture is the canonical Python answer; only fall back to manual try/finally when you're outside a pytest test function.
+
+**Generalized:** **never irreversibly mutate class state in test cleanup.** The cleanup must leave the class in exactly the state it was found. This applies to: class attributes, class properties, `__slots__` modifications, `__init_subclass__` overrides, anything at class scope.
 
 ---
 
