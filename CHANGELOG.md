@@ -4,6 +4,55 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.105] — 2026-05-13 — Coverage Sweep 11/12: `services/code_project.py` to 100%
+
+Sub-ship 11 of the Coverage Sweep arc. Closes 17 uncovered lines + 4 partial branches in `services/code_project.py`. Mostly `except OSError: continue` defensive boundaries around `Path.iterdir`, `Path.is_dir`, `Path.is_file`, and `Path.stat`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/code_project.py` | 89.45% | **100.00%** (+10.55%) |
+
+151 statements, 48 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_code_project_coverage.py` (NEW, 11 tests):
+
+1. `test_is_project_root_swallows_oserror_on_marker_check` — selective `Path.is_dir` monkeypatch.
+2. `test_find_projects_outer_is_project_root_raises` — monkeypatch `svc.is_project_root` to raise.
+3. `test_find_projects_analyze_raises_logs_and_continues` — monkeypatch `svc.analyze_project` to raise.
+4. `test_find_projects_iterdir_raises_continues` — selective `Path.iterdir` monkeypatch.
+5. `test_find_projects_skips_non_directory_children` — file in root level.
+6. `test_analyze_project_stat_oserror_skips_file` — see notable iteration below.
+7. `test_analyze_project_unrecognized_extension_continues` — `.unknown_ext_xyz` file.
+8. `test_iter_project_files_iterdir_oserror_skips`
+9. `test_iter_project_files_skips_non_file_non_dir` — spoofed is_dir/is_file both False.
+10. `test_iter_project_files_is_dir_oserror_skips`
+11. `test_pick_primary_language_all_zero_counts_returns_unknown` — Counter with only Markdown/Documentation (weight 0) entries.
+
+### Notable iteration
+
+The first attempt at `test_analyze_project_stat_oserror_skips_file` monkeypatched `Path.stat` globally. This broke `Path.is_file()` (which calls `stat` internally), preventing the test file from being yielded by `_iter_project_files` in the first place. The file never reached the `analyze_project` per-file loop where line 296-297 lives.
+
+**Fix:** monkeypatch `svc._iter_project_files` directly to yield the target path, THEN monkeypatch `Path.stat` to raise selectively for that path. The iter is bypassed; the stat-OSError path in `analyze_project` is exercised cleanly.
+
+This is a small flavor of Lesson #90 (data-flow tracing): when monkeypatching low-level filesystem primitives, trace which OTHER methods depend on them. `Path.is_file` is a stat-derived check; patching stat affects both. Solution: patch at a higher seam (the iterator method) instead of the lowest primitive.
+
+### Lesson captured
+
+No new lesson per se — the data-flow-tracing issue is well covered by Lesson #90. But the specific corollary ("monkeypatching low-level filesystem primitives breaks higher-level wrappers") is worth flagging as a carry-forward technique. Honest logging.
+
+### Files
+
+- `tests/unit/test_code_project_coverage.py` (+~250, new, 11 tests)
+- `docs/COVERAGE_SWEEP_SCOPE.md` (+1 line)
+
+### Next
+
+**v1.7.106** — `services/document.py`. **Final sub-ship of the Coverage Sweep arc.** Handoff: ~60 min, 22 lines (will re-measure).
+
 ## [1.7.104] — 2026-05-13 — Coverage Sweep 10/12: `services/migration_retry.py` to 100%
 
 Sub-ship 10 of the Coverage Sweep arc. Closes 17 uncovered lines + several partial branches in `services/migration_retry.py`.
