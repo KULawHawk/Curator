@@ -83,7 +83,7 @@ Claude should *proactively recommend* moving work to a different tool when:
 
 ## Doctrine
 
-These are non-negotiable. Read once, apply always. Lessons #79–101 below (#96–101 captured retroactively from Round 3 implicit patterns); check CHANGELOG for #102+.
+These are non-negotiable. Read once, apply always. Lessons #79–102 below (#96–101 captured retroactively from Round 3 implicit patterns; #102 from Round 4 v1.7.180); check CHANGELOG for #103+.
 
 ### 1. APEX PRINCIPLE — ACCURACY
 
@@ -251,6 +251,22 @@ Large modules (1000+ statements) naturally accumulate defensive-boundary code: T
 - Each pragma is research time, not test-writing time — distinct activity
 
 **Implication for code review:** if a new large module ships without any pragmas, either the module is unusually defensive-boundary-light, or the pragmas are owed and not yet annotated. Worth a focused review pass before declaring 100%.
+
+### 20. Shadowed definitions become silent regressions (Lesson #102 — Round 4 v1.7.180)
+
+When a module accumulates two `def name(...):` declarations at the same scope, Python binds the name to the **last** one. The first becomes silently dead. The hidden cost is not just dead lines — it's that any *advertised* behavior unique to the first definition (in help text, CLI argument helps, docstrings, user-facing strings) becomes a quiet lie.
+
+**Discovery in v1.7.155 → v1.7.180:** `cli/main.py` had two `def _resolve_file`. The first (introduced v1.0.0rc1) supported UUID + exact-path + **path-prefix match** via SQL `LIKE`. The second (introduced v1.7.3 for the new status taxonomy) supported only UUID + exact-path. From v1.7.3 through v1.7.179, the prefix-match feature was silently dead — and `inspect`'s `typer.Argument(..., help="curator_id, full path, or path prefix.")` continued to advertise it. 175 ships of contract violation. v1.7.180 deleted the dead copy and merged the prefix-match into the live definition, restoring the documented behavior.
+
+**Why static analysis didn't catch it:** ruff/pyflakes/mypy don't flag shadowed top-level definitions by default. `F811` (redefinition of unused name) only fires when the first definition is *also* unused; if anything reads or references the name between the two `def`s (imports, decorators, type hints), the duplicate passes lint clean.
+
+**Rule:** when a coverage arc surfaces duplicate top-level definitions, the question is not just "delete or keep?" — it's **"what behavior did the dead copy advertise that's no longer happening?"** Before deciding:
+1. Grep the surrounding CLI help text, docstrings, README, and user-facing strings for references to behaviors unique to the dead version
+2. Check git history with `git log -S "def name"` to confirm whether the duplicate is a refactor remnant or an accidental shadowing
+3. If user-facing strings reference behaviors unique to the dead version, that's a **silent regression** — option (b) "merge" usually beats option (a) "delete"
+4. Surface to the human (per Lesson #100) with the silent-regression evidence in the recommendation
+
+**Compounds with Lesson #100 (surface dead/duplicate code):** the v1.7.155 deferral correctly waited for Jake's call. The wait revealed not just a duplicate to delete, but a documented feature that had quietly regressed. Auto-deletion would have closed the door on the right answer.
 
 ---
 
