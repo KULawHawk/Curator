@@ -4,6 +4,42 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.121] — 2026-05-13 — Tier 2 ship 5: `mcp/tools.py` to 100%
+
+Closes 18 uncovered lines + 15 partial branches in `mcp/tools.py` — the largest MCP module by uncovered surface area.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `mcp/tools.py` | 88.89% | **100.00%** (+11.11%) |
+
+229 statements, 68 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/mcp/test_tools_coverage.py` (NEW, 13 tests): `health_check` failure paths (plugin listing exception, db_path resolution with `runtime.db.path` attribute, db_path str-conversion exception, db_path unknown fallback when neither db nor config has it, audit_repo.count exception), limit-clamping in `query_audit_log`/`query_files`/`list_trashed`/`get_migration_status`, `get_lineage` clamping + missing-root, BFS already-visited and missing-other-file branches (via monkeypatched `lineage_repo.get_edges_for` and `file_repo.get` returning synthetic edges that walk back through visited and ghost nodes), `find_duplicates` with file lacking a hash.
+
+No source changes.
+
+### Notable iteration
+
+3 fix iterations needed: the tool name in the existing test_tools.py is `health_check` (not `get_health` as my first attempt guessed), and `LineageKind.SIMILAR_TO` doesn't exist (correct is `NEAR_DUPLICATE`). Both caught in sub-minute test runs. Standard "look at the existing fixtures" pattern (Lesson #84).
+
+### Lesson captured
+
+No new lesson. Honest logging.
+
+### Files
+
+- `tests/unit/mcp/test_tools_coverage.py` (+~280, new, 13 tests)
+- `docs/PLUGINS_MCP_SWEEP_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.121.md`
+
+### Next
+
+**v1.7.122** — `mcp/server.py`. Last MCP module before config + plugin sources.
+
 ## [1.7.120] — 2026-05-13 — Tier 2 ship 4: `mcp/auth.py` to 100%
 
 Closes 12 uncovered lines + 3 partial branches in `mcp/auth.py`.
