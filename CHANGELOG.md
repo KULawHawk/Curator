@@ -4,6 +4,72 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.88] — 2026-05-12 — Migration Phase Gamma: scope plan for the multi-ship arc
+
+Doc-only ship that opens the migration.py arc. `migration.py` is 1031 stmts / 3032 lines — bigger than every other Phase Gamma module combined (837 stmts total). A one-shot push would predictably end in a mid-ship state, violating Lesson #86. This scope plan structures the work as a 5-sub-ship arc.
+
+### What landed
+
+- `docs/MIGRATION_PHASE_GAMMA_SCOPE.md` (NEW, ~190 lines) — the active arc plan
+
+### Structural inventory (319 missing lines clustered into 7 groups)
+
+The scope plan maps the 319 uncovered lines to 7 logical clusters and pairs them into 5 sub-ships:
+
+| Sub-ship | Closes clusters | Target |
+|---|---|---|
+| v1.7.89 | Plan() edges + Apply() retry/DB-guard | ~72-75% |
+| v1.7.90 | Same-source execution + 4 on-conflict modes | ~77-80% |
+| v1.7.91 | Cross-source primary + overwrite-with-backup | ~85-88% |
+| v1.7.92 | Cross-source rename + auto-strip-metadata | ~92-95% |
+| v1.7.93 | Persistent jobs + audit test + doctrine update | **100%** |
+
+Each sub-ship has explicit stub-design pre-requirements, expected effort multipliers (relative to a typical Phase Gamma ship like scan.py), and risk notes.
+
+### Doctrine notes
+
+This is the **first multi-ship arc planned under the apex-accuracy doctrine** (codified v1.7.84). The arc protocol:
+
+1. Each sub-ship MUST close cleanly (committed + tagged + pushed) — per Lesson #86
+2. Each sub-ship MUST hit 100% on its target clusters — partial is corner-cutting, per Lessons #71, #82
+3. Each sub-ship documents remaining uncovered code — transparent progress across the arc
+4. If scope grows beyond ~1.5x budget during a sub-ship, **split the sub-ship** rather than land mid-ship
+5. The arc's final ship lands an audit-check test that holds migration.py at 100% going forward
+
+### Lessons captured
+
+**Lesson #88 — Multi-ship arcs need explicit scope plans. The plan IS a ship.**
+
+Lessons #76 ("doctrine amendments follow stable patterns, not single ships") and #82 ("orchestrator modules CAN reach 100%, the question is stub infrastructure") both pointed at this. Until v1.7.88, the doctrine had no protocol for handling a module too big for one ship. The answer: when a module's effort estimate exceeds ~2x a typical Phase Gamma ship, write the scope plan FIRST, ship it as the arc's opening move, and only then execute the sub-ships. The plan ship:
+- Inventories what's uncovered, grouped by logical seams
+- Maps clusters to sub-ship boundaries with effort estimates
+- Identifies stub-infrastructure pre-requirements per sub-ship
+- Codifies the arc protocol (clean closure per sub-ship, no mid-arc compromise)
+- Includes a status tracker that gets updated per ship
+
+**Why the plan deserves to be its own ship rather than a section in v1.7.89's CHANGELOG:** the planning is the actual deliverable. If v1.7.89 happens to slip, the plan still exists at a known commit and tag. The arc has a documented contract from the start, not bolted on retrospectively. This is the inverse of "mid-ship is unacceptable" — mid-arc is also unacceptable, and the plan ship is what prevents it.
+
+### Files changed
+
+| File | Lines |
+|---|---|
+| `docs/MIGRATION_PHASE_GAMMA_SCOPE.md` | +190 (new) |
+| `CHANGELOG.md` | this entry |
+| `docs/releases/v1.7.88.md` | release notes |
+
+No source changes. No test changes. Coverage unchanged (66.74% on migration.py).
+
+### Arc state
+
+- **88 ships**, all tagged
+- Six Phase Gamma modules at 100% line + branch (unchanged from v1.7.87)
+- Migration Phase Gamma arc **opened** (sub-ship 0 of 5)
+- 1 new lesson (#88)
+
+### Next
+
+**v1.7.89: Migration Phase Gamma sub-ship 1** — Plan() edge cases + Apply() retry/DB-guard branches. Target: 66.74% → ~72-75%. Per the scope plan, this sub-ship establishes the stub design (StubFileRepository extension, StubSafetyService, StubAuditRepository) that will be reused across the remaining sub-ships.
+
 ## [1.7.87] — 2026-05-12 — Phase Gamma: `services/bundle.py` to 100% (one-pass, pattern dividends)
 
 Sixth Phase Gamma module at the apex-accuracy standard. `services/bundle.py` reaches **100.00% line + branch coverage** in a **single pass** with 27 focused unit tests — the first Phase Gamma module to hit 100% on the first try without an iteration. The stub-first architecture (Lesson #84) is paying compound interest.
