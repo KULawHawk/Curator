@@ -4,6 +4,40 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.129] — 2026-05-13 — Tier 3 ship 3: `storage/migrations.py` to 100%
+
+Closes 4 uncovered lines in `storage/migrations.py` — the schema migration runner.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `storage/migrations.py` | 89.19% | **100.00%** (+10.81%) |
+
+33 statements, 4 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_storage_migrations_coverage.py` (NEW, 2 tests):
+- `applied_migrations(conn)` returns the names of applied migrations against a real `CuratorDB`
+- `apply_migrations` wraps a migration's exception in a `RuntimeError` that names the migration (uses `monkeypatch.setattr(mig_mod, "MIGRATIONS", [("999_test_failure", _boom)])` to inject a failing migration tuple against a fresh `sqlite3.connect(":memory:")`)
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. Honest logging.
+
+### Files
+
+- `tests/unit/test_storage_migrations_coverage.py` (+~50, new, 2 tests)
+- `docs/STORAGE_SWEEP_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.129.md`
+
+### Next
+
+**v1.7.130** — `storage/repositories/source_repo.py` (6 lines).
+
 ## [1.7.128] — 2026-05-13 — Tier 3 ship 2: `storage/repositories/audit_repo.py` to 100%
 
 Closes 3 uncovered lines in `storage/repositories/audit_repo.py` — the audit log repository's `get(audit_id)` method.
