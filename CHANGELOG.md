@@ -4,6 +4,44 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.135] — 2026-05-13 — Tier 3 ship 9: `storage/repositories/hash_cache_repo.py` to 100%
+
+Closes 14 uncovered lines in `storage/repositories/hash_cache_repo.py` — the hash cache used by the scan/dedupe pipeline.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `storage/repositories/hash_cache_repo.py` | 73.33% | **100.00%** (+26.67%) |
+
+54 statements, 6 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_storage_hash_cache_repo_coverage.py` (NEW, 8 tests):
+- `upsert_from_file` short-circuits when `has_full_hash` is False
+- `upsert_from_file` upserts when full hash present
+- `invalidate(source_id, source_path)` removes a single entry + missing-entry noop
+- `invalidate_source(source_id)` removes all entries for a source (returns rowcount)
+- `purge_older_than(days)` deletes by `computed_at` cutoff
+- `count()` returns row total
+
+Uses shared `repos` fixture. No source changes.
+
+### Lesson captured
+
+No new lesson.
+
+### Files
+
+- `tests/unit/test_storage_hash_cache_repo_coverage.py` (+~105, new, 8 tests)
+- `docs/STORAGE_SWEEP_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.135.md`
+
+### Next
+
+**v1.7.136** — `storage/repositories/_helpers.py` (16 lines + 6 partial branches).
+
 ## [1.7.134] — 2026-05-13 — Tier 3 ship 8: `storage/repositories/job_repo.py` to 100%
 
 Closes 11 uncovered lines + 1 partial branch in `storage/repositories/job_repo.py` — the ScanJob repository.
