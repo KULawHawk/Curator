@@ -4,6 +4,40 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.128] — 2026-05-13 — Tier 3 ship 2: `storage/repositories/audit_repo.py` to 100%
+
+Closes 3 uncovered lines in `storage/repositories/audit_repo.py` — the audit log repository's `get(audit_id)` method.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `storage/repositories/audit_repo.py` | 96.05% | **100.00%** (+3.95%) |
+
+62 statements, 14 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_storage_audit_repo_coverage.py` (NEW, 2 tests):
+- `get(audit_id)` with a known id returns the matching `AuditEntry` (round-trips all fields incl. `details` JSON)
+- `get(unknown_id)` returns None
+
+Uses a real `CuratorDB` against tmp_path + `init()` (migrations applied) + direct `AuditRepository` instantiation. No source changes.
+
+### Lesson captured
+
+No new lesson. Settled pattern: real `CuratorDB` against `tmp_path` is the cleanest approach for repository coverage tests (avoids stub-DB complexity for small modules).
+
+### Files
+
+- `tests/unit/test_storage_audit_repo_coverage.py` (+~55, new, 2 tests)
+- `docs/STORAGE_SWEEP_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.128.md`
+
+### Next
+
+**v1.7.129** — `storage/migrations.py` (4 lines).
+
 ## [1.7.127] — 2026-05-13 — Tier 3 ship 1: `storage/connection.py` to 100%
 
 Closes 2 uncovered lines + 1 partial branch in `storage/connection.py` — the SQLite connection manager.
