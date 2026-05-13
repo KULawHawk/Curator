@@ -4,6 +4,51 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.186] — 2026-05-13 — Round 4 Tier 2 ship 2: `gui/lineage_view.py` Part 1 (builder + helpers)
+
+Closes the pure-Python surface of `lineage_view.py`: the dataclasses (`GraphNode`, `GraphEdge`, `GraphLayout`), the edge-kind color mapping, and the entire `LineageGraphBuilder` class. Part 2 (v1.7.187) covers the Qt view layer.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `gui/lineage_view.py` | 0.00% | **65.67%** (155/155 non-Qt statements + 54/54 branches) |
+
+The 91 missing lines (365-501) are exactly the `_make_lineage_graph_view` + `LineageGraphView` class, scoped for Part 2.
+
+### What landed
+
+`tests/unit/test_gui_lineage_view_part1_coverage.py` (NEW, 56 tests):
+
+- **`TestGraphDataclasses`** (5) — GraphNode defaults + explicit coords; GraphEdge defaults + full args; GraphLayout.is_empty branches (empty / with nodes / with edges)
+- **`TestColorMapping`** (6) — all 5 known edge kinds get their assigned color; unknown kind returns default
+- **`TestBuilderStaticHelpers`** (13) — `_basename` (forward slash / backslash / no separator / mixed); `_ellipsize` (under/exact/over/custom max); `_coerce_datetime` (None / datetime passthrough / ISO string / bad string / unhandled type)
+- **`TestBuilderInit`** (5) — default layout=spring; known layout accepted; unknown layout falls back; custom seed; cache starts empty
+- **`TestResolveFile`** (2) — cache miss then hit (single repo call); exception caches None (no re-raise on retry)
+- **`TestGetTimeRange`** (4) — populated; both NULL; fetchone returns None; exception returns `(None, None)`
+- **`TestFetchAllEdges`** (3) — no filter; with filter (verifies SQL branch + param); exception returns empty
+- **`TestBuildFullGraph`** (3) — networkx unavailable; normal flow (2 nodes / 1 edge); with time filter
+- **`TestBuildFocusGraph`** (6) — networkx unavailable; single hop; multi-hop frontier growth; empty frontier breaks early; `get_edges_for` exception swallowed; cycle (visited set prevents re-add)
+- **`TestBuildFromEdges`** (8) — empty edges; **all 4 layout algorithms** (spring/circular/kamada_kawai/shell) via parametrize; layout exception falls back to grid; edge_kind with `.value` uses it; edge_kind without `.value` uses str; file unresolvable uses `(fid)` placeholder
+
+### Test infrastructure
+
+- All collaborator dependencies stubbed via `MagicMock` (`file_repo`, `lineage_repo`)
+- `lineage_repo.db.conn()` modeled as a context-manager mock returning a cursor mock
+- Real `networkx` (3.6.1) drives `_build_from_edges` — the layouts actually run, not stubbed
+- Custom `_FakeEdge` and `_FakeFile` helper classes for edge/file shape compatibility
+
+No source changes. No new lesson — application of Lesson #98 (Qt headless) + Lesson #84 (stub vocabulary reuse) in concert. Tier 2's first implementation ship validates that the pure-Python portion of GUI modules can hit 100% line + branch coverage without `pytest-qt`, exactly as `docs/GUI_TESTING_STRATEGY.md` predicted.
+
+### Files
+
+- `tests/unit/test_gui_lineage_view_part1_coverage.py` (NEW, 56 tests, +~330 lines)
+- `docs/releases/v1.7.186.md`
+
+### Next
+
+**v1.7.187** — `gui/lineage_view.py` Part 2 + pragma audit close. Cover the Qt view layer (`_make_lineage_graph_view`, `LineageGraphView` + `refresh` / `clear_time_filter` / `_render_empty_state` / `_render`). Target: 100% line + branch.
+
 ## [1.7.185] — 2026-05-13 — Round 4 Tier 2 ship 1: GUI Coverage Arc scope plan
 
 **Tier 2 opens.** Doc-only — formal arc scope plan modeled on `docs/CLI_COVERAGE_ARC_SCOPE.md`.
