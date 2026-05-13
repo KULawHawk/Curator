@@ -1187,7 +1187,7 @@ def sources_config(
             console.print(f"  [yellow]unset[/] {key}")
         elif op == "clear":
             console.print(f"  [red]clear[/] (removed {len(value)} key(s))")
-        elif op == "visibility":
+        elif op == "visibility":  # pragma: no branch -- only 4 op values are ever appended to changes (set/unset/clear/visibility); falling through to no-else after the elif chain is unreachable in practice. Lesson #91.
             vis_color = {
                 "private": "green",
                 "team": "yellow",

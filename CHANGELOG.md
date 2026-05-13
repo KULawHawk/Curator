@@ -4,6 +4,55 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.158b] — 2026-05-13 — Round 3 Tier 3 ship 4b: `cli/main.py` `sources config` subcommand
+
+Closes the 203-line `sources config` subcommand + `_parse_set_value` helper. Completes the v1.7.158 Lesson #88 split.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `cli/main.py` | 28.76% | **33.12%** (+4.36%) |
+
+### What landed
+
+`tests/unit/test_cli_sources_config_coverage.py` (NEW, 30 tests) covering:
+- **`_parse_set_value`**: JSON parseable (bool, int, float, list, null, quoted-string) + string fallback (bare string, path)
+- **Source not found** + **invalid `--share-visibility`** errors
+- **Read-only path**: empty config (human + JSON), populated config, share_visibility color branches (team/public)
+- **`--set`**: string value, bool value, multiple pairs (with JSON parsing), malformed (no `=`) errors, empty-key errors, JSON output
+- **`--unset`**: existing-key removes, missing-key is no-op, no-op JSON output
+- **`--clear`**: empties config, already-empty is no-op
+- **Combined `--clear --set`**: atomic reset+rewrite
+- **`--share-visibility`** update + same-value-is-no-op
+
+### Notable iteration
+
+One unreachable branch surfaced (line 1190->1183): the elif chain `if op == "set" / elif unset / elif clear / elif visibility` has no else clause, but only those 4 ops are ever appended to `changes`. The False branch of `elif op == "visibility":` is genuinely unreachable in practice. Added `# pragma: no branch` per Lesson #91 with documented justification in source. Result: cli/main.py partials went 23 → 22 in addition to the line coverage gains.
+
+### Lesson #88 split complete
+
+Both halves of v1.7.158 (sources_app) shipped cleanly:
+- 158a: 6 simple subcommands, 25 tests, +5.03% coverage
+- 158b: 1 complex subcommand + helper, 30 tests, +4.36% coverage
+
+Combined: +9.39% coverage on cli/main.py from sources_app alone.
+
+### Lesson captured
+
+No new lesson. Lesson #88 split worked exactly as predicted; Lesson #91 pragma pattern applied cleanly once.
+
+### Files
+
+- `tests/unit/test_cli_sources_config_coverage.py` (+~380, new, 30 tests)
+- `src/curator/cli/main.py` (+1 line: `# pragma: no branch` with justification on line 1190)
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.158b.md`
+
+### Next
+
+**v1.7.159** — `trash` + `restore` commands (~75 lines predicted).
+
 ## [1.7.158a] — 2026-05-13 — Round 3 Tier 3 ship 4a: `cli/main.py` `sources_app` simple subcommands
 
 Scope plan v1.7.152 predicted `sources_app` (~410 lines, 7 subcommands) would likely need splitting per Lesson #88. Confirmed: `sources config` alone is 203 lines; the other 6 subcommands total ~283 lines. **Split executed.** This ship (158a) covers the 6 simpler subcommands; v1.7.158b covers `config`.
