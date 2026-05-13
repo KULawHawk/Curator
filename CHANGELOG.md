@@ -4,6 +4,42 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.122] — 2026-05-13 — Tier 2 ship 6: `mcp/server.py` to 100%
+
+Closes 20 uncovered lines in `mcp/server.py` — the FastMCP server lifecycle and `main()` dispatch.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `mcp/server.py` | 71.05% | **100.00%** (+28.95%) |
+
+66 statements, 10 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/mcp/test_mcp_server_coverage.py` (NEW, 9 tests):
+- `_has_configured_keys` + `_load_keys_safe`: True/False/KeyFileError paths.
+- `main()` dispatch paths: stdio default, --http --no-auth on loopback (success), --http --no-auth on non-loopback (refuses with exit 2), --http auth-required without keys (refuses), --http with keys on loopback (runs uvicorn), --http with keys on non-loopback (runs uvicorn, different log path).
+
+All `main()` tests heavily monkeypatch `build_runtime`, `create_server`, and `uvicorn.run` so dispatch logic is exercised without actually starting servers.
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. The pattern of mocking `uvicorn.run` + `server.run` to test CLI/server dispatch logic without starting transports is well-established; the new bit here is using MagicMock for the runtime + Config to skip the heavy build path. Honest logging.
+
+### Files
+
+- `tests/unit/mcp/test_mcp_server_coverage.py` (+~190, new, 9 tests)
+- `docs/PLUGINS_MCP_SWEEP_SCOPE.md` (+1 line)
+- `docs/releases/v1.7.122.md`
+
+### Next
+
+**v1.7.123** — `config/__init__.py`. Last small-ish ship before plugin sources.
+
 ## [1.7.121] — 2026-05-13 — Tier 2 ship 5: `mcp/tools.py` to 100%
 
 Closes 18 uncovered lines + 15 partial branches in `mcp/tools.py` — the largest MCP module by uncovered surface area.
