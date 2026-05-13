@@ -39,6 +39,10 @@ coverage.xml
 .ruff_cache/
 .pyre/
 
+# Mutation testing (v1.7.150) — mutmut writes a SQLite cache at repo root.
+# Not committed; future mutation testing arc may want to pin location.
+.mutmut-cache
+
 # Curator-specific
 # We don't commit the user-data DB or logs
 *.db

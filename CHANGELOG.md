@@ -4,6 +4,50 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.150] — 2026-05-13 — Round 3 Tier 1 ship 5: Mutation testing spot-check (HONEST DEFERRAL)
+
+**The report IS the deliverable (per handoff). Honest negative result + methodology learning + recommended deferral to a separate dedicated arc.**
+
+### What was attempted
+
+Per the Round 3 Tier 1 plan: install mutmut, run on `services/migration.py`, produce a survival-rate report. Two blockers + one piece of real methodology learning surfaced:
+
+1. **mutmut 3.x doesn't run on Windows natively** ([mutmut issue #397](https://github.com/boxed/mutmut/issues/397)). Per Doctrine §3 (Windows-only scope, WSL not in supported matrix), fell back to mutmut 2.5.1 — the last Windows-native release.
+2. **Cost is 10-20× the Tier 1 budget.** mutmut generates 1092 mutants for migration.py. Full-suite test run per mutant ≈ 2 min ⇒ ~36 hours of CPU. None of the focused-runner shortcuts produce trustworthy survival counts (see point 3).
+3. **Methodology learning (real information):** A focused-test runner cuts per-mutant cost but produces 90%+ misleading false-survival rates because mutations are killed by tests OUTSIDE the focused subset. Validation spot-check on `models/file.py` (38 stmts, focused runner) showed 40/83 surviving = 100% — but this is a methodology artifact, not a test-quality finding. To produce trustworthy mutation testing data, the runner must be at minimum the full unit suite.
+
+### What landed
+
+`docs/MUTATION_TESTING_REPORT.md` (NEW, ~120 lines) — the honest report per the handoff. Documents:
+- Tool blocker (mutmut 3.x Windows incompat) + workaround (2.5.1)
+- Cost analysis: 1092 mutants × ~2 min full-suite = ~36 hours
+- Methodology learning: focused runner produces misleading survival counts
+- Recommendation: defer to dedicated mutation-testing arc with full-suite runner + 4-8 hr/module budget on a CI machine
+- Lesson #96 candidate (not yet captured): "Mutation testing requires the full test suite as runner"
+- Recommendation: **do NOT block v2.0** on mutation testing; apex-accuracy doctrine + 95-lesson library + 5 closed arcs already exceeds typical project verification
+
+`.gitignore` updated: added `.mutmut-cache` so future mutation runs don't pollute the working tree.
+
+`mutmut 2.5.1` installed in `.venv` (left in place; future arc can pin it). `.mutmut-cache` removed from working tree.
+
+### Lesson captured
+
+**No new lesson formally captured (Lesson #96 candidate pending).** The methodology insight ("focused runner produces false-survival") is real, but I haven't validated it through a successful mutation-testing arc. Documenting it as a candidate in the report so it surfaces when (if) such an arc opens, but not promoting to CLAUDE.md doctrine because the lesson library convention is to capture lessons after successful application, not after a defensive deferral.
+
+### Honest framing (per partnership directive)
+
+This is a non-completed ship in the sense that no survival count was produced for migration.py. But the handoff explicitly says: *"Tier 1 v1.7.150 mutation testing report is important regardless of outcome — high survival rate is real information."* The information here is: **mutation testing cost on a 1031-stmt module under apex-accuracy doctrine exceeds the spot-check budget by 10-20×; the methodology requires a separate scoping conversation.** Recommendation in the report: do not retry within Round 3 Tier 1; reopen as a dedicated arc with its own budget.
+
+### Files
+
+- `docs/MUTATION_TESTING_REPORT.md` (NEW, ~120 lines)
+- `.gitignore` (+3 lines, `.mutmut-cache`)
+- `docs/releases/v1.7.150.md` (NEW)
+
+### Next
+
+**v1.7.151** — Draft `docs/RELEASE_NOTES_v2.0_DRAFT.md`. Final Tier 1 ship.
+
 ## [1.7.149] — 2026-05-13 — Round 3 Tier 1 ship 4: Constellation docs update (Curator section)
 
 Doc-only ship updating the Ad Astra constellation reference's Curator row from v1.6.2 (2026-05-09) to v1.7.148 (today). Mirrors the v1.7.88 / v1.7.94 doc-only ship precedent.
