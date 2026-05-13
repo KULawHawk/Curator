@@ -4,6 +4,55 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.152] — 2026-05-13 — Round 3 Tier 2 ship 1: CLI Coverage Arc scope plan
+
+Opens the CLI Coverage Arc — the final non-GUI coverage push toward v2.0. Scope plan only — no source or test changes.
+
+### What landed
+
+`docs/CLI_COVERAGE_ARC_SCOPE.md` (NEW, ~180 lines). Baselines re-measured against HEAD `fdcaf38` (v1.7.151, 1934 unit tests); all 3 module predictions match handoff exactly:
+
+| Module | Stmts | Misses | Coverage |
+|---|---|---|---|
+| `cli/mcp_keys.py` | 131 | 25 | 78.11% |
+| `cli/mcp_orphans.py` | 142 | 54 | 64.84% |
+| `cli/main.py` | 1881 | 1627 | 10.73% |
+
+### Honest scope re-assessment (vs handoff)
+
+Round 3 handoff predicted **12-18 sub-ships** for `cli/main.py` decomposition. Surveying the actual `@app.command()` structure reveals **20-22 sub-ships** at natural command-group boundaries. The discrepancy:
+
+- `tier` predicted 50-100 lines, actually ~320 (likely split per Lesson #88)
+- `sources_app` predicted 80-150 lines, actually ~410 across 7 subcommands (likely split)
+- Several commands (`scan-pii`, `export-clean`, `audit-summary`, `audit-export`, `forecast`) weren't separately predicted, each at 130-225 lines
+
+Total Tier 2+3 ship count: **23-25** (1 scope plan + 2 small CLI + 20-22 main.py sub-ships). This is **honest** larger than the handoff's projection; per partnership directive, surfacing rather than burying.
+
+### Tier 2 portion (3 ships)
+
+| Ship | Module | Uncovered |
+|---|---|---|
+| v1.7.152 | scope plan (this doc) | — |
+| v1.7.153 | `cli/mcp_keys.py` | 25 lines + 4 br |
+| v1.7.154 | `cli/mcp_orphans.py` | 54 lines + 2 br |
+
+### Tier 3 portion (20-22 ships, plan in tracker)
+
+cli/main.py decomposition by Click command group, ordered to validate the CliRunner + isolated-env + runtime-injection pattern on the small commands first, then tackle the larger ones.
+
+### Lesson captured
+
+No new lesson. Scope-plan-as-ship is established (Lesson #88). Honest scope re-assessment is the partnership directive in action.
+
+### Files
+
+- `docs/CLI_COVERAGE_ARC_SCOPE.md` (NEW, ~180 lines)
+- `docs/releases/v1.7.152.md`
+
+### Next
+
+**v1.7.153** — `cli/mcp_keys.py` to 100%. Will establish the CliRunner test pattern for the rest of the arc.
+
 ## [1.7.151] — 2026-05-13 — Round 3 Tier 1 ship 6 (FINAL): v2.0 release notes draft
 
 Final Tier 1 ship — completes the stabilization sprint. `docs/RELEASE_NOTES_v2.0_DRAFT.md` is a planning artifact for The Log, not the actual v2.0 release.
