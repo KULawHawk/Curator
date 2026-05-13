@@ -4,6 +4,40 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.176] — 2026-05-13 — Round 3 Tier 4 ship 1: `gui/launcher.py` to 100%
+
+First Tier 4 (stretch) ship. Opens GUI signals testing — proves the Qt-backed test seam works without launching a real window.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `gui/launcher.py` | 35.29% | **100.00%** (+64.71%) |
+
+17 statements, 0 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_gui_launcher_coverage.py` (NEW, 5 tests):
+- `is_pyside6_available()` returns True when PySide6 importable
+- `is_pyside6_available()` returns False on ImportError (sys.modules poison)
+- `run_gui` returns app.exec() result (stubbed QApplication + CuratorMainWindow)
+- `run_gui` reuses existing QApplication via `QApplication.instance()`
+- `run_gui` propagates nonzero exit codes
+
+Test infrastructure: stub `PySide6.QtWidgets.QApplication` (via `monkeypatch.setattr`) and `curator.gui.main_window.CuratorMainWindow` (lambda factory) so no real window is constructed. The CLI `gui` command path was already tested in v1.7.165 via `monkeypatch` on `is_pyside6_available` and `run_gui` directly; this ship covers their actual bodies.
+
+No source changes. No new lesson — the Qt stubbing pattern is a small variant of the established service-stubbing idiom.
+
+### Files
+
+- `tests/unit/test_gui_launcher_coverage.py` (+~115, new, 5 tests)
+- `docs/releases/v1.7.176.md`
+
+### Next
+
+**v1.7.177** — `gui/migrate_signals.py` (5 lines, smallest GUI module).
+
 ## [1.7.175] — 2026-05-13 — Round 3 Tier 3 ship 21 (FINAL): cli/main.py final cleanup — **CLI Coverage Arc CLOSED**
 
 Final ship of the CLI Coverage Arc. Closes residual gaps via focused tests + Lesson #91 pragmas. **cli/main.py achieves 0 missing lines** (every statement executed in at least one test); 15 residual partial branches documented as data-shape edge cases.
