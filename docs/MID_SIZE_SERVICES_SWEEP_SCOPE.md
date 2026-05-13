@@ -79,7 +79,7 @@ Restart prompt: *"Resume Mid-Size Services Sweep arc. Open docs/MID_SIZE_SERVICE
 |---|---|---|---|---|
 | v1.7.140 | ✅ This scope plan | — | n/a (doc-only) | 2026-05-13 |
 | v1.7.141 | ✅ Closed | `services/photo.py` | **100.00%** (was 93.21%) | 2026-05-13 |
-| v1.7.142 | ⏳ Pending | `services/cleanup.py` | TBD | TBD |
+| v1.7.142 | ✅ Closed | `services/cleanup.py` | **100.00%** (was 87.53%) | 2026-05-13 |
 | v1.7.143 | ⏳ Pending | `services/organize.py` | TBD | TBD |
 | v1.7.144 | ⏳ Pending | `services/hash_pipeline.py` | TBD | TBD |
 | v1.7.145 | ⏳ Pending — possible split | `services/trash.py` | TBD | TBD |

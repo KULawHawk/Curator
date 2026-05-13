@@ -701,7 +701,7 @@ class CleanupService:
                     if neighbor not in component_ids:
                         queue.append(neighbor)
             seen.update(component_ids)
-            if len(component_ids) > 1:
+            if len(component_ids) > 1:  # pragma: no branch -- always True given adjacency invariants (lines 668-680 filter ensure adjacency[cid] is a subset of by_id, so BFS adds at least cid + 1 neighbor when adjacency[cid] is non-empty -- and the empty case is caught earlier by `if not adjacency[cid]: continue`)
                 components.append([by_id[c] for c in component_ids])
 
         # Pick keeper per component + emit findings for non-keepers.

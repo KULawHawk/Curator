@@ -4,6 +4,51 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.142] — 2026-05-13 — Tier 4 ship 5: `services/cleanup.py` to 100%
+
+Closes 50 uncovered lines + 9 partial branches in `services/cleanup.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/cleanup.py` | 87.53% | **100.00%** (+12.47%) |
+
+367 statements, 122 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_services_cleanup_coverage.py` (NEW, 27 tests) covering:
+- `CleanupReport.duration_seconds` / `ApplyReport.duration_seconds` None + computed arms
+- `find_empty_dirs` / `find_junk_files` os.walk OSError + stat OSError
+- `find_broken_symlinks` (entire method, ~17 lines) — uses Path.is_symlink + Path.exists monkeypatches since Windows blocks real symlinks without admin mode. Covers basic detection, readlink OSError, per-candidate OSError, outer os.walk OSError.
+- `find_duplicates` `file_repo.query` exception + None-xxhash skip
+- `_find_fuzzy_duplicates` query exception, `FuzzyIndexUnavailableError` re-raise, init unexpected exception, `index.add` failure, `index.query` failure, neighbor-not-in-by_id defensive skip
+- `apply` safety check exception → SKIPPED_REFUSE
+- `_delete_one` EMPTY_DIR junk unlink OSError (swallowed), BROKEN_SYMLINK unlink, send2trash success (line 942), send2trash failure fallback to unlink, unknown CleanupKind ValueError
+- `_mark_index_deleted` DUPLICATE_FILE not in index (debug log branch)
+
+### Notable iteration: one minimal source change
+
+Line 704's `if len(component_ids) > 1:` in `_find_fuzzy_duplicates` BFS is structurally unreachable on its False arm — given the adjacency-build invariants (lines 668-680 filter ensure `adjacency[cid]` is always a subset of `by_id`), BFS from any non-isolated node always discovers at least 2 nodes. The earlier `if not adjacency[cid]: continue` catches the empty case. Added `# pragma: no branch -- always True given adjacency invariants` per Lesson #91 (defensive boundaries that are effectively unreachable).
+
+This is the second `# pragma: no branch` annotation in Round 2 (the first was in `plugins/manager.py` line 37 for thread-race fallthrough). Both follow the same pattern: invariant-protected branches that can't be exercised without breaking the invariant.
+
+### Lesson captured
+
+No new lesson. The pragma usage extends a settled pattern.
+
+### Files
+
+- `tests/unit/test_services_cleanup_coverage.py` (+~450, new, 27 tests)
+- `src/curator/services/cleanup.py` (+1 inline pragma, +~3 line annotation in a comment)
+- `docs/MID_SIZE_SERVICES_SWEEP_SCOPE.md` (+1 line, tracker)
+- `docs/releases/v1.7.142.md`
+
+### Next
+
+**v1.7.143** — `services/organize.py` (56 lines + 10 partial branches).
+
 ## [1.7.141] — 2026-05-13 — Tier 4 ship 4: `services/photo.py` to 100%
 
 Closes 11 uncovered lines in `services/photo.py`.
