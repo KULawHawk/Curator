@@ -183,8 +183,8 @@ If a session ends between sub-ships:
 | v1.7.88 | ✅ This scope plan | — | 66.74% (unchanged) | 2026-05-12 |
 | v1.7.89 | ✅ Plan() edges + Apply() autostrip/conflict-raise + _execute_one dispatch | Clusters 1 + part of 2 | **68.18%** (+1.44%) | 2026-05-12 |
 | v1.7.90 | ✅ Same-source execution + 4 on-conflict modes (_resolve_collision) | Cluster 3 + part of Cluster 6 | **70.05%** (+1.87%) | 2026-05-12 |
-| v1.7.91 | ⏳ Pending | Clusters 4 + 5 (cross-source primary + backup) | TBD | TBD |
-| v1.7.92 | ⏳ Pending | Cluster 6 remainder (rename strategy + auto-strip) | TBD | TBD |
+| v1.7.91 | ✅ Cross-source execution + overwrite-with-backup full body | Cluster 4 + Cluster 5 | **77.47%** (+7.42%) | 2026-05-12 |
+| v1.7.92 | ⏳ Pending | Cluster 6 remainder (rename-with-suffix body + auto-strip) | TBD | TBD |
 | v1.7.93 | ⏳ Pending | Cluster 7 + audit test + doctrine update | 100.00% | TBD |
 
 ### Revised estimates after sub-ship 1 calibration

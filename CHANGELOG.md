@@ -4,6 +4,85 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.91] — 2026-05-12 — Migration Phase Gamma sub-ship 3/5: Cross-source execution + overwrite-with-backup
+
+Biggest sub-ship in the Migration Phase Gamma arc by line count. Targets `_execute_one_cross_source` orchestration (transfer dispatch, collision dispatch across 4 modes, FileEntity index update, plugin-mediated trash) and `_cross_source_overwrite_with_backup` (the cross-source rename-existing-then-retry flow). Plus the two cross-source helpers: `_find_existing_dst_file_id_for_overwrite` (two-strategy resolution) and `_attempt_cross_source_backup_rename` (pluggy hook dispatch with 7 failure modes).
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/migration.py` | 70.05% | **77.47%** (+7.42%) |
+
+Below the revised v1.7.91 target band (~80-84%, expecting +10-14%). The gap is the `_cross_source_rename_with_suffix` body at lines 1713-1786 (~70 stmts), correctly deferred to v1.7.92 per the scope plan. The actual delta delivered (+7.42%) matches what Clusters 4+5 alone should yield; the +10-14% estimate would have required absorbing some of Cluster 6 too. Honest miss; scope discipline preserved.
+
+### What landed
+
+- `tests/unit/test_migration_cross_source.py` (NEW, ~810 lines, 38 tests, 6 test classes)
+- New stub: `StubMigrationPluginManager` + `StubMigrationHooks` for pluggy hook dispatch testing
+- `_build_setup` helper composes service + move + plugin manager in one call
+- Imports stubs from v1.7.89/90 via existing pattern (Lesson #84 still paying)
+- `docs/MIGRATION_PHASE_GAMMA_SCOPE.md` tracker updated
+
+### Test classes
+
+| Class | Tests | Targets |
+|---|---|---|
+| TestCrossSourceHappyPath | 3 | Transfer success/exception/HASH_MISMATCH boundaries (lines 1099-1118) |
+| TestCrossSourceCollisionDispatch | 7 | 4 on-conflict modes + 2 degraded paths + unknown-mode defensive (1140-1178) |
+| TestCrossSourceKeepSourceAndIndex | 3 | keep_source=True path + FileEntity vanished + update exception (1187-1207) |
+| TestCrossSourceTrashHook | 2 | Plugin returns False (1217-1221) + defensive helper-raise boundary (1222-1230) |
+| TestCrossSourceOverwriteBackup | 6 | Full `_cross_source_overwrite_with_backup` body (1576-1685): happy/find-fail/rename-fail/retry-raise/hash-mismatch/skipped-race |
+| TestFindExistingDstFileId | 6 | Stat-success / enumerate-match / both-fail / enumerate-raise / iter-raise / stat-raise-fall-through / non-matching-iter (1466-1613) |
+| TestAttemptCrossSourceBackupRename | 7 | pm=None / hook-missing / FileExistsError / Exception / all-None / non-list / first-non-None (1615-1722) |
+| Plus: `_find_available_suffix` exhaustion (1530) | 1 | Path.exists monkeypatch to drive 9999 iterations |
+
+No source code changes.
+
+### Lesson captured
+
+**Lesson #91 — Defensive boundaries can be effectively unreachable via the path they nominally protect against.**
+
+The migration code has `except Exception` clauses around calls to `_hook_first_result` (e.g. lines 1222-1230 in trash-via-hook, lines 1581-1582 around stat-via-helper, lines 1595-1596 around enumerate-via-helper). But `_hook_first_result` itself catches all non-FileExistsError exceptions internally (line 2255) and returns None. So a plugin hook that raises `RuntimeError` will NEVER trigger the caller's `except Exception` — the helper swallows it first.
+
+This means the caller's `except Exception` is **defensive code against future refactors** (or unforeseen edge cases in the helper itself), not against plugin behavior. To test these branches, monkeypatch `_hook_first_result` itself to raise. The test documents both the defensive boundary AND the unreachable-via-plugin contract:
+
+```python
+def boom_helper(hook_name, **kw):
+    if hook_name == "curator_source_delete":
+        raise RuntimeError("hook helper propagated")
+    return None
+
+monkeypatch.setattr(svc, "_hook_first_result", boom_helper)
+```
+
+**General rule:** before writing a test that thinks it's testing a defensive `except`, trace whether the exception can actually reach that boundary through normal paths. If the layer between you and the exception swallows it, you're testing nothing. Either patch deeper (to a layer that propagates) or annotate the line `# pragma: no cover` with a justification per apex-accuracy doctrine (memory edit #7).
+
+This pattern shows up across the cross-source code: 3 separate `except` clauses for the same defensive purpose. Worth keeping an eye on; if the helper's exception-swallowing behavior ever changes, these tests will start exercising real paths and may need adjustment.
+
+### Files changed
+
+| File | Lines |
+|---|---|
+| `tests/unit/test_migration_cross_source.py` | +810 (new) |
+| `docs/MIGRATION_PHASE_GAMMA_SCOPE.md` | +1 (tracker update) |
+| `CHANGELOG.md` | this entry |
+| `docs/releases/v1.7.91.md` | release notes |
+
+No source changes. Test count: 2051 → 2089 (+38).
+
+### Arc state
+
+- **91 ships**, all tagged
+- Six Phase Gamma modules at 100% (unchanged)
+- Migration arc: **sub-ship 3 of 5 closed**, running coverage 77.47%
+- 1 new lesson (#91)
+- New stub class: `StubMigrationPluginManager` for pluggy hook testing
+
+### Next
+
+**v1.7.92 — sub-ship 4 of 5:** `_cross_source_rename_with_suffix` body (~70 stmts, lines 1713-1786) + `_auto_strip_metadata` body (~80 stmts, lines 2022-2105). Target: 77.47% → ~87-92%. The auto-strip body has its own external dependency (metadata_stripper.strip_file) which will need a stub.
+
 ## [1.7.90] — 2026-05-12 — Migration Phase Gamma sub-ship 2/5: Same-source execution + 4 on-conflict modes
 
 Second execution ship of the Migration Phase Gamma arc. Targets `_execute_one_same_source` (xxhash compute + error paths) and `_resolve_collision` (the 4 on-conflict modes: skip, fail, overwrite-with-backup, rename-with-suffix). The on-conflict modes were originally scoped to v1.7.92 (Cluster 6) but covered here as a natural extension of Apply control flow — the cluster boundaries in the original scope plan were imperfect, and bundling these here reduces overall arc cost.

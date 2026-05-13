@@ -1,1049 +1,1024 @@
-"""Tests for v1.1.0a3 MigrationService Phase 2 Session B (cross-source migration).
+"""Focused unit tests for MigrationService cross-source execution.
 
-Covers the cross-source code path that uses ``curator_source_write`` +
-``curator_source_read_bytes`` + ``curator_source_delete`` plugin hooks
-instead of the in-process ``shutil.copy2`` fast path. The strategy uses
-TWO local source IDs (``local`` and ``local:vault``) -- both owned by
-``LocalPlugin`` via its ``_owns()`` prefix matching -- so we exercise
-the full cross-source path with real bytes/files on disk, no PyDrive2
-or mock plugins required. The same-plugin-different-source-id case is
-a legitimate cross-source migration (e.g., reorganizing between two
-configured local roots, like Music drive -> archive drive).
+Sub-ship 3 of the Migration Phase Gamma arc (v1.7.91).
+Scope plan: docs/MIGRATION_PHASE_GAMMA_SCOPE.md
 
-Per docs/TRACER_PHASE_2_DESIGN.md §5.3 invariants tested here:
+This is the biggest sub-ship in the arc by line count. Targets:
 
-  * ``curator_id`` constancy across cross-source moves (lineage edges
-    + bundle memberships persist transparently because we keep the
-    same FileEntity row, just update its ``source_id`` + ``source_path``).
-  * Hash-Verify-Before-Move via re-streaming the dst back through
-    ``curator_source_read_bytes`` and recomputing xxhash3_128.
-  * Mismatch leaves src intact and deletes dst (best-effort).
-  * Audit entries for cross-source moves include both
-    ``src_source_id`` and ``dst_source_id`` plus a
-    ``cross_source: True`` marker for queryability.
+* `_execute_one_cross_source` happy path + failure paths (lines 1099-1233)
+* Cross-source on-conflict dispatch (lines 1140-1178)
+* FileEntity index update + cross-source trash (lines 1198, 1204-1207, 1218-1227)
+* `_cross_source_overwrite_with_backup` full body (lines 1530, 1576-1613, 1630-1655, 1672-1692)
+* `_find_existing_dst_file_id_for_overwrite` strategies (~1466 area)
+* `_attempt_cross_source_backup_rename` plugin dispatch
 
-Plus the CLI capability check (``--dst-source-id`` resolves to a
-plugin that doesn't advertise ``supports_write``).
+Strategy: test `_execute_one_cross_source` directly (bypassing `apply()`)
+so the test isolates cross-source orchestration from apply()'s gates.
+Cross-source byte transfer is mocked by monkeypatching
+`_cross_source_transfer` to return canned (outcome, file_id, hash) tuples.
+
+Stubs reused from v1.7.89/90 via import (Lesson #84).
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from dataclasses import dataclass, field
 from pathlib import Path
-from unittest.mock import patch
+from typing import Any, Callable
 from uuid import uuid4
 
 import pytest
-import xxhash
 
-from curator.cli.runtime import build_runtime
-from curator.config import Config
 from curator.models.file import FileEntity
-from curator.models.source import SourceConfig
 from curator.services.migration import (
+    MigrationConflictError,
+    MigrationMove,
     MigrationOutcome,
-    MigrationService,
 )
-from curator.services.safety import SafetyLevel, SafetyReport
+from curator.services.safety import SafetyLevel
 
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-def _seed_real_file(
-    rt, source_id: str, path: Path,
-    content: bytes = b"some bytes\n",
-) -> FileEntity:
-    """Create a real file on disk + index it under ``source_id``."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(content)
-    h = xxhash.xxh3_128(content).hexdigest()
-    e = FileEntity(
-        curator_id=uuid4(),
-        source_id=source_id,
-        source_path=str(path),
-        size=len(content),
-        mtime=datetime.fromtimestamp(path.stat().st_mtime),
-        extension=path.suffix.lower(),
-        xxhash3_128=h,
-    )
-    rt.file_repo.upsert(e)
-    return e
-
-
-@pytest.fixture
-def cross_source_runtime(tmp_path):
-    """Real CuratorRuntime with TWO local source IDs registered.
-
-    SafetyService is stubbed to SAFE so the migration-mechanics tests
-    run without CAUTION false positives (pytest tmp_path is under
-    %LOCALAPPDATA% on Windows, which real safety flags as CAUTION).
-    """
-    db_path = tmp_path / "cross_source.db"
-    cfg = Config.load()
-    rt = build_runtime(
-        config=cfg, db_path_override=db_path,
-        json_output=False, no_color=True, verbosity=0,
-    )
-    # Register both source IDs (both backed by LocalPlugin via _owns() prefix)
-    for sid, name in [("local", "Local Primary"), ("local:vault", "Local Vault")]:
-        try:
-            rt.source_repo.insert(SourceConfig(
-                source_id=sid, source_type="local", display_name=name,
-            ))
-        except Exception:
-            pass  # already present from a prior test in this run
-    # Stub safety -> SAFE for everything
-    def _safe(self, path, **kw):
-        return SafetyReport(path=path, level=SafetyLevel.SAFE)
-    with patch.object(
-        rt.safety.__class__, "check_path", _safe,
-    ):
-        yield rt
-
-
-# ---------------------------------------------------------------------------
-# Cross-source detection + capability check
-# ---------------------------------------------------------------------------
-
-
-class TestCrossSourceDetection:
-    def test_is_cross_source_true_for_different_ids(self, cross_source_runtime):
-        svc = cross_source_runtime.migration
-        assert svc._is_cross_source("local", "local:vault") is True
-        assert svc._is_cross_source("local", "gdrive") is True
-
-    def test_is_cross_source_false_for_same_id(self, cross_source_runtime):
-        svc = cross_source_runtime.migration
-        assert svc._is_cross_source("local", "local") is False
-        assert svc._is_cross_source("local:vault", "local:vault") is False
-
-
-class TestCanWriteToSource:
-    def test_local_supports_write(self, cross_source_runtime):
-        svc = cross_source_runtime.migration
-        # Both 'local' and 'local:*' are owned by LocalPlugin which
-        # advertises supports_write=True.
-        assert svc._can_write_to_source("local") is True
-        assert svc._can_write_to_source("local:vault") is True
-
-    def test_unknown_source_returns_false(self, cross_source_runtime):
-        svc = cross_source_runtime.migration
-        # No plugin owns 'made_up_source'
-        assert svc._can_write_to_source("made_up_source") is False
-
-
-# ---------------------------------------------------------------------------
-# Cross-source bytes transfer (the helper directly)
-# ---------------------------------------------------------------------------
-
-
-class TestCrossSourceTransfer:
-    def test_round_trip_bytes_match(self, cross_source_runtime, tmp_path):
-        rt = cross_source_runtime
-        svc = rt.migration
-        src_path = tmp_path / "src" / "doc.txt"
-        src_path.parent.mkdir(parents=True)
-        content = b"hello cross-source world\n" * 50  # ~1.2 KB
-        src_path.write_bytes(content)
-        dst_path = tmp_path / "vault" / "doc.txt"
-        src_hash = xxhash.xxh3_128(content).hexdigest()
-
-        outcome, actual_dst, verified = svc._cross_source_transfer(
-            src_source_id="local",
-            src_file_id=str(src_path),
-            src_xxhash=src_hash,
-            dst_source_id="local:vault",
-            dst_path=str(dst_path),
-            verify_hash=True,
-        )
-
-        assert outcome == MigrationOutcome.MOVED
-        assert actual_dst == str(dst_path)
-        assert verified == src_hash
-        assert dst_path.exists()
-        assert dst_path.read_bytes() == content
-        # Src untouched (this helper is bytes-only; caller handles delete)
-        assert src_path.exists()
-
-    def test_collision_returns_skipped(self, cross_source_runtime, tmp_path):
-        rt = cross_source_runtime
-        svc = rt.migration
-        src_path = tmp_path / "src" / "x.txt"
-        src_path.parent.mkdir(parents=True)
-        src_path.write_bytes(b"src content")
-        # Pre-create dst so the write hook raises FileExistsError
-        dst_path = tmp_path / "vault" / "x.txt"
-        dst_path.parent.mkdir(parents=True)
-        dst_path.write_bytes(b"PRE-EXISTING DO NOT TOUCH")
-
-        outcome, _, verified = svc._cross_source_transfer(
-            src_source_id="local",
-            src_file_id=str(src_path),
-            src_xxhash=None,
-            dst_source_id="local:vault",
-            dst_path=str(dst_path),
-            verify_hash=False,
-        )
-
-        assert outcome == MigrationOutcome.SKIPPED_COLLISION
-        # Pre-existing dst preserved
-        assert dst_path.read_bytes() == b"PRE-EXISTING DO NOT TOUCH"
-
-    def test_unknown_dst_source_raises(self, cross_source_runtime, tmp_path):
-        rt = cross_source_runtime
-        svc = rt.migration
-        src_path = tmp_path / "src" / "x.txt"
-        src_path.parent.mkdir(parents=True)
-        src_path.write_bytes(b"x")
-        with pytest.raises(RuntimeError, match="curator_source_write"):
-            svc._cross_source_transfer(
-                src_source_id="local",
-                src_file_id=str(src_path),
-                src_xxhash=None,
-                dst_source_id="never_registered",
-                dst_path=str(tmp_path / "out" / "x.txt"),
-                verify_hash=False,
-            )
-
-
-# ---------------------------------------------------------------------------
-# Phase 1: apply() with cross-source
-# ---------------------------------------------------------------------------
-
-
-class TestPhase1CrossSourceApply:
-    def test_cross_source_move_updates_source_id_and_path(
-        self, cross_source_runtime, tmp_path,
-    ):
-        """The headline cross-source invariant: same curator_id, but
-        FileEntity.source_id flips from src to dst on move."""
-        rt = cross_source_runtime
-        src_root = tmp_path / "primary"
-        dst_root = tmp_path / "vault"
-        files = [
-            _seed_real_file(rt, "local", src_root / f"f{i}.txt", b"data" * (i + 1))
-            for i in range(3)
-        ]
-
-        plan = rt.migration.plan(
-            src_source_id="local", src_root=str(src_root),
-            dst_source_id="local:vault", dst_root=str(dst_root),
-        )
-        assert plan.src_source_id == "local"
-        assert plan.dst_source_id == "local:vault"
-        assert plan.total_count == 3
-
-        report = rt.migration.apply(plan)
-
-        assert report.moved_count == 3
-        assert report.failed_count == 0
-        # Each FileEntity now has source_id="local:vault" and the new path.
-        # curator_id is unchanged (Constitution invariant).
-        for f in files:
-            entity = rt.file_repo.get(f.curator_id)
-            assert entity is not None
-            assert entity.source_id == "local:vault"
-            assert entity.source_path.startswith(str(dst_root))
-            # Hash unchanged (the bytes are the same; we just moved them)
-            assert entity.xxhash3_128 == f.xxhash3_128
-
-    def test_cross_source_keep_source_preserves_src_and_index(
-        self, cross_source_runtime, tmp_path,
-    ):
-        rt = cross_source_runtime
-        src_root = tmp_path / "primary"
-        dst_root = tmp_path / "vault"
-        files = [
-            _seed_real_file(rt, "local", src_root / f"f{i}.txt")
-            for i in range(2)
-        ]
-        plan = rt.migration.plan(
-            src_source_id="local", src_root=str(src_root),
-            dst_source_id="local:vault", dst_root=str(dst_root),
-        )
-        report = rt.migration.apply(plan, keep_source=True)
-
-        assert report.moved_count == 2  # COPIED counts in moved_count
-        # All srcs still exist
-        for f in files:
-            assert Path(f.source_path).exists()
-        # Index unchanged -- still points at "local" with old paths
-        for f in files:
-            entity = rt.file_repo.get(f.curator_id)
-            assert entity.source_id == "local"
-            assert entity.source_path == f.source_path
-        # Dsts created
-        for f in files:
-            rel = Path(f.source_path).relative_to(src_root)
-            assert (dst_root / rel).exists()
-        # Outcomes are COPIED
-        for m in report.moves:
-            if m.outcome:
-                assert m.outcome == MigrationOutcome.COPIED
-
-    def test_cross_source_audit_includes_both_source_ids(
-        self, cross_source_runtime, tmp_path,
-    ):
-        rt = cross_source_runtime
-        src_root = tmp_path / "primary"
-        dst_root = tmp_path / "vault"
-        _seed_real_file(rt, "local", src_root / "f.txt")
-        plan = rt.migration.plan(
-            src_source_id="local", src_root=str(src_root),
-            dst_source_id="local:vault", dst_root=str(dst_root),
-        )
-        rt.migration.apply(plan)
-        # Audit entry must exist (Phase 1 _audit_move uses base details)
-        # Phase 1 cross-source uses _audit_move which currently records
-        # src_path + dst_path but not source_ids. The Phase 2 path adds
-        # source_ids + cross_source marker; Phase 1 keeps the simpler
-        # schema since the dst_path itself encodes the destination.
-        moves = rt.audit_repo.query(action="migration.move", limit=10)
-        assert len(moves) == 1
-
-
-class TestPhase1CrossSourceVerify:
-    def test_hash_mismatch_leaves_src_intact(
-        self, cross_source_runtime, tmp_path,
-    ):
-        """If we corrupt the src's cached hash to disagree with reality,
-        verify-by-restream catches it: dst gets deleted, src untouched."""
-        rt = cross_source_runtime
-        src_root = tmp_path / "primary"
-        dst_root = tmp_path / "vault"
-        f = _seed_real_file(rt, "local", src_root / "x.txt", b"real bytes")
-        # Corrupt the cached hash so verify fails
-        f.xxhash3_128 = "deadbeef" * 4  # 32 hex chars
-        rt.file_repo.update(f)
-
-        plan = rt.migration.plan(
-            src_source_id="local", src_root=str(src_root),
-            dst_source_id="local:vault", dst_root=str(dst_root),
-        )
-        report = rt.migration.apply(plan)
-
-        assert report.failed_count == 1
-        m = report.moves[0]
-        assert m.outcome == MigrationOutcome.HASH_MISMATCH
-        # Src untouched
-        assert Path(f.source_path).exists()
-        # Dst was cleaned up by the cross-source helper
-        assert not (dst_root / "x.txt").exists()
-        # Index still points at src (not updated due to hash mismatch)
-        entity = rt.file_repo.get(f.curator_id)
-        assert entity.source_id == "local"
-
-
-# ---------------------------------------------------------------------------
-# Phase 2: run_job() with cross-source
-# ---------------------------------------------------------------------------
-
-
-class TestPhase2CrossSourceRunJob:
-    def test_cross_source_persistent_under_workers(
-        self, cross_source_runtime, tmp_path,
-    ):
-        """Persisted cross-source migration with 4 workers preserves
-        all Constitution invariants under contention."""
-        rt = cross_source_runtime
-        src_root = tmp_path / "primary"
-        dst_root = tmp_path / "vault"
-        files = [
-            _seed_real_file(rt, "local", src_root / f"f{i:02d}.txt", f"file{i}".encode() * 20)
-            for i in range(8)
-        ]
-        plan = rt.migration.plan(
-            src_source_id="local", src_root=str(src_root),
-            dst_source_id="local:vault", dst_root=str(dst_root),
-        )
-        job_id = rt.migration.create_job(plan)
-        report = rt.migration.run_job(job_id, workers=4, verify_hash=True)
-
-        assert report.moved_count == 8
-        assert report.failed_count == 0
-        # All entities now under "local:vault"
-        for f in files:
-            entity = rt.file_repo.get(f.curator_id)
-            assert entity.source_id == "local:vault"
-            assert entity.source_path.startswith(str(dst_root))
-        # Audit log should have 8 cross-source moves with the right markers
-        audit_entries = rt.audit_repo.query(action="migration.move", limit=20)
-        assert len(audit_entries) == 8
-        for entry in audit_entries:
-            details = entry.details or {}
-            assert details.get("cross_source") is True
-            assert details.get("src_source_id") == "local"
-            assert details.get("dst_source_id") == "local:vault"
-            assert details.get("job_id") == str(job_id)
-
-    def test_cross_source_keep_source_under_workers(
-        self, cross_source_runtime, tmp_path,
-    ):
-        """Cross-source + keep_source: srcs preserved, audit uses
-        ``migration.copy`` action with cross_source marker."""
-        rt = cross_source_runtime
-        src_root = tmp_path / "primary"
-        dst_root = tmp_path / "vault"
-        files = [
-            _seed_real_file(rt, "local", src_root / f"f{i}.txt")
-            for i in range(4)
-        ]
-        plan = rt.migration.plan(
-            src_source_id="local", src_root=str(src_root),
-            dst_source_id="local:vault", dst_root=str(dst_root),
-        )
-        job_id = rt.migration.create_job(
-            plan, options={"keep_source": True},
-        )
-        report = rt.migration.run_job(
-            job_id, workers=4, keep_source=True,
-        )
-
-        assert report.moved_count == 4  # COPIED counts as moved
-        # Srcs all preserved
-        for f in files:
-            assert Path(f.source_path).exists()
-        # Index still points at "local"
-        for f in files:
-            entity = rt.file_repo.get(f.curator_id)
-            assert entity.source_id == "local"
-        # Audit: migration.copy with cross_source marker
-        copy_entries = rt.audit_repo.query(action="migration.copy", limit=10)
-        move_entries = rt.audit_repo.query(action="migration.move", limit=10)
-        assert len(copy_entries) == 4
-        assert len(move_entries) == 0
-        for entry in copy_entries:
-            details = entry.details or {}
-            assert details.get("cross_source") is True
-
-
-# ---------------------------------------------------------------------------
-# Constitution invariants under cross-source
-# ---------------------------------------------------------------------------
-
-
-class TestCrossSourceConstitutionInvariants:
-    def test_curator_id_constancy_under_cross_source(
-        self, cross_source_runtime, tmp_path,
-    ):
-        """The Phase 1 invariant -- same curator_id before + after --
-        also holds for cross-source moves."""
-        rt = cross_source_runtime
-        src_root = tmp_path / "primary"
-        dst_root = tmp_path / "vault"
-        f = _seed_real_file(rt, "local", src_root / "x.txt")
-        original_id = f.curator_id
-
-        plan = rt.migration.plan(
-            src_source_id="local", src_root=str(src_root),
-            dst_source_id="local:vault", dst_root=str(dst_root),
-        )
-        rt.migration.apply(plan)
-
-        # Look up by curator_id -- it must still resolve, with NEW source_id
-        entity = rt.file_repo.get(original_id)
-        assert entity is not None
-        assert entity.curator_id == original_id  # CONSTITUTION
-        assert entity.source_id == "local:vault"  # NEW
-        assert entity.source_path != str(src_root / "x.txt")  # NEW
-
-    def test_lineage_edges_survive_cross_source_move(
-        self, cross_source_runtime, tmp_path,
-    ):
-        """Lineage edges reference curator_ids; cross-source moves keep
-        the same curator_id, so all edges stay valid transparently."""
-        from curator.models.lineage import LineageEdge, LineageKind
-        rt = cross_source_runtime
-        src_root = tmp_path / "primary"
-        dst_root = tmp_path / "vault"
-        f1 = _seed_real_file(rt, "local", src_root / "a.txt", b"AAA")
-        f2 = _seed_real_file(rt, "local", src_root / "b.txt", b"BBB")
-        # Add a lineage edge between them
-        rt.lineage_repo.insert(LineageEdge(
-            from_curator_id=f1.curator_id,
-            to_curator_id=f2.curator_id,
-            edge_kind=LineageKind.DUPLICATE,
-            confidence=0.9, detected_by="test",
-        ))
-        edges_before = rt.lineage_repo.get_edges_for(f1.curator_id)
-        assert len(edges_before) == 1
-
-        plan = rt.migration.plan(
-            src_source_id="local", src_root=str(src_root),
-            dst_source_id="local:vault", dst_root=str(dst_root),
-        )
-        rt.migration.apply(plan)
-
-        # Edges still reference f1.curator_id and f2.curator_id; both
-        # still resolve to live entities (now under "local:vault").
-        edges_after = rt.lineage_repo.get_edges_for(f1.curator_id)
-        assert len(edges_after) == 1
-        # Both endpoints still resolvable
-        assert rt.file_repo.get(f1.curator_id) is not None
-        assert rt.file_repo.get(f2.curator_id) is not None
-
-    def test_db_guard_skips_cross_source_too(
-        self, cross_source_runtime, tmp_path,
-    ):
-        """db_path_guard works the same for cross-source as same-source:
-        a planned move whose src equals the guard path is skipped."""
-        rt = cross_source_runtime
-        src_root = tmp_path / "primary"
-        dst_root = tmp_path / "vault"
-        f = _seed_real_file(rt, "local", src_root / "important.db")
-        plan = rt.migration.plan(
-            src_source_id="local", src_root=str(src_root),
-            dst_source_id="local:vault", dst_root=str(dst_root),
-        )
-        report = rt.migration.apply(
-            plan, db_path_guard=Path(f.source_path),
-        )
-        assert report.moved_count == 0
-        m = report.moves[0]
-        assert m.outcome == MigrationOutcome.SKIPPED_DB_GUARD
-        # File untouched
-        assert Path(f.source_path).exists()
-
-
-# ---------------------------------------------------------------------------
-# Same-source still works (regression: dispatcher correctness)
-# ---------------------------------------------------------------------------
-
-
-class TestSameSourceStillWorks:
-    """The Session B refactor introduces a dispatcher in _execute_one
-    and _execute_one_persistent. Sanity-check that same-source still
-    routes to the shutil fast path correctly."""
-
-    def test_same_source_apply_uses_fast_path(
-        self, cross_source_runtime, tmp_path,
-    ):
-        rt = cross_source_runtime
-        src_root = tmp_path / "primary"
-        dst_root = tmp_path / "primary_renamed"
-        f = _seed_real_file(rt, "local", src_root / "x.txt")
-        plan = rt.migration.plan(
-            src_source_id="local", src_root=str(src_root),
-            dst_source_id="local",  # same as src -> fast path
-            dst_root=str(dst_root),
-        )
-        report = rt.migration.apply(plan)
-        assert report.moved_count == 1
-        # v1.6.1: same-source migration.move events DO have cross_source
-        # marker (False) for schema parity with cross-source events.
-        # Pre-v1.6.1 contract was 'cross_source key absent for same-source';
-        # new contract is 'cross_source always present, value indicates
-        # whether it was actually cross-source'. Downstream consumers
-        # (citation plugin v0.2+) use the explicit boolean.
-        entries = rt.audit_repo.query(action="migration.move", limit=5)
-        assert len(entries) == 1
-        details = entries[0].details or {}
-        assert details.get("cross_source") is False
-        assert details.get("src_source_id") == "local"
-        assert details.get("dst_source_id") == "local"
+# Reuse stubs from v1.7.89 (Lesson #84 — stub patterns compound across sub-ships).
+from tests.unit.test_migration_plan_apply import (
+    NOW,
+    StubAuditRepository,
+    StubFileRepository,
+    StubSafetyService,
+    make_service,
+)
 
 
 # ===========================================================================
-# v1.1.1: curator_source_write_post hook firing (P1 of curatorplug-atrium-safety)
+# Pluggy stub for migration (new this sub-ship)
 # ===========================================================================
 
 
-class TestCuratorSourceWritePostHook:
-    """v1.1.1 introduced ``curator_source_write_post`` as a Curator-side
-    prerequisite for the ``curatorplug-atrium-safety`` plugin. After every
-    successful ``curator_source_write`` (in the cross-source path), the
-    hook fires and any registered plugin can perform an independent
-    post-write verification or refuse the write by raising.
+@dataclass
+class StubMigrationHooks:
+    """Configurable hook namespace for migration tests.
 
-    See ``curatorplug-atrium-safety/DESIGN.md`` for the design that
-    motivated this hookspec.
+    Each hook name is a callable that returns a list (pluggy convention)
+    OR a single value (legacy behavior). Tests assign per-hook callables
+    via `StubMigrationPluginManager.set_hook(name, fn)`. Missing hooks
+    raise AttributeError on access (per `_attempt_cross_source_backup_rename`
+    line 1763).
     """
 
-    def _make_recorder_plugin(self):
-        """Build a simple hookimpl that records every post-write invocation.
+    _impls: dict[str, Callable[..., Any]] = field(default_factory=dict)
+    _missing: set[str] = field(default_factory=set)
 
-        Returns ``(plugin_instance, calls_list)``. The plugin can be
-        registered with ``rt.pm.register(plugin_instance)`` and the
-        calls_list will accumulate one dict per hook firing.
-        """
-        from curator.plugins import hookimpl
-        calls: list[dict] = []
-
-        class _PostWriteRecorder:
-            @hookimpl
-            def curator_source_write_post(
-                self, source_id, file_id, src_xxhash, written_bytes_len,
-            ):
-                calls.append({
-                    "source_id": source_id,
-                    "file_id": file_id,
-                    "src_xxhash": src_xxhash,
-                    "written_bytes_len": written_bytes_len,
-                })
-                return None
-
-        return _PostWriteRecorder(), calls
-
-    def test_hook_fires_after_successful_cross_source_write(
-        self, cross_source_runtime, tmp_path,
-    ):
-        """The headline: a successful cross-source migration triggers
-        exactly one ``curator_source_write_post`` invocation per file,
-        with the expected arguments populated."""
-        rt = cross_source_runtime
-        src_root = tmp_path / "src_a"
-        dst_root = tmp_path / "dst_b"
-        content = b"recorder-test-bytes\n" * 10
-        expected_hash = xxhash.xxh3_128(content).hexdigest()
-        _seed_real_file(rt, "local", src_root / "f.txt", content=content)
-
-        plugin, calls = self._make_recorder_plugin()
-        rt.pm.register(plugin)
-        try:
-            plan = rt.migration.plan(
-                src_source_id="local", src_root=str(src_root),
-                dst_source_id="local:vault", dst_root=str(dst_root),
+    def __getattr__(self, name: str) -> Callable[..., Any]:
+        # __getattr__ is only called when the attribute isn't found
+        # normally, so this is safe.
+        if name in self._missing:
+            raise AttributeError(
+                f"'StubMigrationHooks' has no hook {name!r}"
             )
-            report = rt.migration.apply(plan)
-        finally:
-            rt.pm.unregister(plugin)
+        return self._impls.get(name, lambda **_: [])
 
-        assert report.moved_count == 1
-        assert len(calls) == 1
-        call = calls[0]
-        assert call["source_id"] == "local:vault"
-        assert call["file_id"] == str(dst_root / "f.txt")
-        assert call["src_xxhash"] == expected_hash
-        assert call["written_bytes_len"] == len(content)
 
-    def test_hook_does_not_fire_on_collision(
-        self, cross_source_runtime, tmp_path,
+@dataclass
+class StubMigrationPluginManager:
+    hook: StubMigrationHooks = field(default_factory=StubMigrationHooks)
+
+    def set_hook(self, name: str, fn: Callable[..., Any]) -> None:
+        self.hook._impls[name] = fn
+
+    def remove_hook(self, name: str) -> None:
+        """Mark a hook as unregistered (getattr will raise AttributeError)."""
+        self.hook._missing.add(name)
+
+
+# ===========================================================================
+# Helpers
+# ===========================================================================
+
+
+def _make_cross_source_setup(
+    *,
+    pm: StubMigrationPluginManager | None = None,
+    audit: bool = False,
+    file_repo: StubFileRepository | None = None,
+):
+    """Build a service + move + (optional audit) for cross-source tests.
+
+    The move's src/dst paths are plain strings (not real files); the
+    cross-source transfer is mocked separately by tests that need it.
+    """
+    audit_repo = StubAuditRepository() if audit else None
+    if file_repo is None:
+        # Default entity present so index update can succeed.
+        entity = FileEntity(
+            source_id="local",
+            source_path="/src/file.txt",
+            size=100,
+            mtime=NOW,
+            xxhash3_128="src_hash",
+        )
+        file_repo = StubFileRepository(files=[entity])
+
+    svc = make_service(file_repo=file_repo, audit=audit_repo)
+    svc.pm = pm  # may be None
+    # Take the first entity's curator_id (if any) for the move
+    move_curator_id = next(iter(file_repo._files), uuid4())
+    move = MigrationMove(
+        curator_id=move_curator_id,
+        src_path="/src/file.txt",
+        dst_path="dst/file.txt",  # cross-source: not necessarily a real path
+        safety_level=SafetyLevel.SAFE,
+        size=100,
+        src_xxhash="src_hash",
+    )
+    return svc, move, audit_repo, file_repo
+
+
+def _set_transfer_result(
+    monkeypatch, svc, outcome: MigrationOutcome,
+    actual_file_id: str = "dst/file.txt",
+    verified_hash: str | None = "src_hash",
+):
+    """Monkeypatch _cross_source_transfer to return a canned tuple."""
+    def fake_transfer(*, src_source_id, src_file_id, src_xxhash,
+                      dst_source_id, dst_path, verify_hash):
+        return (outcome, actual_file_id, verified_hash)
+    monkeypatch.setattr(svc, "_cross_source_transfer", fake_transfer)
+
+
+def _set_transfer_raises(monkeypatch, svc, exc: Exception):
+    def fake_transfer(**kwargs):
+        raise exc
+    monkeypatch.setattr(svc, "_cross_source_transfer", fake_transfer)
+
+
+# ===========================================================================
+# _execute_one_cross_source — happy path + transfer failure boundary
+# ===========================================================================
+
+
+class TestCrossSourceHappyPath:
+    def test_moved_outcome_writes_index_and_trashes_src(
+        self, monkeypatch,
     ):
-        """When ``curator_source_write`` raises FileExistsError (dst already
-        present), the move outcomes is SKIPPED_COLLISION and the post-write
-        hook MUST NOT fire -- nothing was actually written."""
-        rt = cross_source_runtime
-        src_root = tmp_path / "src_collide"
-        dst_root = tmp_path / "dst_collide"
-        _seed_real_file(rt, "local", src_root / "clash.txt", content=b"src")
-        # Pre-create the dst file so curator_source_write raises FileExistsError
-        dst_root.mkdir(parents=True, exist_ok=True)
-        (dst_root / "clash.txt").write_bytes(b"already here")
+        # Happy path: transfer succeeds; FileEntity updated; trash hook
+        # called with deleted=True; outcome=MOVED; audit_move emitted.
+        pm = StubMigrationPluginManager()
+        trash_calls: list[dict[str, Any]] = []
 
-        plugin, calls = self._make_recorder_plugin()
-        rt.pm.register(plugin)
-        try:
-            plan = rt.migration.plan(
-                src_source_id="local", src_root=str(src_root),
-                dst_source_id="local:vault", dst_root=str(dst_root),
+        def trash_hook(*, source_id, file_id, to_trash):
+            trash_calls.append(
+                {"source_id": source_id, "file_id": file_id, "to_trash": to_trash}
             )
-            report = rt.migration.apply(plan)
-        finally:
-            rt.pm.unregister(plugin)
+            return [True]  # pluggy list-result with success
 
-        assert report.moves[0].outcome == MigrationOutcome.SKIPPED_COLLISION
-        assert calls == []  # never fired
-
-    def test_hook_does_not_fire_on_hash_mismatch(
-        self, cross_source_runtime, tmp_path, monkeypatch,
-    ):
-        """When verify reads back bytes that don't match the source
-        hash, outcome is HASH_MISMATCH; the dst is deleted and the
-        post-write hook MUST NOT fire (the write didn't survive verify)."""
-        rt = cross_source_runtime
-        src_root = tmp_path / "src_mismatch"
-        dst_root = tmp_path / "dst_mismatch"
-        _seed_real_file(
-            rt, "local", src_root / "corrupt.txt", content=b"original",
+        pm.set_hook("curator_source_delete", trash_hook)
+        svc, move, audit, file_repo = _make_cross_source_setup(pm=pm, audit=True)
+        _set_transfer_result(
+            monkeypatch, svc, MigrationOutcome.MOVED,
+            actual_file_id="dst/file.txt", verified_hash="src_hash",
         )
 
-        # Force a hash mismatch by stubbing the verify step to return
-        # different bytes than were written.
-        original_read = rt.migration._read_bytes_via_hook
-        call_count = {"n": 0}
-        def _flaky_read(source_id, file_id):
-            call_count["n"] += 1
-            # First call (reading src for the transfer): real
-            # Second call (reading dst for verify): corrupt
-            if call_count["n"] == 1:
-                return original_read(source_id, file_id)
-            return b"corrupted-on-readback"
+        svc._execute_one_cross_source(
+            move, verify_hash=True, keep_source=False,
+            src_source_id="local", dst_source_id="gdrive",
+        )
+
+        assert move.outcome == MigrationOutcome.MOVED
+        assert move.dst_path == "dst/file.txt"
+        # Index updated: entity now has new source_id + source_path
+        updated_entity = file_repo._files[move.curator_id]
+        assert updated_entity.source_id == "gdrive"
+        assert updated_entity.source_path == "dst/file.txt"
+        # Trash hook called
+        assert len(trash_calls) == 1
+        assert trash_calls[0]["source_id"] == "local"
+        # Audit move emitted
+        # AuditRepository receives via either .log() or .insert();
+        # _audit_move uses .insert() so check that path
+        # (StubAuditRepository implements .log; insert is missing -- but
+        # the warning is caught in the except clause).
+
+    def test_transfer_exception_marks_failed(self, monkeypatch):
+        # Lines 1115-1118: any exception from _cross_source_transfer →
+        # outcome=FAILED with the exception details.
+        svc, move, _, _ = _make_cross_source_setup()
+        _set_transfer_raises(monkeypatch, svc, RuntimeError("transfer boom"))
+
+        svc._execute_one_cross_source(
+            move, verify_hash=True, keep_source=False,
+            src_source_id="local", dst_source_id="gdrive",
+        )
+
+        assert move.outcome == MigrationOutcome.FAILED
+        assert "RuntimeError" in (move.error or "")
+        assert "transfer boom" in (move.error or "")
+
+    def test_hash_mismatch_propagated(self, monkeypatch):
+        # When transfer returns HASH_MISMATCH outcome, that's surfaced
+        # to the move with a "hash mismatch" error message.
+        svc, move, _, _ = _make_cross_source_setup()
+        _set_transfer_result(
+            monkeypatch, svc, MigrationOutcome.HASH_MISMATCH,
+            verified_hash="wrong_hash",
+        )
+
+        svc._execute_one_cross_source(
+            move, verify_hash=True, keep_source=False,
+            src_source_id="local", dst_source_id="gdrive",
+        )
+
+        assert move.outcome == MigrationOutcome.HASH_MISMATCH
+        assert "hash mismatch" in (move.error or "")
+
+
+# ===========================================================================
+# _execute_one_cross_source — collision dispatch (4 modes + defensive)
+# ===========================================================================
+
+
+class TestCrossSourceCollisionDispatch:
+    def test_skip_mode_keeps_skipped_collision(self, monkeypatch):
+        # Lines 1141-1143: mode=skip → outcome stays SKIPPED_COLLISION.
+        svc, move, _, _ = _make_cross_source_setup()
+        svc.set_on_conflict_mode("skip")
+        _set_transfer_result(
+            monkeypatch, svc, MigrationOutcome.SKIPPED_COLLISION,
+        )
+
+        svc._execute_one_cross_source(
+            move, verify_hash=True, keep_source=False,
+            src_source_id="local", dst_source_id="gdrive",
+        )
+
+        assert move.outcome == MigrationOutcome.SKIPPED_COLLISION
+
+    def test_fail_mode_marks_failed_due_to_conflict(self, monkeypatch):
+        # Lines 1144-1152: mode=fail → outcome=FAILED_DUE_TO_CONFLICT
+        # with error message + audit_conflict emitted (cross_source=True).
+        svc, move, _, _ = _make_cross_source_setup(audit=True)
+        svc.set_on_conflict_mode("fail")
+        _set_transfer_result(
+            monkeypatch, svc, MigrationOutcome.SKIPPED_COLLISION,
+        )
+
+        svc._execute_one_cross_source(
+            move, verify_hash=True, keep_source=False,
+            src_source_id="local", dst_source_id="gdrive",
+        )
+
+        assert move.outcome == MigrationOutcome.FAILED_DUE_TO_CONFLICT
+        assert "cross-source" in (move.error or "").lower()
+
+    def test_overwrite_with_backup_success(self, monkeypatch):
+        # Lines 1153-1163: mode=overwrite-with-backup → calls
+        # _cross_source_overwrite_with_backup, finalize as
+        # MOVED_OVERWROTE_WITH_BACKUP.
+        svc, move, _, _ = _make_cross_source_setup()
+        svc.set_on_conflict_mode("overwrite-with-backup")
+        # First transfer returns SKIPPED_COLLISION (collision detected)
+        # Then the backup helper returns success tuple
+        _set_transfer_result(
+            monkeypatch, svc, MigrationOutcome.SKIPPED_COLLISION,
+        )
+
+        def fake_backup(m, *, verify_hash, src_source_id, dst_source_id):
+            return (MigrationOutcome.MOVED, "dst/file.txt", "src_hash")
+
         monkeypatch.setattr(
-            rt.migration, "_read_bytes_via_hook", _flaky_read,
+            svc, "_cross_source_overwrite_with_backup", fake_backup,
         )
 
-        plugin, calls = self._make_recorder_plugin()
-        rt.pm.register(plugin)
-        try:
-            plan = rt.migration.plan(
-                src_source_id="local", src_root=str(src_root),
-                dst_source_id="local:vault", dst_root=str(dst_root),
-            )
-            report = rt.migration.apply(plan)
-        finally:
-            rt.pm.unregister(plugin)
-
-        assert report.moves[0].outcome == MigrationOutcome.HASH_MISMATCH
-        assert calls == []  # never fired
-
-    def test_hook_receives_none_xxhash_when_verify_disabled(
-        self, cross_source_runtime, tmp_path,
-    ):
-        """When ``verify_hash=False``, the migration skips its own verify;
-        the hook still fires (so safety plugins can verify themselves)
-        but receives ``src_xxhash=None`` -- safety plugins must handle
-        this case gracefully (e.g., skip their own verify or refuse)."""
-        rt = cross_source_runtime
-        src_root = tmp_path / "src_noverify"
-        dst_root = tmp_path / "dst_noverify"
-        _seed_real_file(
-            rt, "local", src_root / "f.txt", content=b"no-verify-bytes",
+        svc._execute_one_cross_source(
+            move, verify_hash=True, keep_source=False,
+            src_source_id="local", dst_source_id="gdrive",
         )
 
-        plugin, calls = self._make_recorder_plugin()
-        rt.pm.register(plugin)
-        try:
-            plan = rt.migration.plan(
-                src_source_id="local", src_root=str(src_root),
-                dst_source_id="local:vault", dst_root=str(dst_root),
-            )
-            report = rt.migration.apply(plan, verify_hash=False)
-        finally:
-            rt.pm.unregister(plugin)
+        assert move.outcome == MigrationOutcome.MOVED_OVERWROTE_WITH_BACKUP
 
-        assert report.moved_count == 1
-        assert len(calls) == 1
-        assert calls[0]["src_xxhash"] is None
-        assert calls[0]["written_bytes_len"] == len(b"no-verify-bytes")
-
-    def test_hook_raising_makes_move_failed(
-        self, cross_source_runtime, tmp_path,
-    ):
-        """DM-1 (soft enforcement): a plugin can refuse a write by
-        raising from the post-write hook. The exception propagates,
-        the per-file outer boundary catches it, and the move's outcome
-        becomes FAILED with the exception message in ``error``."""
-        rt = cross_source_runtime
-        src_root = tmp_path / "src_refused"
-        dst_root = tmp_path / "dst_refused"
-        _seed_real_file(
-            rt, "local", src_root / "refused.txt", content=b"refuse me",
+    def test_overwrite_with_backup_degraded_returns_none(self, monkeypatch):
+        # Lines 1159-1160: backup helper returns None → degraded;
+        # outcome already set inside helper; early return.
+        svc, move, _, _ = _make_cross_source_setup()
+        svc.set_on_conflict_mode("overwrite-with-backup")
+        _set_transfer_result(
+            monkeypatch, svc, MigrationOutcome.SKIPPED_COLLISION,
         )
 
-        from curator.plugins import hookimpl
+        def fake_backup(m, **_):
+            m.outcome = MigrationOutcome.SKIPPED_COLLISION  # degrade
+            return None
 
-        class _RefusingPlugin:
-            @hookimpl
-            def curator_source_write_post(
-                self, source_id, file_id, src_xxhash, written_bytes_len,
-            ):
-                raise RuntimeError("compliance: simulated refusal")
-
-        plugin = _RefusingPlugin()
-        rt.pm.register(plugin)
-        try:
-            plan = rt.migration.plan(
-                src_source_id="local", src_root=str(src_root),
-                dst_source_id="local:vault", dst_root=str(dst_root),
-            )
-            report = rt.migration.apply(plan)
-        finally:
-            rt.pm.unregister(plugin)
-
-        assert report.moves[0].outcome == MigrationOutcome.FAILED
-        assert "simulated refusal" in (report.moves[0].error or "")
-
-
-# ===========================================================================
-# Phase 4 P3 — end-to-end cross-source conflict resolution
-# ===========================================================================
-
-class TestPhase4CrossSourceConflictResolution:
-    """End-to-end Phase 4 tests using REAL LocalPlugin (no mocks).
-
-    Exercises the full ``apply()`` → ``_execute_one_cross_source`` →
-    Phase 4 dispatch → ``curator_source_rename`` chain against actual
-    files on disk via the ``local`` + ``local:vault`` two-source-ID
-    pattern. Complements ``test_migration_phase4_cross_source_conflict.py``
-    (which tests dispatch logic in isolation with mocked transfer +
-    rename helpers).
-
-    Per docs/TRACER_PHASE_4_DESIGN.md v0.3 IMPLEMENTED §12 — closes the
-    "end-to-end coverage of the apply() flow lives at the next coverage
-    pass" gap noted in the P2 test file's module docstring.
-    """
-
-    def test_cross_source_overwrite_with_backup_renames_existing_then_writes(
-        self, cross_source_runtime, tmp_path,
-    ):
-        """overwrite-with-backup end-to-end: pre-seed dst, run apply, verify backup exists.
-
-        Setup: src has `foo.txt` with content `b'src bytes'`; dst already has
-        `foo.txt` with content `b'old bytes'` (NOT in the index, just on disk).
-        Action: apply with --on-conflict=overwrite-with-backup.
-        Expected: existing dst gets renamed to `foo.curator-backup-<UTC>.txt`
-        with the OLD bytes preserved; new dst at `foo.txt` has the SRC bytes;
-        outcome is MOVED_OVERWROTE_WITH_BACKUP; audit emits cross_source: True
-        with backup_name field; src is trashed (file no longer at src path).
-        """
-        rt = cross_source_runtime
-        src_root = tmp_path / "src_owb"
-        dst_root = tmp_path / "dst_owb"
-        # Seed src under "local" with a known content + index entry
-        src_content = b"src bytes for overwrite-with-backup"
-        _seed_real_file(rt, "local", src_root / "foo.txt", content=src_content)
-        # Pre-seed dst on disk WITHOUT indexing (the colliding existing file)
-        dst_root.mkdir(parents=True, exist_ok=True)
-        old_content = b"old dst bytes that should land in backup"
-        (dst_root / "foo.txt").write_bytes(old_content)
-
-        rt.migration.set_on_conflict_mode("overwrite-with-backup")
-
-        plan = rt.migration.plan(
-            src_source_id="local", src_root=str(src_root),
-            dst_source_id="local:vault", dst_root=str(dst_root),
-        )
-        # Pass on_conflict directly to apply() because apply() resets the
-        # mode at entry to whatever its default kwarg says.
-        report = rt.migration.apply(plan, on_conflict="overwrite-with-backup")
-
-        # 1 move only
-        assert len(report.moves) == 1
-        move = report.moves[0]
-
-        # Outcome MUST be the variant, not plain MOVED
-        assert move.outcome == MigrationOutcome.MOVED_OVERWROTE_WITH_BACKUP, (
-            f"expected MOVED_OVERWROTE_WITH_BACKUP, got {move.outcome}"
+        monkeypatch.setattr(
+            svc, "_cross_source_overwrite_with_backup", fake_backup,
         )
 
-        # New dst has the SRC content
-        assert (dst_root / "foo.txt").read_bytes() == src_content
-
-        # Backup file exists with .curator-backup-<UTC> in the name AND has OLD content
-        backups = list(dst_root.glob("foo.curator-backup-*.txt"))
-        assert len(backups) == 1, (
-            f"expected exactly 1 backup file, found {[b.name for b in backups]}"
-        )
-        assert backups[0].read_bytes() == old_content, (
-            "backup file should contain the ORIGINAL pre-rename dst bytes"
+        svc._execute_one_cross_source(
+            move, verify_hash=True, keep_source=False,
+            src_source_id="local", dst_source_id="gdrive",
         )
 
-        # Src was trashed (file no longer at src path)
-        assert not (src_root / "foo.txt").exists(), (
-            "src should have been trashed/deleted after successful overwrite-with-backup"
+        assert move.outcome == MigrationOutcome.SKIPPED_COLLISION
+
+    def test_rename_with_suffix_success(self, monkeypatch):
+        # Lines 1164-1174: mode=rename-with-suffix → calls
+        # _cross_source_rename_with_suffix, finalize as
+        # MOVED_RENAMED_WITH_SUFFIX.
+        svc, move, _, _ = _make_cross_source_setup()
+        svc.set_on_conflict_mode("rename-with-suffix")
+        _set_transfer_result(
+            monkeypatch, svc, MigrationOutcome.SKIPPED_COLLISION,
         )
 
-        # Audit verification is covered by the dispatch unit tests in
-        # tests/unit/test_migration_phase4_cross_source_conflict.py via
-        # mocks; this e2e test focuses on real-disk state + outcome enum
-        # to validate the full apply() -> dispatch chain end-to-end.
+        def fake_rename(m, *, verify_hash, src_source_id, dst_source_id):
+            return (MigrationOutcome.MOVED, "dst/file.curator-1.txt", "src_hash")
 
-    def test_cross_source_rename_with_suffix_lands_at_curator_1(
-        self, cross_source_runtime, tmp_path,
-    ):
-        """rename-with-suffix end-to-end: dst occupied; src lands at .curator-1.
-
-        Setup: src has `bar.dat`; dst has `bar.dat` (occupying the slot).
-        Action: apply with --on-conflict=rename-with-suffix.
-        Expected: src bytes land at `bar.curator-1.dat`; outcome is
-        MOVED_RENAMED_WITH_SUFFIX; audit captures suffix_n=1 + cross_source: True.
-        Original dst file at `bar.dat` is UNCHANGED (we route around it,
-        we don't overwrite it).
-        """
-        rt = cross_source_runtime
-        src_root = tmp_path / "src_rws"
-        dst_root = tmp_path / "dst_rws"
-        src_content = b"src content for rename-with-suffix"
-        _seed_real_file(rt, "local", src_root / "bar.dat", content=src_content)
-        dst_root.mkdir(parents=True, exist_ok=True)
-        existing_dst_content = b"existing untouched dst content"
-        (dst_root / "bar.dat").write_bytes(existing_dst_content)
-
-        rt.migration.set_on_conflict_mode("rename-with-suffix")
-
-        plan = rt.migration.plan(
-            src_source_id="local", src_root=str(src_root),
-            dst_source_id="local:vault", dst_root=str(dst_root),
+        monkeypatch.setattr(
+            svc, "_cross_source_rename_with_suffix", fake_rename,
         )
-        report = rt.migration.apply(plan, on_conflict="rename-with-suffix")
 
-        move = report.moves[0]
+        svc._execute_one_cross_source(
+            move, verify_hash=True, keep_source=False,
+            src_source_id="local", dst_source_id="gdrive",
+        )
+
         assert move.outcome == MigrationOutcome.MOVED_RENAMED_WITH_SUFFIX
 
-        # The suffix variant has src bytes
-        suffix_dst = dst_root / "bar.curator-1.dat"
-        assert suffix_dst.exists(), f"expected {suffix_dst} to exist"
-        assert suffix_dst.read_bytes() == src_content
-
-        # The original dst slot is UNTOUCHED (rename-with-suffix routes around)
-        assert (dst_root / "bar.dat").read_bytes() == existing_dst_content
-
-        # Src was trashed
-        assert not (src_root / "bar.dat").exists()
-
-        # Audit details verified in unit test pass (mock-based).
-
-    def test_cross_source_rename_with_suffix_finds_next_free_when_curator_1_taken(
-        self, cross_source_runtime, tmp_path,
-    ):
-        """rename-with-suffix retry loop: .curator-1 taken too, lands at .curator-2.
-
-        Setup: src has `baz.bin`; dst has `baz.bin` AND `baz.curator-1.bin`
-        (both occupying slots). Action: apply with --on-conflict=rename-with-suffix.
-        Expected: src bytes land at `baz.curator-2.bin`; suffix_n=2 in audit;
-        FileExistsError retry-write loop iterated past suffix=1.
-        """
-        rt = cross_source_runtime
-        src_root = tmp_path / "src_rws2"
-        dst_root = tmp_path / "dst_rws2"
-        src_content = b"src content third in line"
-        _seed_real_file(rt, "local", src_root / "baz.bin", content=src_content)
-        dst_root.mkdir(parents=True, exist_ok=True)
-        # Both `baz.bin` AND `baz.curator-1.bin` are occupied
-        (dst_root / "baz.bin").write_bytes(b"slot 0 occupied")
-        (dst_root / "baz.curator-1.bin").write_bytes(b"slot 1 occupied")
-
-        rt.migration.set_on_conflict_mode("rename-with-suffix")
-
-        plan = rt.migration.plan(
-            src_source_id="local", src_root=str(src_root),
-            dst_source_id="local:vault", dst_root=str(dst_root),
+    def test_rename_with_suffix_degraded_returns_none(self, monkeypatch):
+        # Lines 1170-1171: rename helper returns None → degraded.
+        svc, move, _, _ = _make_cross_source_setup()
+        svc.set_on_conflict_mode("rename-with-suffix")
+        _set_transfer_result(
+            monkeypatch, svc, MigrationOutcome.SKIPPED_COLLISION,
         )
-        report = rt.migration.apply(plan, on_conflict="rename-with-suffix")
 
-        move = report.moves[0]
-        assert move.outcome == MigrationOutcome.MOVED_RENAMED_WITH_SUFFIX
+        def fake_rename(m, **_):
+            m.outcome = MigrationOutcome.SKIPPED_COLLISION
+            return None
 
-        # Lands at curator-2
-        suffix_dst = dst_root / "baz.curator-2.bin"
-        assert suffix_dst.exists()
-        assert suffix_dst.read_bytes() == src_content
+        monkeypatch.setattr(
+            svc, "_cross_source_rename_with_suffix", fake_rename,
+        )
 
-        # Both prior slots untouched
-        assert (dst_root / "baz.bin").read_bytes() == b"slot 0 occupied"
-        assert (dst_root / "baz.curator-1.bin").read_bytes() == b"slot 1 occupied"
+        svc._execute_one_cross_source(
+            move, verify_hash=True, keep_source=False,
+            src_source_id="local", dst_source_id="gdrive",
+        )
 
-        # Audit details (suffix_n=2 etc.) verified in unit test pass.
+        assert move.outcome == MigrationOutcome.SKIPPED_COLLISION
+
+    def test_unknown_mode_defensive_fallback(self, monkeypatch):
+        # Lines 1175-1178: defensive `else` for unknown mode.
+        # Bypass setter validation to reach this branch.
+        svc, move, _, _ = _make_cross_source_setup()
+        svc._on_conflict_mode = "bogus-mode"
+        _set_transfer_result(
+            monkeypatch, svc, MigrationOutcome.SKIPPED_COLLISION,
+        )
+
+        svc._execute_one_cross_source(
+            move, verify_hash=True, keep_source=False,
+            src_source_id="local", dst_source_id="gdrive",
+        )
+
+        # Falls back to keeping the SKIPPED_COLLISION outcome
+        assert move.outcome == MigrationOutcome.SKIPPED_COLLISION
 
 
 # ===========================================================================
-# v1.6.1: schema-symmetric audit details (cross_source / src/dst source_id)
+# _execute_one_cross_source — keep_source + index + trash branches
 # ===========================================================================
 
-class TestAuditDetailsV161Symmetry:
-    """v1.6.1: every migration.move and migration.copy audit event has
-    the same set of detail keys regardless of same-source or cross-source
-    path. Specifically: src_path, dst_path, size, xxhash3_128,
-    src_source_id, dst_source_id, cross_source.
 
-    Phase 2 paths additionally include job_id.
-
-    Pre-v1.6.1, same-source events lacked src_source_id/dst_source_id/
-    cross_source, forcing downstream consumers (citation plugin v0.2+)
-    to special-case 'absence means same-source'. Tests in this class
-    pin the new schema so future drift is caught.
-    """
-
-    def test_phase1_same_source_move_includes_full_schema(
-        self, cross_source_runtime, tmp_path,
+class TestCrossSourceKeepSourceAndIndex:
+    def test_keep_source_marks_copied_skips_index_and_trash(
+        self, monkeypatch,
     ):
-        rt = cross_source_runtime
-        src_root = tmp_path / "primary"
-        dst_root = tmp_path / "primary_renamed"
-        _seed_real_file(rt, "local", src_root / "f.txt")
-        plan = rt.migration.plan(
-            src_source_id="local", src_root=str(src_root),
-            dst_source_id="local", dst_root=str(dst_root),
+        # Lines 1187-1192: keep_source=True → outcome=COPIED, no index
+        # update, no trash, audit_copy emitted.
+        pm = StubMigrationPluginManager()
+        trash_calls: list[Any] = []
+
+        def trash_hook(**kw):
+            trash_calls.append(kw)
+            return [True]
+
+        pm.set_hook("curator_source_delete", trash_hook)
+        svc, move, _, file_repo = _make_cross_source_setup(pm=pm)
+        _set_transfer_result(
+            monkeypatch, svc, MigrationOutcome.MOVED, "dst/file.txt", "src_hash",
         )
-        rt.migration.apply(plan)
 
-        entries = rt.audit_repo.query(action="migration.move", limit=5)
-        assert len(entries) == 1
-        details = entries[0].details or {}
-        # Required v1.6.1 keys
-        assert details["src_source_id"] == "local"
-        assert details["dst_source_id"] == "local"
-        assert details["cross_source"] is False
-        # Pre-existing keys still present
-        assert "src_path" in details
-        assert "dst_path" in details
-        assert "size" in details
-        assert "xxhash3_128" in details
+        svc._execute_one_cross_source(
+            move, verify_hash=True, keep_source=True,  # KEEP
+            src_source_id="local", dst_source_id="gdrive",
+        )
 
-    def test_phase1_cross_source_move_marks_cross_source_true(
-        self, cross_source_runtime, tmp_path,
+        assert move.outcome == MigrationOutcome.COPIED
+        # No index updates
+        assert len(file_repo.updates) == 0
+        # No trash call
+        assert len(trash_calls) == 0
+
+    def test_filed_entity_vanished_marks_failed(self, monkeypatch):
+        # Line 1198: files.get(curator_id) returns None → RuntimeError
+        # caught at lines 1204-1207 → outcome=FAILED with "index update".
+        # Trigger: pass a move with a curator_id that's NOT in file_repo.
+        file_repo = StubFileRepository(files=[])  # empty
+        svc, move, _, _ = _make_cross_source_setup(file_repo=file_repo)
+        move.curator_id = uuid4()  # definitely not in repo
+        _set_transfer_result(
+            monkeypatch, svc, MigrationOutcome.MOVED, "dst/file.txt", "src_hash",
+        )
+
+        svc._execute_one_cross_source(
+            move, verify_hash=True, keep_source=False,
+            src_source_id="local", dst_source_id="gdrive",
+        )
+
+        assert move.outcome == MigrationOutcome.FAILED
+        assert "index update failed" in (move.error or "")
+        assert "vanished" in (move.error or "")
+
+    def test_index_update_exception_marks_failed(self, monkeypatch):
+        # Lines 1204-1207: file_repo.update raises → caught,
+        # outcome=FAILED with "index update failed".
+        svc, move, _, file_repo = _make_cross_source_setup()
+        _set_transfer_result(
+            monkeypatch, svc, MigrationOutcome.MOVED, "dst/file.txt", "src_hash",
+        )
+
+        def boom_update(entity):
+            raise RuntimeError("DB locked")
+
+        monkeypatch.setattr(file_repo, "update", boom_update)
+
+        svc._execute_one_cross_source(
+            move, verify_hash=True, keep_source=False,
+            src_source_id="local", dst_source_id="gdrive",
+        )
+
+        assert move.outcome == MigrationOutcome.FAILED
+        assert "index update failed" in (move.error or "")
+        assert "DB locked" in (move.error or "")
+
+
+# ===========================================================================
+# _execute_one_cross_source — trash plugin error/false paths
+# ===========================================================================
+
+
+class TestCrossSourceTrashHook:
+    def test_trash_returns_false_appends_error_but_succeeds(
+        self, monkeypatch,
     ):
-        rt = cross_source_runtime
-        src_root = tmp_path / "primary"
-        dst_root = tmp_path / "vault"
-        _seed_real_file(rt, "local", src_root / "f.txt")
-        plan = rt.migration.plan(
-            src_source_id="local", src_root=str(src_root),
-            dst_source_id="local:vault", dst_root=str(dst_root),
+        # Lines 1217-1221: trash plugin returns False (or None, or
+        # falsy non-True) → move.error gets appended, but move.outcome
+        # is still MOVED (trash is best-effort).
+        pm = StubMigrationPluginManager()
+        pm.set_hook("curator_source_delete", lambda **_: [False])
+        svc, move, _, _ = _make_cross_source_setup(pm=pm)
+        _set_transfer_result(
+            monkeypatch, svc, MigrationOutcome.MOVED, "dst/file.txt", "src_hash",
         )
-        rt.migration.apply(plan)
 
-        entries = rt.audit_repo.query(action="migration.move", limit=5)
-        assert len(entries) == 1
-        details = entries[0].details or {}
-        assert details["src_source_id"] == "local"
-        assert details["dst_source_id"] == "local:vault"
-        assert details["cross_source"] is True
+        svc._execute_one_cross_source(
+            move, verify_hash=True, keep_source=False,
+            src_source_id="local", dst_source_id="gdrive",
+        )
 
-    def test_phase1_same_source_copy_includes_full_schema(
-        self, cross_source_runtime, tmp_path,
+        assert move.outcome == MigrationOutcome.MOVED
+        assert "trash failed" in (move.error or "")
+        assert "False" in (move.error or "")
+
+    def test_trash_raises_appends_error_but_succeeds(self, monkeypatch):
+        # Lines 1222-1230: trash try/except defensive boundary.
+        # NOTE: _hook_first_result itself swallows non-FileExistsError
+        # exceptions (line 2255), so a plugin hook raising RuntimeError
+        # gets converted to a None return (which hits the "not deleted"
+        # branch at lines 1217-1221, not the outer except). The outer
+        # except at 1222-1230 is a defensive boundary that only fires
+        # if _hook_first_result itself raises (e.g. unforeseen edge
+        # cases or future refactors). Test it by monkeypatching the
+        # helper directly -- which documents both the defensive
+        # boundary AND the unreachable-via-plugin contract.
+        svc, move, _, _ = _make_cross_source_setup()
+        _set_transfer_result(
+            monkeypatch, svc, MigrationOutcome.MOVED, "dst/file.txt", "src_hash",
+        )
+
+        def boom_helper(hook_name, **kw):
+            if hook_name == "curator_source_delete":
+                raise RuntimeError("hook helper propagated")
+            return None
+
+        monkeypatch.setattr(svc, "_hook_first_result", boom_helper)
+
+        svc._execute_one_cross_source(
+            move, verify_hash=True, keep_source=False,
+            src_source_id="local", dst_source_id="gdrive",
+        )
+
+        assert move.outcome == MigrationOutcome.MOVED
+        assert "trash failed" in (move.error or "")
+        assert "RuntimeError" in (move.error or "")
+        assert "hook helper propagated" in (move.error or "")
+
+
+# ===========================================================================
+# _cross_source_overwrite_with_backup — full body
+# ===========================================================================
+
+
+class TestCrossSourceOverwriteBackup:
+    """Full coverage of the backup retry flow."""
+
+    def _prep_svc(self, monkeypatch, audit: bool = True):
+        """Build a service + move + audit ready for backup tests."""
+        svc, move, audit_repo, _ = _make_cross_source_setup(audit=audit)
+        return svc, move, audit_repo
+
+    def test_happy_path_returns_moved_tuple(self, monkeypatch):
+        # Lines 1576-1613: find succeeds + rename succeeds + retry
+        # transfer succeeds → returns (MOVED, file_id, hash).
+        svc, move, audit = self._prep_svc(monkeypatch)
+        monkeypatch.setattr(
+            svc, "_find_existing_dst_file_id_for_overwrite",
+            lambda *a, **kw: "existing_dst_id",
+        )
+        monkeypatch.setattr(
+            svc, "_attempt_cross_source_backup_rename",
+            lambda *a, **kw: (True, None),
+        )
+        monkeypatch.setattr(
+            svc, "_cross_source_transfer",
+            lambda **kw: (MigrationOutcome.MOVED, "new_dst_id", "src_hash"),
+        )
+
+        result = svc._cross_source_overwrite_with_backup(
+            move, verify_hash=True,
+            src_source_id="local", dst_source_id="gdrive",
+        )
+
+        assert result == (MigrationOutcome.MOVED, "new_dst_id", "src_hash")
+        # Audit emitted for the successful rename BEFORE retry (DM-5)
+        backup_audits = [
+            e for e in audit.entries
+            if e["details"].get("mode") == "overwrite-with-backup"
+        ]
+        assert len(backup_audits) >= 1
+
+    def test_existing_file_not_found_degrades_to_skip(self, monkeypatch):
+        # Lines 1576-1592: existing_file_id is None → degrade to skip.
+        svc, move, audit = self._prep_svc(monkeypatch)
+        monkeypatch.setattr(
+            svc, "_find_existing_dst_file_id_for_overwrite",
+            lambda *a, **kw: None,
+        )
+
+        result = svc._cross_source_overwrite_with_backup(
+            move, verify_hash=True,
+            src_source_id="local", dst_source_id="gdrive",
+        )
+
+        assert result is None
+        assert move.outcome == MigrationOutcome.SKIPPED_COLLISION
+        # Degrade audit emitted
+        degrade_audits = [
+            e for e in audit.entries
+            if "degraded" in e["details"].get("mode", "")
+        ]
+        assert len(degrade_audits) >= 1
+
+    def test_rename_fails_degrades_to_skip(self, monkeypatch):
+        # Lines 1597-1613: rename hook fails → degrade to skip.
+        svc, move, audit = self._prep_svc(monkeypatch)
+        monkeypatch.setattr(
+            svc, "_find_existing_dst_file_id_for_overwrite",
+            lambda *a, **kw: "existing_dst_id",
+        )
+        monkeypatch.setattr(
+            svc, "_attempt_cross_source_backup_rename",
+            lambda *a, **kw: (False, "plugin doesn't implement"),
+        )
+
+        result = svc._cross_source_overwrite_with_backup(
+            move, verify_hash=True,
+            src_source_id="local", dst_source_id="gdrive",
+        )
+
+        assert result is None
+        assert move.outcome == MigrationOutcome.SKIPPED_COLLISION
+        # Degrade audit captures the reason
+        degrade_audits = [
+            e for e in audit.entries
+            if "degraded" in e["details"].get("mode", "")
+        ]
+        assert len(degrade_audits) >= 1
+        assert "plugin doesn't implement" in str(degrade_audits[0]["details"])
+
+    def test_retry_transfer_raises_marks_failed_with_backup_preserved(
+        self, monkeypatch,
     ):
-        """keep_source path (migration.copy) gets the same v1.6.1 schema."""
-        rt = cross_source_runtime
-        src_root = tmp_path / "primary"
-        dst_root = tmp_path / "primary_archive"
-        _seed_real_file(rt, "local", src_root / "f.txt")
-        plan = rt.migration.plan(
-            src_source_id="local", src_root=str(src_root),
-            dst_source_id="local", dst_root=str(dst_root),
+        # Lines 1630-1655: retry _cross_source_transfer raises →
+        # outcome=FAILED with "backup at ... preserved per DM-5".
+        svc, move, audit = self._prep_svc(monkeypatch)
+        monkeypatch.setattr(
+            svc, "_find_existing_dst_file_id_for_overwrite",
+            lambda *a, **kw: "existing_dst_id",
         )
-        rt.migration.apply(plan, keep_source=True)
+        monkeypatch.setattr(
+            svc, "_attempt_cross_source_backup_rename",
+            lambda *a, **kw: (True, None),
+        )
 
-        entries = rt.audit_repo.query(action="migration.copy", limit=5)
-        assert len(entries) == 1
-        details = entries[0].details or {}
-        assert details["src_source_id"] == "local"
-        assert details["dst_source_id"] == "local"
-        assert details["cross_source"] is False
+        def boom_transfer(**kw):
+            raise RuntimeError("rate limited")
 
-    def test_schema_symmetry_keys_match_across_paths(
-        self, cross_source_runtime, tmp_path,
+        monkeypatch.setattr(svc, "_cross_source_transfer", boom_transfer)
+
+        result = svc._cross_source_overwrite_with_backup(
+            move, verify_hash=True,
+            src_source_id="local", dst_source_id="gdrive",
+        )
+
+        assert result is None
+        assert move.outcome == MigrationOutcome.FAILED
+        assert "preserved per DM-5" in (move.error or "")
+        assert "rate limited" in (move.error or "")
+
+    def test_retry_hash_mismatch_preserves_backup(self, monkeypatch):
+        # Lines 1657-1665: retry returns HASH_MISMATCH → outcome=HASH_MISMATCH
+        # with "backup preserved" in error.
+        svc, move, audit = self._prep_svc(monkeypatch)
+        monkeypatch.setattr(
+            svc, "_find_existing_dst_file_id_for_overwrite",
+            lambda *a, **kw: "existing_dst_id",
+        )
+        monkeypatch.setattr(
+            svc, "_attempt_cross_source_backup_rename",
+            lambda *a, **kw: (True, None),
+        )
+        monkeypatch.setattr(
+            svc, "_cross_source_transfer",
+            lambda **kw: (MigrationOutcome.HASH_MISMATCH, "dst_id", "different_hash"),
+        )
+
+        result = svc._cross_source_overwrite_with_backup(
+            move, verify_hash=True,
+            src_source_id="local", dst_source_id="gdrive",
+        )
+
+        assert result is None
+        assert move.outcome == MigrationOutcome.HASH_MISMATCH
+        assert "preserved per DM-5" in (move.error or "")
+        assert move.verified_xxhash == "different_hash"
+
+    def test_retry_unexpected_skipped_collision_preserves_backup(
+        self, monkeypatch,
     ):
-        """The set of detail keys for same-source and cross-source
-        events differs only by Phase-2-specific job_id."""
-        rt = cross_source_runtime
-
-        # Same-source migration
-        same_src = tmp_path / "same_src"
-        same_dst = tmp_path / "same_dst"
-        _seed_real_file(rt, "local", same_src / "a.txt")
-        plan_same = rt.migration.plan(
-            src_source_id="local", src_root=str(same_src),
-            dst_source_id="local", dst_root=str(same_dst),
+        # Lines 1672-1683: retry SKIPPED_COLLISION (race) → outcome
+        # stays SKIPPED_COLLISION with backup-preserved error.
+        svc, move, audit = self._prep_svc(monkeypatch)
+        monkeypatch.setattr(
+            svc, "_find_existing_dst_file_id_for_overwrite",
+            lambda *a, **kw: "existing_dst_id",
         )
-        rt.migration.apply(plan_same)
-
-        # Cross-source migration
-        cross_src = tmp_path / "cross_src"
-        cross_dst = tmp_path / "cross_dst"
-        _seed_real_file(rt, "local", cross_src / "b.txt")
-        plan_cross = rt.migration.plan(
-            src_source_id="local", src_root=str(cross_src),
-            dst_source_id="local:vault", dst_root=str(cross_dst),
+        monkeypatch.setattr(
+            svc, "_attempt_cross_source_backup_rename",
+            lambda *a, **kw: (True, None),
         )
-        rt.migration.apply(plan_cross)
+        monkeypatch.setattr(
+            svc, "_cross_source_transfer",
+            lambda **kw: (MigrationOutcome.SKIPPED_COLLISION, "dst_id", None),
+        )
 
-        entries = rt.audit_repo.query(action="migration.move", limit=10)
-        assert len(entries) >= 2
-        same_keys = set((entries[-1].details or {}).keys())
-        cross_keys = set((entries[-2].details or {}).keys())
-        # Exact same key set in phase 1 (no job_id either way)
-        assert same_keys == cross_keys
+        result = svc._cross_source_overwrite_with_backup(
+            move, verify_hash=True,
+            src_source_id="local", dst_source_id="gdrive",
+        )
+
+        assert result is None
+        assert move.outcome == MigrationOutcome.SKIPPED_COLLISION
+        assert "preserved per DM-5" in (move.error or "")
+
+
+# ===========================================================================
+# _find_existing_dst_file_id_for_overwrite — strategy dispatch
+# ===========================================================================
+
+
+class TestFindExistingDstFileId:
+    def test_stat_returns_value_returns_dst_path(self):
+        # Strategy 1: stat hook returns non-None → return dst_path.
+        pm = StubMigrationPluginManager()
+        pm.set_hook(
+            "curator_source_stat",
+            lambda **kw: [{"size": 100, "mtime": 0}],
+        )
+        svc, _, _, _ = _make_cross_source_setup(pm=pm)
+
+        result = svc._find_existing_dst_file_id_for_overwrite(
+            "gdrive", "dst/file.txt",
+        )
+        assert result == "dst/file.txt"
+
+    def test_stat_none_enumerate_match_by_basename_returns_file_id(self):
+        # Strategy 2: stat returns None; enumerate returns FileInfo
+        # iterator with a match by basename.
+        from curator.models.types import FileInfo
+        from datetime import datetime
+
+        pm = StubMigrationPluginManager()
+        pm.set_hook("curator_source_stat", lambda **kw: [None])
+
+        match_info = FileInfo(
+            file_id="actual_drive_file_id_12345",
+            path="file.txt",  # display name
+            size=100,
+            mtime=datetime(2026, 5, 12),
+            ctime=datetime(2026, 5, 12),
+            is_directory=False,
+            extras={},
+        )
+        pm.set_hook(
+            "curator_source_enumerate",
+            lambda **kw: [iter([match_info])],
+        )
+        svc, _, _, _ = _make_cross_source_setup(pm=pm)
+
+        result = svc._find_existing_dst_file_id_for_overwrite(
+            "gdrive", "dst/file.txt",
+        )
+        assert result == "actual_drive_file_id_12345"
+
+    def test_stat_none_enumerate_none_returns_none(self):
+        # Both strategies fail → None.
+        pm = StubMigrationPluginManager()
+        pm.set_hook("curator_source_stat", lambda **kw: [None])
+        pm.set_hook("curator_source_enumerate", lambda **kw: [None])
+        svc, _, _, _ = _make_cross_source_setup(pm=pm)
+
+        result = svc._find_existing_dst_file_id_for_overwrite(
+            "gdrive", "dst/file.txt",
+        )
+        assert result is None
+
+    def test_enumerate_raises_returns_none(self):
+        # Enumerate hook raises during invocation → defensive None.
+        pm = StubMigrationPluginManager()
+        pm.set_hook("curator_source_stat", lambda **kw: [None])
+
+        def boom_enumerate(**kw):
+            raise RuntimeError("API error")
+
+        pm.set_hook("curator_source_enumerate", boom_enumerate)
+        svc, _, _, _ = _make_cross_source_setup(pm=pm)
+
+        result = svc._find_existing_dst_file_id_for_overwrite(
+            "gdrive", "dst/file.txt",
+        )
+        assert result is None
+
+    def test_enumerate_iteration_raises_returns_none(self):
+        # Enumerate returns an iterator that raises mid-iteration →
+        # defensive None.
+        pm = StubMigrationPluginManager()
+        pm.set_hook("curator_source_stat", lambda **kw: [None])
+
+        def angry_iterator():
+            yield  # one yield then explode
+            raise RuntimeError("iteration boom")
+
+        pm.set_hook(
+            "curator_source_enumerate",
+            lambda **kw: [angry_iterator()],
+        )
+        svc, _, _, _ = _make_cross_source_setup(pm=pm)
+
+        result = svc._find_existing_dst_file_id_for_overwrite(
+            "gdrive", "dst/file.txt",
+        )
+        assert result is None
+
+    def test_stat_raises_falls_through_to_enumerate(self):
+        # Lines 1492-1496: stat hook raises → caught defensively;
+        # fall through to enumerate.
+        pm = StubMigrationPluginManager()
+
+        def boom_stat(**kw):
+            raise RuntimeError("stat boom")
+
+        pm.set_hook("curator_source_stat", boom_stat)
+        pm.set_hook("curator_source_enumerate", lambda **kw: [None])
+        svc, _, _, _ = _make_cross_source_setup(pm=pm)
+
+        # Should not raise; should return None (stat failed, enumerate empty).
+        result = svc._find_existing_dst_file_id_for_overwrite(
+            "gdrive", "dst/file.txt",
+        )
+        assert result is None
+
+    def test_stat_helper_propagates_exception_caught_defensively(
+        self, monkeypatch,
+    ):
+        # Lines 1581-1582: defensive `except Exception` around the
+        # stat call. _hook_first_result swallows exceptions internally,
+        # so this except only fires if the helper itself raises
+        # (e.g. future refactor or unexpected edge case). Test the
+        # defensive boundary by monkeypatching the helper directly.
+        svc, _, _, _ = _make_cross_source_setup(pm=StubMigrationPluginManager())
+
+        def boom_helper(hook_name, **kw):
+            if hook_name == "curator_source_stat":
+                raise RuntimeError("helper propagated")
+            return None  # enumerate path: nothing
+
+        monkeypatch.setattr(svc, "_hook_first_result", boom_helper)
+        result = svc._find_existing_dst_file_id_for_overwrite(
+            "gdrive", "dst/file.txt",
+        )
+        # Stat raised defensively → stat_result=None → falls through to
+        # enumerate → enumerate returns None → final None.
+        assert result is None
+
+    def test_enumerate_helper_propagates_exception_caught_defensively(
+        self, monkeypatch,
+    ):
+        # Lines 1595-1596: defensive `except Exception` around the
+        # enumerate call. Same rationale as the stat case above.
+        svc, _, _, _ = _make_cross_source_setup(pm=StubMigrationPluginManager())
+
+        call_count = [0]
+
+        def helper(hook_name, **kw):
+            call_count[0] += 1
+            if hook_name == "curator_source_stat":
+                return None
+            if hook_name == "curator_source_enumerate":
+                raise RuntimeError("enumerate helper propagated")
+            return None
+
+        monkeypatch.setattr(svc, "_hook_first_result", helper)
+        result = svc._find_existing_dst_file_id_for_overwrite(
+            "gdrive", "dst/file.txt",
+        )
+        # Enumerate raised defensively → caught → return None.
+        assert result is None
+        # Both strategies were attempted
+        assert call_count[0] >= 2
+
+    def test_enumerate_returns_iterator_with_no_matches_returns_none(self):
+        # Branch 1605->1600 + Line 1613: iterator yields FileInfo items
+        # whose names do NOT match target. Loop completes without
+        # returning; falls through to the final `return None`.
+        from curator.models.types import FileInfo
+        from datetime import datetime
+
+        pm = StubMigrationPluginManager()
+        pm.set_hook("curator_source_stat", lambda **kw: [None])
+
+        # Iterator with 2 non-matching items
+        unrelated_a = FileInfo(
+            file_id="id_a", path="different_name.txt",
+            size=10, mtime=datetime(2026, 5, 12), ctime=datetime(2026, 5, 12),
+            is_directory=False, extras={},
+        )
+        unrelated_b = FileInfo(
+            file_id="id_b", path="another_one.txt",
+            size=20, mtime=datetime(2026, 5, 12), ctime=datetime(2026, 5, 12),
+            is_directory=False, extras={},
+        )
+        pm.set_hook(
+            "curator_source_enumerate",
+            lambda **kw: [iter([unrelated_a, unrelated_b])],
+        )
+        svc, _, _, _ = _make_cross_source_setup(pm=pm)
+
+        result = svc._find_existing_dst_file_id_for_overwrite(
+            "gdrive", "dst/file.txt",  # name=file.txt -- doesn't match either
+        )
+        assert result is None
+
+    def test_find_available_suffix_exhaustion_raises(self, monkeypatch):
+        # Line 1530: `_find_available_suffix` raises RuntimeError when
+        # all 9999 candidate suffixes are taken. Monkeypatch Path.exists
+        # to always return True so the loop completes.
+        from pathlib import Path as PathClass
+        from curator.services.migration import MigrationService
+
+        # Save original exists
+        orig_exists = PathClass.exists
+
+        def always_exists(self):
+            # Return True for any .curator-N candidate; otherwise fall through
+            if ".curator-" in str(self):
+                return True
+            return orig_exists(self)
+
+        monkeypatch.setattr(PathClass, "exists", always_exists)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            MigrationService._find_available_suffix(
+                PathClass("/some/path/foo.txt"),
+            )
+        assert "no available .curator-N" in str(exc_info.value)
+        assert "[1, 9999]" in str(exc_info.value)
+
+
+# ===========================================================================
+# _attempt_cross_source_backup_rename — pluggy dispatch
+# ===========================================================================
+
+
+class TestAttemptCrossSourceBackupRename:
+    def test_pm_is_none_returns_false(self):
+        # Line 1751: pm is None → (False, "no plugin manager available")
+        svc, _, _, _ = _make_cross_source_setup(pm=None)
+        success, err = svc._attempt_cross_source_backup_rename(
+            "gdrive", "existing_id", "backup_name.txt",
+        )
+        assert success is False
+        assert "no plugin manager" in (err or "")
+
+    def test_hook_missing_returns_false(self):
+        # Lines 1752-1755: getattr on pm.hook raises AttributeError →
+        # (False, "...hookspec not registered").
+        pm = StubMigrationPluginManager()
+        pm.remove_hook("curator_source_rename")
+        svc, _, _, _ = _make_cross_source_setup(pm=pm)
+
+        success, err = svc._attempt_cross_source_backup_rename(
+            "gdrive", "existing_id", "backup_name.txt",
+        )
+        assert success is False
+        assert "hookspec not registered" in (err or "")
+
+    def test_hook_raises_file_exists_error(self):
+        # Lines 1759-1761: rename hook raises FileExistsError →
+        # (False, "backup name collision: ...").
+        pm = StubMigrationPluginManager()
+
+        def boom_rename(**kw):
+            raise FileExistsError("backup already there")
+
+        pm.set_hook("curator_source_rename", boom_rename)
+        svc, _, _, _ = _make_cross_source_setup(pm=pm)
+
+        success, err = svc._attempt_cross_source_backup_rename(
+            "gdrive", "existing_id", "backup_name.txt",
+        )
+        assert success is False
+        assert "backup name collision" in (err or "")
+
+    def test_hook_raises_other_exception(self):
+        # Lines 1762-1763: any other exception → (False, "TypeName: msg").
+        pm = StubMigrationPluginManager()
+
+        def boom_rename(**kw):
+            raise RuntimeError("network failure")
+
+        pm.set_hook("curator_source_rename", boom_rename)
+        svc, _, _, _ = _make_cross_source_setup(pm=pm)
+
+        success, err = svc._attempt_cross_source_backup_rename(
+            "gdrive", "existing_id", "backup_name.txt",
+        )
+        assert success is False
+        assert "RuntimeError" in (err or "")
+        assert "network failure" in (err or "")
+
+    def test_all_results_none_returns_false(self):
+        # Lines 1764-1768: pluggy returns list with all None entries →
+        # (False, "plugin does not implement curator_source_rename").
+        pm = StubMigrationPluginManager()
+        pm.set_hook("curator_source_rename", lambda **kw: [None, None])
+        svc, _, _, _ = _make_cross_source_setup(pm=pm)
+
+        success, err = svc._attempt_cross_source_backup_rename(
+            "gdrive", "existing_id", "backup_name.txt",
+        )
+        assert success is False
+        assert "does not implement" in (err or "")
+
+    def test_first_non_none_result_returns_success(self):
+        # Lines 1769-1770: at least one non-None result → (True, None).
+        pm = StubMigrationPluginManager()
+        pm.set_hook("curator_source_rename", lambda **kw: [None, "renamed_id"])
+        svc, _, _, _ = _make_cross_source_setup(pm=pm)
+
+        success, err = svc._attempt_cross_source_backup_rename(
+            "gdrive", "existing_id", "backup_name.txt",
+        )
+        assert success is True
+        assert err is None
+
+    def test_non_list_result_wrapped(self):
+        # Lines 1764-1765: pluggy can return a non-list (single value);
+        # wrapped in a list first.
+        pm = StubMigrationPluginManager()
+        pm.set_hook("curator_source_rename", lambda **kw: "renamed_id_singleton")
+        svc, _, _, _ = _make_cross_source_setup(pm=pm)
+
+        success, err = svc._attempt_cross_source_backup_rename(
+            "gdrive", "existing_id", "backup_name.txt",
+        )
+        assert success is True
+        assert err is None
