@@ -4,6 +4,47 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.126] — 2026-05-13 — Tier 3 scope plan: Storage Repositories Sweep
+
+Opens the Round 2 Tier 3 arc. Scope plan only — no source or test changes.
+
+### What landed
+
+`docs/STORAGE_SWEEP_SCOPE.md` (NEW, ~150 lines) — scope plan for the 11-module Storage Repositories Sweep. Baselines re-measured against HEAD per Lesson #93; all 11 handoff predictions verified exactly with no drift.
+
+### Targets (in ascending uncovered-lines order)
+
+| Ship | Module | Uncovered |
+|---|---|---|
+| v1.7.127 | `storage/connection.py` | 2 lines + 1 br |
+| v1.7.128 | `storage/repositories/audit_repo.py` | 3 lines |
+| v1.7.129 | `storage/migrations.py` | 4 lines |
+| v1.7.130 | `storage/repositories/source_repo.py` | 6 lines |
+| v1.7.131 | `storage/repositories/trash_repo.py` | 6 lines + 1 br |
+| v1.7.132 | `storage/repositories/migration_job_repo.py` | 6 lines + 5 br |
+| v1.7.133 | `storage/exceptions.py` | 9 lines (0% currently) |
+| v1.7.134 | `storage/repositories/job_repo.py` | 11 lines + 1 br |
+| v1.7.135 | `storage/repositories/hash_cache_repo.py` | 14 lines |
+| v1.7.136 | `storage/repositories/_helpers.py` | 16 lines + 6 br |
+| v1.7.137 | `storage/repositories/bundle_repo.py` | 28 lines |
+
+Storage layer overall: 71.08% → target ~95%+ after Tier 3.
+
+`lineage_repo.py` (38 lines uncovered) and `file_repo.py` (96 lines uncovered) are deferred to Tier 4 (opt-in stretch, requires Jake's explicit go-ahead).
+
+### Lesson captured
+
+No new lesson. The scope-plan-as-ship pattern (Lesson #88) is well-established. Honest logging.
+
+### Files
+
+- `docs/STORAGE_SWEEP_SCOPE.md` (NEW)
+- `docs/releases/v1.7.126.md` (NEW)
+
+### Next
+
+**v1.7.127** — `storage/connection.py`. Smallest of the tier (2 lines + 1 branch). Likely defensive boundaries.
+
 ## [1.7.125] — 2026-05-13 — Tier 2 ship 9 (FINAL): `plugins/core/gdrive_source.py` to 100%
 
 Closes 72 uncovered lines + 11 partial branches in `plugins/core/gdrive_source.py` — the Google Drive source plugin. **Plugins + MCP + Config Sweep arc COMPLETE.**
