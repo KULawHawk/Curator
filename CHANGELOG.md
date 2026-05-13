@@ -4,6 +4,90 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.87] — 2026-05-12 — Phase Gamma: `services/bundle.py` to 100% (one-pass, pattern dividends)
+
+Sixth Phase Gamma module at the apex-accuracy standard. `services/bundle.py` reaches **100.00% line + branch coverage** in a **single pass** with 27 focused unit tests — the first Phase Gamma module to hit 100% on the first try without an iteration. The stub-first architecture (Lesson #84) is paying compound interest.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `services/bundle.py` | 53.06% | **100.00%** |
+
+### Phase Gamma cumulative (six modules at 100%)
+
+| Module | Stmts | Branches |
+|---|---|---|
+| `services/tier.py` | 114 | 30 |
+| `services/lineage.py` | 135 | 78 |
+| `services/safety.py` | 173 | 58 |
+| `storage/queries.py` | 95 | 42 |
+| `services/scan.py` | 242 | 44 |
+| `services/bundle.py` | 78 | 20 |
+| **Combined** | **837** | **272** |
+
+All at 100.00% line + branch. 0 misses across 837 stmts and 272 branches. 221 tests in 2.00s.
+
+### What landed
+
+- `tests/unit/test_bundle_service.py` (NEW, ~420 lines, 27 tests, 8 test classes)
+- 3 stubs reused/adapted from prior Phase Gamma patterns: `StubBundleRepository`, `StubFileRepository` (slim variant), `StubPluginManager` with `StubHooks` + `StubHookCaller` for `curator_propose_bundle` + `curator_source_stat`
+- Tests target previously-uncovered branches:
+  - `TestCreateManual` (6): single member, multi-member, explicit primary, with description, empty member_ids raises, primary_id-not-in-members raises
+  - `TestMembershipManagement` (4): add member, add with role/confidence, remove, dissolve
+  - `TestProposeAuto` (3): empty files short-circuit, no proposers, non-None filtering
+  - `TestConfirmProposal` (1): full proposal → BundleEntity materialization
+  - `TestMembers` (3): resolve curator_ids, skip missing, raw_memberships includes missing
+  - `TestReads` (6): get, get None, member_count, list_all, list_all filtered by type, find_by_name
+  - `TestCrossSourceCheck` (4): all reachable, missing file entity, stat returns None, empty bundle
+
+No source code changes.
+
+### Lessons captured
+
+**Lesson #87 — When stub patterns mature, new modules hit 100% in one pass.**
+
+The Phase Gamma arc started rough: `tier.py` (v1.7.81 → v1.7.83) needed two ships and an apex-accuracy correction. `lineage.py` (v1.7.82–83) needed source refactoring. `safety.py` (v1.7.84) needed extensive monkeypatch infrastructure plus a pragma decision. `scan.py` (v1.7.86) needed 8 stubs and 3 passes.
+
+By `bundle.py` (v1.7.87): one pass. 27/27 tests passing on first run. 0.68s test runtime. No failures, no iterations, no source changes.
+
+The difference is **pattern maturity**:
+- `StubRepository` template: named methods matching service usage, in-memory dicts for state, capture lists for assertions. Composed for `StubBundleRepository` in minutes.
+- `StubPluginManager` template: `StubHooks` dataclass holding `StubHookCaller` instances, helper methods to inject hook implementations. `curator_propose_bundle` + `curator_source_stat` slotted in identically to `curator_source_enumerate` + `curator_source_register` from scan tests.
+- `make_service()` helper with kwargs-default-to-fresh-stub pattern, copy-pasted from scan tests.
+- `make_file_entity()` helper, adapted from earlier.
+
+**The doctrine consequence: each apex-accuracy ship makes the next one cheaper.** This is the bull case for not cutting the 100% corner — the alternative isn't just "slightly less coverage," it's missing the compounding investment in test infrastructure. The first three Phase Gamma ships paid the design cost; the fourth (queries, pure module, didn't need stubs) and now the sixth (bundle, reuses everything) extract the dividend.
+
+The corollary: when starting an apex-accuracy arc, expect the first 2-3 ships to feel disproportionately expensive. That's the design investment for the rest of the arc. By the 4th-6th ship, momentum compounds and ships become routine.
+
+### Files changed
+
+| File | Lines |
+|---|---|
+| `tests/unit/test_bundle_service.py` | +420 (new) |
+| `CHANGELOG.md` | this entry |
+| `docs/releases/v1.7.87.md` | release notes |
+
+No source code changes. Test count: 1995 → 2022 (+27).
+
+### Arc state
+
+- **87 ships**, all tagged
+- Six Phase Gamma modules at 100% line + branch (837 stmts, 272 branches)
+- pytest local Win full suite: 2022 / 10 / 0 expected
+- 1 new lesson (#87)
+
+### Next
+
+Phase Gamma remaining candidate:
+
+| Module | Coverage | Notes |
+|---|---|---|
+| `services/migration.py` | 67% | 1031 stmts — multi-ship arc; needs scope plan first |
+
+Or pivot: GUI work (300-rule reference + Curator Phase Beta gate 4), MB enrichment items, or other priorities.
+
 ## [1.7.86] — 2026-05-12 — Phase Gamma: `services/scan.py` to 100% (orchestrator-shape module)
 
 Fifth Phase Gamma module at the apex-accuracy standard. `services/scan.py` reaches **100.00% line + branch coverage** with 23 focused unit tests targeting the 15% of uncovered code that 178 existing integration tests couldn't reach.
