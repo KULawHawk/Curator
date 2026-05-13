@@ -4,6 +4,37 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.108] — 2026-05-13 — Round 2 Tier 1 ship 2: `models/jobs.py` to 100%
+
+Sub-ship 2 of Round 2 Tier 1. Closes 4 uncovered lines in `models/jobs.py` (the two `@property` method bodies).
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `models/jobs.py` | 78.57% | **100.00%** (+21.43%) |
+
+26 statements, 2 branches, 0 misses, 0 partials.
+
+### What landed
+
+`tests/unit/test_models_jobs_coverage.py` (NEW, 5 tests): direct unit tests of `duration_seconds` (three cases: started_at None, completed_at None, both set) and `is_terminal` (True/False arms across all 5 statuses).
+
+No source changes.
+
+### Lesson captured
+
+No new lesson. Pure doctrine-in-action. Honest logging.
+
+### Files
+
+- `tests/unit/test_models_jobs_coverage.py` (+~60, new, 5 tests)
+- `docs/releases/v1.7.108.md` (release notes)
+
+### Next
+
+**v1.7.109** — `models/migration.py`.
+
 ## [1.7.107] — 2026-05-13 — Round 2 Tier 1 ship 1: `models/file.py` to 100%
 
 First sub-ship of Round 2's Tier 1 (Migration Final + Trivial Mop-Up). Closes line 99 (the `is_text_eligible` property body) in `models/file.py`.
