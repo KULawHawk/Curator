@@ -25,6 +25,46 @@ versioning where reasonable.
 
 ---
 
+## [1.7.212] — 2026-05-13 — Round 5 Tier 3 ship 2: Conclave readiness check (Phase 0 prerequisites)
+
+Doc-only. Audit every Phase 0 prerequisite in `..\CONCLAVE_BRIEF.md` §1 + §5 + §7 against current Curator state. **Verdict: Curator-side prerequisites are CLEARED. Conclave Phase 0 is unblocked from Curator's side.**
+
+### What landed
+
+`docs/CONCLAVE_READINESS_REPORT.md` (NEW):
+
+**Curator-side gates (all ✅ cleared):**
+- MCP server operational + stable (shipped v1.5.0, 100% covered)
+- Curator stable release (v2.0 stamp-ready at v1.7.211)
+- API settled (209 ships demonstrate stable state)
+- Audit schema symmetric (v1.6.1 shipped, unblocks atrium-citation)
+- Atrium Constitution v0.3 RATIFIED 2026-05-08
+- 8 of 9 Conclave-dependent hookspecs have Curator baselines shipped
+
+**Conclave-side gates (⏳ NOT in Curator's scope — Log-conversation items):**
+- OQ-1, OQ-3, OQ-4, OQ-6 (the 4 Phase-1-gating Open Questions; per chat L53508)
+- Lift the 2026-05-08 pause (Jake's call)
+- Create `..\Conclave\` directory on disk (first Phase 0 setup task)
+
+### Bottom line
+
+**Curator-side action: DONE.** No further Curator work is needed to unblock Conclave Phase 0.
+
+**Log-side action: pending Jake's stamp + pause decision + OQ resolution.**
+
+The audit at v1.7.207 + release notes at v1.7.208 + constellation sync at v1.7.209 collectively establish that every Curator-side Conclave Phase 0 prerequisite is satisfied. The structural pre-conditions per CONCLAVE-NOT-IDEA-02 ("Curator MCP server first, then Conclave starts") are met.
+
+### Files
+
+- `docs/CONCLAVE_READINESS_REPORT.md` (NEW)
+- `docs/releases/v1.7.212.md`
+
+No source changes. No new lesson.
+
+### Next
+
+**v1.7.213** — Nestegg trigger announcement (final Tier 3 ship).
+
 ## [1.7.211] — 2026-05-13 — Round 5 Tier 3 ship 1: Atrium plugin coverage audit
 
 **Tier 3 opens** per Jake's explicit go-ahead. Doc-only. Survey of all 3 charter `curatorplug-atrium-*` repos for coverage state + apex-accuracy doctrine alignment.
