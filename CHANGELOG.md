@@ -4,6 +4,76 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+---
+
+## 🎯 Coming in v2.0 — apex-accuracy milestone (preview)
+
+**Status as of 2026-05-13 (v1.7.209):** stamp-ready. The v2.0 release ceremony is the final gate — a Log conversation, not a Code action.
+
+**Headline:** 209 versioned releases, **99.76% overall coverage with 0 missing lines** across 13,831 statements, **76 of 78 source modules at 100% line + branch**, 8 multi-ship arcs closed, 105 numbered lessons captured, **4 real bugs surfaced and fixed by coverage work itself**.
+
+**See:**
+- [`docs/RELEASE_NOTES_v2.0.md`](docs/RELEASE_NOTES_v2.0.md) — full release narrative
+- [`docs/V2_RELEASE_COVERAGE_AUDIT.md`](docs/V2_RELEASE_COVERAGE_AUDIT.md) — comprehensive per-module audit
+
+**No breaking changes.** v2.0 is a strictly-additive maturity milestone. The 209-ship engineering arc demonstrates the API has reached settled state.
+
+**Known limitations** (deferred, tracked in `docs/DEFERRED_DECISIONS.md`):
+- Mutation testing — its own arc (see `docs/MUTATION_TESTING_DEFERRED.md`)
+- Cross-platform parity — Windows-only scope (see `docs/PLATFORM_SCOPE.md`)
+- Sandbox-fragile trash-flow tests — fix planned (see DEFERRED_DECISIONS #1)
+
+---
+
+## [1.7.210] — 2026-05-13 — Round 5 Tier 2 ship 4: pre-v2.0 polish sweep
+
+Doc + README polish for the v2.0 release-ready state.
+
+### What landed
+
+**README.md updates:**
+- Coverage badge: `54.65%` (yellow) → **`99.76%`** (brightgreen)
+- Ship badge: `146` → **`209`**
+- New badge: **v2.0 stamp-ready** (brightgreen)
+- Status paragraph rewritten with v1.7.209/v2.0-ready framing
+- Coverage discipline section updated:
+  - Arc list: 5 → **8** (added CLI Coverage, GUI Signals, GUI Coverage)
+  - Module count: 55 → **76 of 78**
+  - Pragmas: "Three" → **"79 across 25 files"**
+  - Lessons: "95" → **"105"**
+  - Added real-bug scorecard (4 bugs surfaced by coverage work)
+- Documentation section: added pointers to `RELEASE_NOTES_v2.0.md` + `V2_RELEASE_COVERAGE_AUDIT.md`
+
+**CHANGELOG.md header:**
+- Added **"🎯 Coming in v2.0 — apex-accuracy milestone (preview)"** section at the top, above the 1.7.x entries
+- Headline numbers + pointers to release notes + audit doc
+- Known limitations (deferred items) summarized
+
+### pyproject.toml version
+
+Currently at `1.6.5` (stale relative to git tags from v1.7.x). **Recommendation to Jake (not auto-changed):**
+- Option A: bump directly to `2.0.0` at stamp ceremony (recommended; aligns with no-RC1 strategy in `RELEASE_NOTES_v2.0.md`)
+- Option B: bump to `2.0.0rc1` first, sit 1-2 weeks, then `2.0.0`
+- Option C: leave at `1.6.5` and bump only at the Log-ceremony stamp
+
+Per the handoff: "propose to Jake whether to bump to v1.8.0 (penultimate) or directly to v2.0.0-rc1." Either v2.0.0 direct or v2.0.0rc1 first is appropriate; v1.8.0 (penultimate) seems unnecessarily cautious given the audit-pass state.
+
+### Documentation index
+
+The 42 docs files in `docs/` are individually discoverable via the README documentation section. No separate index file created (would duplicate without adding navigation value). The two new v2.0 docs (`RELEASE_NOTES_v2.0.md` + `V2_RELEASE_COVERAGE_AUDIT.md`) are now linked from README.
+
+### Files
+
+- `README.md` (badges + status paragraph + coverage discipline section + docs section)
+- `CHANGELOG.md` (header preview section)
+- `docs/releases/v1.7.210.md`
+
+No source changes. No new lesson.
+
+### Next
+
+**v1.7.211 (optional)** — Final smoke-test sweep. Build fresh `.venv`, install Curator, run `curator --version`/`doctor`/`scan --help`, launch GUI under offscreen, start MCP server, document at `docs/V2_SMOKE_TEST_RESULTS.md`. **Per the handoff: "if time permits."**
+
 ## [1.7.209] — 2026-05-13 — Round 5 Tier 2 ship 3: constellation docs sync
 
 Doc-only. Syncs Curator's status across the Ad Astra constellation docs to reflect v2.0-stamp-ready state.

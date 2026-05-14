@@ -1,18 +1,21 @@
 # Curator
 
 [![tests](https://github.com/KULawHawk/Curator/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/KULawHawk/Curator/actions/workflows/test.yml)
-[![coverage](https://img.shields.io/badge/coverage-54.65%25-yellow)](#coverage-discipline)
+[![coverage](https://img.shields.io/badge/coverage-99.76%25-brightgreen)](#coverage-discipline)
 [![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](#install)
-[![ships](https://img.shields.io/badge/ships-146-blueviolet)](CHANGELOG.md)
+[![ships](https://img.shields.io/badge/ships-209-blueviolet)](CHANGELOG.md)
+[![v2.0](https://img.shields.io/badge/v2.0-stamp--ready-brightgreen)](docs/RELEASE_NOTES_v2.0.md)
 
 A content-aware artifact intelligence layer for files.
 
-**Status:** v1.7.146 stable (released 2026-05-13). **146 versioned releases.** **55 modules at 100% line + branch coverage** under the apex-accuracy doctrine. **5 multi-ship arcs closed**: Migration Phase Gamma (v1.7.93b), Coverage Sweep (v1.7.106), Plugins + MCP + Config Sweep (v1.7.125), Storage Repositories Sweep (v1.7.137), Mid-Size Services Sweep (v1.7.145). Overall coverage 54.65% (unit-only; full-suite higher). Storage subpackage fully covered. All Phase Gamma services, all MCP/plugins/config, all mid-size services at 100%. Remaining at <100%: `cli/main.py` (10.73% — separate CLI Coverage Arc opening in Round 3), `cli/mcp_keys.py` (78%), `cli/mcp_orphans.py` (65%), all `gui/*` (0% — strategy conversation pending). The v1.7.x line evolved through: v1.0.0rc1 stability anchor → v1.1.0 Migration tool ("Tracer") with persistent resumable jobs + cross-source migration + PySide6 Migrate tab → v1.1.x plugin ecosystem hookspecs (Atrium Principles 2 & 4) → v1.2.0 optional MCP server (`curator-mcp`) for LLM clients → v1.3.0 quota-aware retry + four-mode `--on-conflict` resolution → v1.4.0 cross-source `curator_source_rename` hookspec → v1.5.x-v1.7.x: 100+ engineering ships under the apex-accuracy doctrine. See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
+**Status: v1.7.209 — stamp-ready for v2.0** (2026-05-13). **209 versioned releases. 99.76% overall coverage with 0 missing lines across 13,831 statements. 76 of 78 source modules at 100% line + branch under the apex-accuracy doctrine. 8 multi-ship engineering arcs closed.** See **[`docs/RELEASE_NOTES_v2.0.md`](docs/RELEASE_NOTES_v2.0.md)** for the full v2.0 release narrative and **[`docs/V2_RELEASE_COVERAGE_AUDIT.md`](docs/V2_RELEASE_COVERAGE_AUDIT.md)** for the comprehensive per-module audit. **4 real bugs surfaced & fixed** by coverage work itself (per Doctrine #18 — coverage work as bug-finding mechanism). The closed arcs (May 7 → May 13, 2026): Migration Phase Gamma (v1.7.93b, 19 services modules), Coverage Sweep (v1.7.106, 12 sweep targets), Plugins+MCP+Config Sweep (v1.7.125, 9 modules), Storage Repositories Sweep (v1.7.137, 11 modules — entire `storage/`), Mid-Size Services Sweep (v1.7.145, 5 services), **CLI Coverage Arc** (v1.7.175, `cli/main.py` 10.73% → 99.43%, 24 sub-ships), **GUI Signals stretch** (v1.7.179, 4 signal modules), **GUI Coverage Arc** (v1.7.206, lineage_view + models + main_window + dialogs.py — 4,460 GUI stmts at ≥99%). The v1.7.x line evolved through: v1.0.0rc1 stability anchor → v1.1.0 Migration tool ("Tracer") with persistent resumable jobs + cross-source migration + PySide6 Migrate tab → v1.1.x plugin ecosystem hookspecs (Atrium Principles 2 & 4) → v1.2.0 optional MCP server (`curator-mcp`) for LLM clients → v1.3.0 quota-aware retry + four-mode `--on-conflict` resolution → v1.4.0 cross-source `curator_source_rename` hookspec → v1.5.x-v1.7.x: 209 engineering ships under the apex-accuracy doctrine. See [`CHANGELOG.md`](CHANGELOG.md) for the full release history.
 
 Curator gives every file a stable identity, tracks relationships and lineage between files with confidence scores, knows where files belong, and makes every destructive operation reversible.
 
 ## Documentation
 
+- **[`docs/RELEASE_NOTES_v2.0.md`](docs/RELEASE_NOTES_v2.0.md) — START HERE for v2.0 ceremony.** The stamp-ready release notes covering the apex-accuracy doctrine story, 8 closed arcs, 105 lessons, 4 real bugs surfaced by coverage work.
+- **[`docs/V2_RELEASE_COVERAGE_AUDIT.md`](docs/V2_RELEASE_COVERAGE_AUDIT.md)** — Comprehensive per-module coverage audit at v2.0-RC1 state (99.76%, 0 missing lines).
 - **[`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) — START HERE if you want to actually use Curator.** Covers every CLI subcommand, every MCP tool, the GUI tabs, configuration, common workflows (recipes), filesystem layout, and troubleshooting. v1.6.1.
 - [`installer/README.md`](installer/README.md) — single-script installer for the Curator stack on Windows. The 10-step doc with the bulletproof real-MCP-probe gate.
 - [`CHANGELOG.md`](CHANGELOG.md) — release history (v1.0.0rc1, v1.1.0a1, v1.1.0, v1.1.1, v1.1.2, v1.1.3, v1.2.0, v1.3.0, v1.4.0)
@@ -70,22 +73,34 @@ pip install -e .[dev]
 
 ## Coverage discipline
 
-Curator operates under an **apex-accuracy doctrine**: every module touched in an engineering arc is brought to 100% line + branch coverage. Across 146 versioned releases (v1.0.0rc1 → v1.7.146), 55 modules are at 100% line + branch, captured under 5 closed multi-ship arcs:
+Curator operates under an **apex-accuracy doctrine**: every module touched in an engineering arc is brought to 100% line + branch coverage. Across 209 versioned releases (v1.0.0rc1 → v1.7.209), **76 of 78 modules are at 100% line + branch with 99.76% overall coverage and 0 missing lines**, captured under 8 closed multi-ship arcs:
 
 - **Migration Phase Gamma** (v1.7.89–93b) — 19 services modules
 - **Coverage Sweep** (v1.7.95–106) — 12 sweep targets
 - **Plugins + MCP + Config Sweep** (v1.7.116–125) — 9 modules
 - **Storage Repositories Sweep** (v1.7.126–137) — 11 storage modules (entire `storage/` subpackage)
 - **Mid-Size Services Sweep** (v1.7.140–145) — 5 service modules
+- **CLI Coverage Arc** (v1.7.152–175) — `cli/main.py` 10.73% → 99.43%, 24 sub-ships
+- **GUI Signals stretch** (v1.7.176–179) — 4 GUI signal modules
+- **GUI Coverage Arc** (v1.7.185–206) — `gui/lineage_view.py` + `gui/models.py` + `gui/main_window.py` + `gui/dialogs.py` (4,460 GUI stmts at ≥99%)
 
 The methodology is captured in:
 
-- [`CLAUDE.md`](CLAUDE.md) — the doctrine, lesson adoption protocol, and ship workflow (read by AI assistants at session start)
-- The `CHANGELOG.md` "Lesson captured" sections — 95 numbered lessons documenting patterns that compounded across the arc
+- [`CLAUDE.md`](CLAUDE.md) — the doctrine (23 items), lesson adoption protocol, and ship workflow (read by AI assistants at session start)
+- The `CHANGELOG.md` "Lesson captured" sections — **105 numbered lessons** documenting patterns that compounded across the arc
 
-When 100% isn't reachable (defensive boundaries protected by upstream layers, thread-race fallthrough, etc.), specific lines are marked `# pragma: no cover` or `# pragma: no branch` with documented justification in source per Lesson #91. Three such annotations exist in the codebase, all with documented rationale.
+When 100% isn't reachable (defensive boundaries protected by upstream layers, thread-race fallthrough, blocking native Qt slots, etc.), specific lines are marked `# pragma: no cover` with documented justification in source per Lesson #91. **79 such annotations exist across 25 files**, all with documented rationale, all audited at arc close per Lesson #99.
 
-**Canonical coverage measurement:** `pytest tests/` (full suite). The `pytest tests/unit/` invocation is the fast feedback loop and may show slightly lower numbers when integration tests cover orchestration code that unit tests bypass (see v1.7.146 release notes).
+**Real bugs surfaced by coverage work itself** (per Lesson #100 / Doctrine #18 — coverage work as bug-finding mechanism):
+
+| Ship | Bug | Severity |
+|---|---|---|
+| v1.7.180 | `_resolve_file` shadowed regression (175 ships of silent contract violation) | high |
+| v1.7.193 | `QDialog` missing import (NameError waiting to fire) | medium |
+| v1.7.197 | `del` in test cleanup polluting class state | medium (test-only) |
+| v1.7.201 | `_check_mcp_probe` contract violation | medium |
+
+**Canonical coverage measurement:** `pytest tests/` (full suite) per Lesson #96 / Doctrine #14. The `pytest tests/unit/` invocation is the documented fallback when the full suite is environmentally constrained (see `docs/DEFERRED_DECISIONS.md` #1).
 
 ## Contributing — dev setup
 
