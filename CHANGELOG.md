@@ -4,6 +4,70 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.201] — 2026-05-13 — Round 5 Tier 1 ship 3: `HealthCheckDialog` + 🐛 real bug fix
+
+Closes the diagnostic dialog with 8 internal health checks. **Surfaced and fixed a 4th real bug** via the Lesson #104 pattern — `_check_mcp_probe` accessed `self.runtime.config.db_path` *outside* its try/except, violating the dialog's class-level contract that "every check is wrapped in a try/except that converts unexpected errors into a `_CheckResult(passed=False)`".
+
+### 🐛 Bug — `_check_mcp_probe` contract violation
+
+**Discovery:** `TestFilesystemCheck::test_filesystem_exception` used Lesson #104 / Doctrine #22 (`_RaisingConfig` real class with raising `@property`) to drive the defensive `except` path. Instead of the filesystem check capturing the exception, the test failed with `RuntimeError("config fail")` propagating out of `_check_mcp_probe` at line 1031.
+
+**Source:** `src/curator/gui/dialogs.py`. Pre-v1.7.201:
+```python
+# Build env with CURATOR_CONFIG pinned
+env = os.environ.copy()
+canonical_toml = Path(self.runtime.config.db_path).parent / "curator.toml"  # ← outside try
+if canonical_toml.exists():
+    env["CURATOR_CONFIG"] = str(canonical_toml)
+
+# Spawn + handshake
+try:
+    proc = subprocess.Popen(...)
+```
+
+Post-v1.7.201: moved env-setup inside the `try`. Added a 3-line comment documenting the fix and the contract.
+
+**Severity:** medium. In production, if `runtime.config` ever raised (e.g. config file went missing mid-session), opening the Health Check dialog would crash *the dialog initialization* rather than rendering a failed-check row. Was caught in v0.34+ alpha testing only if the user happened to break config mid-session — unlikely but real.
+
+**Per partnership directive (Lesson #100 / Doctrine #18):** mechanical fix, no judgment call needed. Surfaced loudly here.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `gui/dialogs.py` | 39.20% | **49.02%** (+220 stmts) |
+
+### What landed
+
+`tests/unit/test_gui_dialogs_health_check_coverage.py` (NEW, 33 tests):
+
+- **TestHealthCheckConstruction** (3) — basic construction; refresh re-runs; refresh button click
+- **TestFilesystemCheck** (3) — existing DB; missing DB; **Lesson #104 raising config → exception captured** (caught the bug)
+- **TestPythonCheck** (2) — runs / Python <3.11 fails with severity=fail
+- **TestVersionsCheck** (1) — runs
+- **TestGuiDepsCheck** (2) — runs / networkx missing → warn severity
+- **TestDbIntegrityCheck** (2) — real sqlite db / missing schema → raises
+- **TestPluginsCheck** (3) — required present / required missing / enumeration raises
+- **TestMcpConfigCheck** (5) — file missing / valid / no curator entry / invalid JSON / general exception via Path.resolve mock
+- **TestMcpProbeCheck** (5) — no executable / Popen raises / successful handshake / no tools response / wait timeout → kill
+- **TestRendering** (7) — all-green / failures / 5 severity branches via _render_check_row / no detail / copy with None / copy with result / copy button click
+
+### Files
+
+- `src/curator/gui/dialogs.py` — **+5 lines net** (try-block restructuring + 5-line documenting comment)
+- `tests/unit/test_gui_dialogs_health_check_coverage.py` (NEW, 33 tests, +~520 lines)
+- `docs/releases/v1.7.201.md`
+
+**4 real bugs surfaced & fixed across Round 4 + Round 5 so far:**
+1. v1.7.180 — `_resolve_file` shadowed regression (Lesson #102 captured)
+2. v1.7.193 — `QDialog` missing import in `main_window.py`
+3. v1.7.197 — `del` in test cleanup polluting class state (Lesson #105 captured)
+4. **v1.7.201** — `_check_mcp_probe` contract violation (this ship)
+
+### Next
+
+**v1.7.202** — `GroupDialog` (~310 stmts; two-phase duplicate finder; uses worker stubbing pattern).
+
 ## [1.7.200] — 2026-05-13 — Round 5 Tier 1 ship 2: `BundleEditorDialog`
 
 Closes the bundle create/edit modal — dual-list widget (Available files | In bundle), primary-member star indicator, filter inputs, and validation flow.

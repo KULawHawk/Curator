@@ -1026,14 +1026,17 @@ class HealthCheckDialog(QDialog):
             ))
             return out
 
-        # Build env with CURATOR_CONFIG pinned
-        env = os.environ.copy()
-        canonical_toml = Path(self.runtime.config.db_path).parent / "curator.toml"
-        if canonical_toml.exists():
-            env["CURATOR_CONFIG"] = str(canonical_toml)
-
-        # Spawn + handshake
+        # Build env with CURATOR_CONFIG pinned + spawn + handshake.
+        # v1.7.201: config.db_path access moved inside the try block to
+        # honor the class-level contract ("every check is wrapped in a
+        # try/except that converts unexpected errors into a
+        # _CheckResult(passed=False)"). Pre-v1.7.201, a config raise
+        # here would propagate through refresh() and crash the dialog.
         try:
+            env = os.environ.copy()
+            canonical_toml = Path(self.runtime.config.db_path).parent / "curator.toml"
+            if canonical_toml.exists():
+                env["CURATOR_CONFIG"] = str(canonical_toml)
             proc = subprocess.Popen(
                 [str(mcp_exe)],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
