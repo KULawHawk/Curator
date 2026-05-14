@@ -6,22 +6,131 @@ versioning where reasonable.
 
 ---
 
-## 🎯 Coming in v2.0 — apex-accuracy milestone (preview)
+## [2.0.0-rc1] — 2026-05-13 — 🎯 Release Candidate 1 — apex-accuracy milestone
 
-**Status as of 2026-05-13 (v1.7.209):** stamp-ready. The v2.0 release ceremony is the final gate — a Log conversation, not a Code action.
+**LANDMARK SHIP. FULL CEREMONY.** Curator's v2.0 release candidate. The culmination of 213 prior versioned releases (v1.0.0rc1 → v1.7.213), 5 development rounds, 8 multi-ship engineering arcs, 105 numbered lessons, and 23 doctrine items.
 
-**Headline:** 209 versioned releases, **99.76% overall coverage with 0 missing lines** across 13,831 statements, **76 of 78 source modules at 100% line + branch**, 8 multi-ship arcs closed, 105 numbered lessons captured, **4 real bugs surfaced and fixed by coverage work itself**.
+### What this RC1 represents
 
-**See:**
-- [`docs/RELEASE_NOTES_v2.0.md`](docs/RELEASE_NOTES_v2.0.md) — full release narrative
-- [`docs/V2_RELEASE_COVERAGE_AUDIT.md`](docs/V2_RELEASE_COVERAGE_AUDIT.md) — comprehensive per-module audit
+**Curator v2.0 is the apex-accuracy milestone.** What started as a small file-curator tool has matured into the most thoroughly-tested utility in the Ad Astra constellation:
 
-**No breaking changes.** v2.0 is a strictly-additive maturity milestone. The 209-ship engineering arc demonstrates the API has reached settled state.
+| Metric | Value |
+|---|---:|
+| **Overall coverage** | **99.76%** (line + branch combined) |
+| **Total statements** | 13,831 |
+| **Missing lines** | **0** |
+| **Total branches** | 3,936 |
+| **Partial branches** | 42 (all documented) |
+| **Tests passing** | 3,349 |
+| **Source modules at 100%** | **76 of 78** |
+| **Modules at ≥99% but <100%** | 2 (`gui/dialogs.py` 99.05%, `services/safety.py` 99.13%) |
+| **Multi-ship arcs closed** | **8** |
+| **Numbered lessons** | **105** (#79–105) |
+| **Doctrine items in CLAUDE.md** | **23** (Doctrine #1–23) |
+| **Documented pragmas** | 79 across 25 files (all Lesson #91 justified) |
+| **Real bugs surfaced by coverage work** | **4** |
 
-**Known limitations** (deferred, tracked in `docs/DEFERRED_DECISIONS.md`):
-- Mutation testing — its own arc (see `docs/MUTATION_TESTING_DEFERRED.md`)
-- Cross-platform parity — Windows-only scope (see `docs/PLATFORM_SCOPE.md`)
-- Sandbox-fragile trash-flow tests — fix planned (see DEFERRED_DECISIONS #1)
+### The 8 closed multi-ship arcs
+
+| Arc | Closure ship | Note |
+|---|---|---|
+| Migration Phase Gamma | v1.7.93b | 19 services modules — first apex-accuracy arc closure |
+| Coverage Sweep | v1.7.106 | 6 → 19 modules at 100% |
+| Plugins + MCP + Config Sweep | v1.7.125 | All MCP + plugins + config covered |
+| Storage Repositories Sweep | v1.7.137 | Entire `storage/` subpackage |
+| Mid-Size Services Sweep | v1.7.145 | photo, cleanup, organize, hash_pipeline, trash |
+| CLI Coverage Arc | v1.7.175 | `cli/main.py` 10.73% → 99.43%, 24 sub-ships |
+| GUI Signals stretch | v1.7.179 | 4 GUI signal modules |
+| **GUI Coverage Arc** | **v1.7.206** | `lineage_view` + `models` + `main_window` + `dialogs.py` — 4,460 GUI stmts at ≥99% |
+
+### Coverage at constellation-pillar level
+
+- **`cli/`** — 99.53% (0 missing lines)
+- **`gui/`** — 99.76% (7/8 modules at 100%, `dialogs.py` 99.05%)
+- **`services/`** — 99.94% (24/25 modules at 100%, `safety.py` 99.13%)
+- **`storage/`** — 100% (16/16 modules)
+- **`plugins/`** — 100% (11/11 modules)
+- **`mcp/`** — 100% (5/5 modules)
+- **`models/`** — 100% (12/12 modules)
+
+### Real bugs surfaced & fixed by coverage work (Rounds 4 + 5)
+
+Per Lesson #100 / Doctrine #18 — **coverage work as bug-finding mechanism** worked exactly as advertised.
+
+| Ship | Bug | Severity |
+|---|---|---|
+| v1.7.180 | `_resolve_file` shadowed regression (175 ships of silent contract violation) | high |
+| v1.7.193 | `QDialog` missing import (NameError waiting to fire) | medium |
+| v1.7.197 | `del` in test cleanup polluting class state | medium (test-only) |
+| v1.7.201 | `_check_mcp_probe` contract violation | medium |
+
+### What ships in v2.0.0-rc1
+
+Everything in v1.7.213 plus this stamp. No code changes between v1.7.213 and v2.0.0-rc1 — the RC1 stamp is the **release-candidate marker** itself:
+
+- pyproject.toml: `1.6.5` → `2.0.0rc1`
+- README badges + status line updated to v2.0.0-rc1 stamped
+- CLAUDE.md status reflects v2.0.0-rc1 stamped state
+- `docs/RELEASE_NOTES_v2.0.md` status: "READY FOR STAMP" → **"v2.0.0-rc1 STAMPED"**
+- `docs/V2_RELEASE_COVERAGE_AUDIT.md` remains canonical (from v1.7.207)
+
+### Version strategy chosen
+
+**Option B** from `docs/RELEASE_NOTES_v2.0.md` "Version strategy" section: **RC1 first, then v2.0.0 stable** after a soak period. The conservative path; gives the v2.0-RC1 state real-world time before the stable stamp.
+
+### Breaking changes
+
+**None.** v2.0.0-rc1 is strictly additive vs v1.7.213. The 214-ship engineering arc demonstrates the API has reached settled state.
+
+### Known limitations (deferred, tracked in `docs/DEFERRED_DECISIONS.md`)
+
+1. **Sandbox-fragile trash-flow tests** — recycle-bin enumeration hangs in containerized environments; workaround documented
+2. **Mutation testing** — its own arc (see `docs/MUTATION_TESTING_DEFERRED.md`)
+3. **Cross-platform parity** — Windows-only scope (see `docs/PLATFORM_SCOPE.md`)
+
+### Post-RC1 queued workstreams (out of scope for this stamp)
+
+5 build prompts already prepared at `..\.curator\BUILD_{1-5}_*.md`:
+
+1. **BUILD 1** — v2.0 stamp + Nestegg brief generation (Log)
+2. **BUILD 2** — Crucible Phase 1 design (Log parallel chat)
+3. **BUILD 3** — Crucible Phase 1 implementation (Code)
+4. **BUILD 4** — Crucible Phase 2 design compliance runners (Code)
+5. **BUILD 5** — Mutation Testing Arc on Curator powered by Crucible
+
+### What's pending Jake
+
+| Item | Owner |
+|---|---|
+| v2.0.0 stable stamp ceremony | Jake (Log) — after RC1 soak period |
+| Conclave pause-lift decision | Jake (Log) — Curator-side prereqs cleared (v1.7.212) |
+| Atrium plugin promotion to apex-accuracy | Jake (Log) — optional 4-sub-ship post-v2.0 arc |
+| BUILD 1 (Nestegg brief generation) | Jake (Log) — trigger criteria operationally satisfied |
+
+### Acknowledgments
+
+**Ad Astra constellation:**
+- The **Atrium Constitution v0.3** framing made the 23 doctrine items coherent
+- The **atrium-safety** and **atrium-citation** plugins provided the integration test surface
+- The **Conclave** brief (post-v2.0 trigger) provided the readiness target Curator was built toward
+
+**The doctrine:**
+- 23 numbered doctrine items in CLAUDE.md
+- 105 numbered lessons in CHANGELOG.md
+- Every ship in Rounds 1–5 followed the 14-step workflow
+
+**The tool routing:**
+- Engineering arcs in Claude Code (this CLI tool)
+- Cross-arc reflection in The Log
+- Per Lesson #92 — each Claude product used for what it's best at
+
+### Bottom line
+
+**Curator v2.0.0-rc1 represents the most thoroughly-tested file-management tool the author has ever shipped.** 214 versioned releases, 76 of 78 source modules at 100% line+branch under apex-accuracy doctrine, 105 numbered lessons, 8 closed multi-ship arcs, 4 bugs surfaced and fixed by coverage work itself.
+
+The 8-month arc from v1.0.0rc1 (~Feb 2026) to v2.0.0-rc1 (May 2026) demonstrates a sustainable engineering rhythm: **lessons compound, doctrine clarifies, ships land cleanly.** Every v2.0 claim is independently verifiable from `docs/V2_RELEASE_COVERAGE_AUDIT.md`.
+
+**v2.0.0-rc1 is the marker that says: the foundation is verified. Curator is ready for what comes next.**
 
 ---
 

@@ -1,10 +1,10 @@
 # Curator v2.0 — Release Notes
 
-**Status:** **READY FOR STAMP** — this is a stamp-ready release notes document. Jake stamps v2.0 in The Log when ready.
+**Status:** **🎯 v2.0.0-rc1 STAMPED (2026-05-13).** Soak period in progress. v2.0.0 stable release pending Jake's stamp ceremony in The Log.
 
 **Prepared:** 2026-05-13 (v1.7.208 — Round 5 Tier 2 ship 2)
-**HEAD at preparation:** `c067937` (v1.7.207 — comprehensive coverage audit)
-**Target ship:** v2.0.0 (recommendation: v2.0.0 direct, no RC1 step — see "Version strategy" below)
+**RC1 stamped:** 2026-05-13 (post-v1.7.213, replaces "v1.7.214" in the sequence)
+**Version strategy chosen:** **Option B** (RC1 first, then stable v2.0.0). The conservative path; v2.0.0 stable follows after a soak period.
 
 ---
 

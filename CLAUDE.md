@@ -2,7 +2,7 @@
 
 This file is read automatically by Claude Code at session start. It encodes the project conventions Claude must respect without being re-asked every session.
 
-**Owner:** Jake Leese · **Updated:** 2026-05-13 (post-Round 4 mid-Tier-4 — lessons #103-105 retrospective)
+**Owner:** Jake Leese · **Updated:** 2026-05-13 (post-Round 5 complete — Lesson #106 retrospective)
 
 ---
 
@@ -10,7 +10,7 @@ This file is read automatically by Claude Code at session start. It encodes the 
 
 - **Name:** Curator. Repo: `https://github.com/KULawHawk/Curator.git`. Local root: `C:\Users\jmlee\Desktop\AL\Curator\`.
 - **Brand context:** Curator is one pillar within **Ad Astra** (the overarching umbrella). Governance constitution at `..\Atrium\CONSTITUTION.md` (v0.3 RATIFIED 2026-05-08). Constellation map at `..\AD_ASTRA_CONSTELLATION.md`.
-- **Status:** v1.7.198 shipped (HEAD `b368f3e`). **218 tags / 198 ships total.** **ROUND 4 IN PROGRESS — Tier 4 mid-arc.** Round 4 progress: Tier 1 stabilization (5 ships, v1.7.180-184 — `_resolve_file` resolved, mutation testing deferred, GUI strategy doc, pytest-qt installed), Tier 2 GUI smaller modules (6 ships, v1.7.185-190 — lineage_view + models at 100%), Tier 3 main_window.py (5 ships, v1.7.191-195 — closed at 100% with 1 real bug surfaced & fixed), Tier 4 dialogs.py in progress (3 of 11 ships, v1.7.196-198 — at 16.84%). **66 modules at 100% line + branch** now (was 63 at Round 3 close, +3: lineage_view, models, main_window). **2 real bugs surfaced and fixed** in Round 4 (QDialog import missing in main_window v1.7.193, _resolve_file shadowed regression v1.7.180). **Remaining**: 8 more dialogs.py sub-ships to close Tier 4 (target: v1.7.199-206 + pragma audit close at v1.7.207). **Lessons through #105** (#102 Round 4 from v1.7.180; #103-105 captured this retrospective from Round 4 implicit patterns).
+- **Status: 🎯 v2.0.0-rc1 STAMPED (2026-05-13).** **214 ships total** (v1.0.0rc1 → v2.0.0-rc1, replacing v1.7.213 as HEAD). **Rounds 1–5 COMPLETE.** Round 5 final tally: Tier 1 (11 ships, v1.7.196-206) closed GUI Coverage Arc (gui/dialogs.py at 99.05%, 4,460 GUI stmts at ≥99%); Tier 2 (4 ships, v1.7.207-210) v2.0 RC1 prep — comprehensive coverage audit (99.76% Curator-wide, 0 missing lines!), release notes synthesis, constellation docs sync, README polish; Tier 3 (3 ships, v1.7.211-213) Atrium plugin coverage audit + Conclave Phase 0 readiness check (prerequisites CLEARED) + Nestegg trigger announcement. **76 of 78 source modules at 100% line + branch**. **8 multi-ship arcs closed** total. **4 real bugs surfaced & fixed by coverage work**. **Lessons through #106**. v2.0.0 stable release pending Jake's stamp ceremony in The Log after RC1 soak period. See `docs/RELEASE_NOTES_v2.0.md` for the formal narrative.
 - **Python:** 3.13.12 in `.venv`. Windows 11 only (see Doctrine principle 3 below).
 
 ---
@@ -336,6 +336,39 @@ finally:
 Or simpler: use `monkeypatch.setattr(cls, "job_id", ...)` which auto-restores. The `monkeypatch` fixture is the canonical Python answer; only fall back to manual try/finally when you're outside a pytest test function.
 
 **Generalized:** **never irreversibly mutate class state in test cleanup.** The cleanup must leave the class in exactly the state it was found. This applies to: class attributes, class properties, `__slots__` modifications, `__init_subclass__` overrides, anything at class scope.
+
+### 24. Cross-pillar trigger-detection pattern (Lesson #106 — Round 5 retrospective)
+
+When one Ad Astra pillar's progress unlocks work in another pillar (Curator v2.0 stamp → Nestegg brief generation; Conclave Phase 0 dependent on Curator's MCP being stable; future pillars triggered by Crucible directives) the unlocking event needs an explicit **trigger-detection document** so any subsequent Claude session (Log, Code, or other) can recognize the trigger fired and act on it without re-discovering the context.
+
+**Discovery in v1.7.213:** the FINAL Round 5 ship created `docs/NESTEGG_TRIGGER_STATUS.md` per the trigger spec in `..\NESTEGG_BRIEF_PENDING.md`. The document codified a pattern that recurs across the constellation. Without explicit trigger docs, every cross-pillar dependency becomes tribal knowledge that future sessions have to re-derive.
+
+**Pattern (the 5-section trigger-detection document):**
+
+1. **Headline status** — human-readable indicator: 🟢 GO / 🟡 APPROACHING / 🔴 BLOCKED / ✅ FIRED. One-line summary of why.
+
+2. **Trigger criteria check** — enumerated list of conditions, each marked satisfied/pending. Distinguishes "structurally satisfied" (the work is done) from "operationally satisfied" (the formal stamp has fired). Example: 7 of 8 conditions satisfied; remaining is Jake's v2.0 stamp ceremony.
+
+3. **What happens when the trigger fires** — verbatim 10-step (or similar) action procedure. The receiving entity (Log Claude, Code session, human) follows this without re-deriving the steps. Include file paths, command examples, expected outputs.
+
+4. **Authoritative inputs** — list of files (with locations) that should be at their expected state when the trigger fires. Receiving entity verifies these before executing the procedure.
+
+5. **Detection mechanism** — 3+ indicators (git tag, CHANGELOG entry, version field, file existence, etc.) that distinguish "trigger fired" from "still pending". Receiving entity uses these as evidence the trigger event actually happened.
+
+**Where these docs live:** in the *source* pillar's repo (the one producing the trigger), at `docs/<TARGET_PILLAR>_TRIGGER_STATUS.md`. Source pillar owns the trigger because it owns the state changes. Target pillar reads its own trigger doc to understand what's expected of it.
+
+**How to apply:**
+- When designing a new pillar with cross-pillar dependencies, identify trigger events upfront.
+- For each trigger event, create or commit to create the trigger-detection doc.
+- Update the trigger doc as criteria are progressively satisfied (status moves 🔴 → 🟡 → 🟢 → ✅).
+- When the trigger fires, the source pillar's release notes should reference the trigger doc location for the receiving entity.
+
+**Trigger doc lifecycle:**
+- Created early (when the trigger relationship is first identified)
+- Maintained as conditions progressively satisfied (live document)
+- Closed/archived when trigger fires and target pillar acknowledges (mark ✅ FIRED, link to target's first ship that acted on it)
+
+**Compounds with Lesson #92 (tool routing) and Lesson #100 (surface for human decision):** trigger detection is the *machine-readable* counterpart to the *human-readable* deferred-decisions index. Both pattern explicit communication across session/tool/human boundaries.
 
 ---
 
