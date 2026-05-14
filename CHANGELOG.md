@@ -4,6 +4,44 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.202] — 2026-05-13 — Round 5 Tier 1 ship 4: `GroupDialog`
+
+Closes the two-phase duplicate finder (Find → review → Apply) with worker stubbing for both phases. **Crosses the 60% milestone** on `gui/dialogs.py`.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `gui/dialogs.py` | 49.02% | **60.77%** (+268 stmts) |
+
+### What landed
+
+`tests/unit/test_gui_dialogs_group_coverage.py` (NEW, 26 tests):
+
+- **TestGroupDialogConstruction** (3) — basic / with sources / source list exception
+- **TestStateHelpers** (5) — `_selected_source_id` (all sources / specific); match kind toggle enables threshold; `_set_indeterminate` on/off; `_clear_results`
+- **TestFindPhase** (7) — import failure / completes no dups / completes with dups (apply enables) / fails / fuzzy match path / unknown dupset (non-dict details) / short hash (no truncation)
+- **TestApplyPhase** (8) — no report → return / user cancel / import failure / all deleted / mixed outcomes (deleted+failed+2 skipped types) / hard delete (use_trash off) / fails / many errors truncated
+- **TestSlotNoOps** (2) — `_on_find_started` + `_on_apply_started` no-ops
+- **TestCloseButton** (1) — reject
+
+### Test infrastructure
+
+`_make_worker_stubs` factory builds three classes (`_StubBridge`, `_StubFindWorker`, `_StubApplyWorker`) parametrized by `find_completes_with` / `find_fails_with` / `apply_completes_with` / `apply_fails_with`. Each Stub's `.start()` synchronously emits the appropriate signals via the bridge.
+
+`_MockOutcome` Enum stand-in for `ApplyOutcome` (DELETED, SKIPPED_REFUSE, SKIPPED_MISSING, FAILED).
+
+### Files
+
+- `tests/unit/test_gui_dialogs_group_coverage.py` (NEW, 26 tests, +~470 lines)
+- `docs/releases/v1.7.202.md`
+
+No source changes. No new lesson.
+
+### Next
+
+**v1.7.203** — `CleanupDialog` (~330 stmts; three-mode cleanup with mode-dispatch + worker stubbing).
+
 ## [1.7.201] — 2026-05-13 — Round 5 Tier 1 ship 3: `HealthCheckDialog` + 🐛 real bug fix
 
 Closes the diagnostic dialog with 8 internal health checks. **Surfaced and fixed a 4th real bug** via the Lesson #104 pattern — `_check_mcp_probe` accessed `self.runtime.config.db_path` *outside* its try/except, violating the dialog's class-level contract that "every check is wrapped in a try/except that converts unexpected errors into a `_CheckResult(passed=False)`".
