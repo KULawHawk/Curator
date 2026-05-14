@@ -25,6 +25,57 @@ versioning where reasonable.
 
 ---
 
+## [1.7.213] — 2026-05-13 — Round 5 Tier 3 ship 3 (FINAL): Nestegg trigger announcement
+
+**FINAL Tier 3 ship. FINAL Round 5 ship.** Doc-only. Per `..\NESTEGG_BRIEF_PENDING.md`'s trigger spec, prepares the trigger-detection + procedure for The Log Claude to action when Jake stamps v2.0.
+
+### What landed
+
+`docs/NESTEGG_TRIGGER_STATUS.md` (NEW):
+
+- **Headline:** 🟡 TRIGGER APPROACHING — structurally satisfied, awaiting Jake's v2.0 stamp
+- **Trigger criteria check:** 7 of 8 operationally satisfied (GUI Coverage Arc closed, coverage at 99.76% 0-missing, release notes + audit + constellation sync + README polish + Conclave readiness all prepared). Remaining: **Jake's v2.0 stamp ceremony in The Log** (the final gate).
+- **What happens when the stamp fires:** verbatim 10-step procedure from `NESTEGG_BRIEF_PENDING.md` §"When the trigger fires, the action"
+- **Authoritative inputs ready for The Log Claude:** 7 Curator-side docs all at latest state
+- **Detection mechanism:** 3 indicators (git log tag, CHANGELOG entry, pyproject.toml version) that distinguish "stamp fired" from "still v1.7.x"
+- **Nestegg's eventual scope** quoted from NESTEGG_BRIEF_PENDING.md §29-30
+
+### Round 5 close-out
+
+This is the final Round 5 ship. **Round 5 totals: 18 ships** (v1.7.196 → v1.7.213).
+
+| Tier | Ships | Outcome |
+|---|---:|---|
+| Tier 1 (Close Tier 4 of Round 4) | 11 | GUI Coverage Arc CLOSED at v1.7.206 (4,460 GUI stmts at ≥99%) |
+| Tier 2 (v2.0 RC1 release prep) | 4 | Comprehensive audit + release notes + constellation sync + README polish (smoke test optional, skipped) |
+| Tier 3 (Atrium/Conclave/Nestegg readiness) | 3 | Atrium plugin audit + Conclave readiness check + Nestegg trigger preparation |
+
+### Cumulative state at Round 5 close
+
+| Metric | Value |
+|---|---:|
+| Ships total | **213** (v1.0.0rc1 → v1.7.213) |
+| Overall coverage | **99.76%** |
+| Modules at 100% line + branch | **76 of 78** |
+| Missing lines | **0** |
+| Closed multi-ship arcs | **8** |
+| Numbered lessons | **105** (#79-105) |
+| Doctrine items in CLAUDE.md | **23** |
+| Documented pragmas | 79 across 25 files |
+| Real bugs surfaced by coverage work | 4 |
+| **Curator v2.0 state** | **STAMP-READY** |
+
+### Files
+
+- `docs/NESTEGG_TRIGGER_STATUS.md` (NEW)
+- `docs/releases/v1.7.213.md`
+
+No source changes. No new lesson.
+
+### Next
+
+**Round 5 close-out report to Jake.** Then v2.0 stamp ceremony in The Log when Jake's ready.
+
 ## [1.7.212] — 2026-05-13 — Round 5 Tier 3 ship 2: Conclave readiness check (Phase 0 prerequisites)
 
 Doc-only. Audit every Phase 0 prerequisite in `..\CONCLAVE_BRIEF.md` §1 + §5 + §7 against current Curator state. **Verdict: Curator-side prerequisites are CLEARED. Conclave Phase 0 is unblocked from Curator's side.**
