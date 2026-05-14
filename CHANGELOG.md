@@ -4,6 +4,57 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.207] — 2026-05-13 — Round 5 Tier 2 ship 1: comprehensive coverage audit → **Curator 99.76% / 0 missing lines**
+
+**Tier 2 opens.** Doc-only. Comprehensive coverage audit for the v2.0 release candidate state.
+
+### Headline numbers
+
+| Metric | Value |
+|---|---:|
+| Overall Curator coverage | **99.76%** |
+| Total statements | 13,831 |
+| Missing lines | **0** |
+| Total branches | 3,936 |
+| Partial branches | 42 (all documented) |
+| Tests passing | 3,349 |
+| Source modules at 100% | 76 of 78 |
+| Modules at ≥99% but <100% | 2 (`gui/dialogs.py`, `services/safety.py`) |
+
+### What landed
+
+`docs/V2_RELEASE_COVERAGE_AUDIT.md` (NEW, ~280 lines):
+
+- **Per-package breakdown** — cli (100%), gui (99.76%), services (99.94%), storage (100%), plugins (100%), mcp (100%), models (100%), config (100%)
+- **Full accounting of <100% modules** — `gui/dialogs.py` partial branches enumerated by class (BundleEditor, ScanDialog, GroupDialog, CleanupDialog, SourceAddDialog, VersionStackDialog, ForecastDialog, TierDialog); `services/safety.py` Windows env-var loop partials
+- **Pragma inventory** — 79 total pragmas across 25 files, categorized by justification type with Lesson #91 references
+- **Test-skip inventory** — 6 skipped tests (all Windows admin-mode + 1 sandbox edge case)
+- **Deferred items cross-check** — verified against `docs/DEFERRED_DECISIONS.md`
+- **Bug-finding scorecard** — 4 real bugs surfaced & fixed across Rounds 4 + 5
+- **Audit conclusion** — Curator is v2.0-RC1 stamp-ready
+
+### Standard shipping invocation used
+
+Per Lesson #96 / Doctrine #14 (with the `docs/DEFERRED_DECISIONS.md` #1 sandbox-fallback to `tests/unit/`):
+
+```bash
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/unit/ \
+    --cov=curator --cov-branch --cov-report=term-missing -q
+# 3349 passed, 6 skipped, 2 deselected in 232.96s
+# 13831 stmts, 0 miss, 3936 branches, 42 partial → 99.76%
+```
+
+### Files
+
+- `docs/V2_RELEASE_COVERAGE_AUDIT.md` (NEW)
+- `docs/releases/v1.7.207.md`
+
+No source changes. No new lesson.
+
+### Next
+
+**v1.7.208** — release notes synthesis for v2.0 (finalize `docs/RELEASE_NOTES_v2.0_DRAFT.md` → `docs/RELEASE_NOTES_v2.0.md`).
+
 ## [1.7.206] — 2026-05-13 — Round 5 Tier 1 ship 8 (FINAL): pragma audit close → **`gui/dialogs.py` 99.05% / 0 missing lines** — GUI Coverage Arc CLOSED
 
 **Round 5 Tier 1 closes.** `gui/dialogs.py` covered at 99.05% (2208/2210 stmts after pragmas, 0 missing lines, 25 partial branches). **GUI Coverage Arc CLOSED** — every `gui/*` module is now at ≥99% line + branch coverage.
