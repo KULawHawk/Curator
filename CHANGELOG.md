@@ -4,6 +4,44 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.203] — 2026-05-13 — Round 5 Tier 1 ship 5: `CleanupDialog`
+
+Closes the three-mode cleanup picker (junk / empty_dirs / broken_symlinks) including the "Open Find Duplicates..." cross-dialog shortcut.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `gui/dialogs.py` | 60.77% | **73.22%** (+281 stmts) |
+
+### What landed
+
+`tests/unit/test_gui_dialogs_cleanup_coverage.py` (NEW, 31 tests):
+
+- **TestCleanupConstruction** (3) — basic / mode switch to empty_dirs (apply label changes) / mode switch to symlinks
+- **TestModeHelpers** (4) — `_set_indeterminate` / `_clear_results` / button states with/without path
+- **TestBrowse** (3) — no-path → home / existing path / chosen path updates
+- **TestFindPhase** (9) — import failure / no path / junk no findings / junk with patterns / empty_dirs strict / empty_dirs with junk / broken_symlinks / with errors block / fails
+- **TestApplyPhase** (7) — no report / user cancel / import failure / all deleted / mixed outcomes / hard delete / fails
+- **TestOpenGroupDialog** (2) — success (delegates to GroupDialog + closes self) / construction fails (QMessageBox.critical)
+- **TestSlotNoOps** (2)
+- **TestCloseButton** (1)
+
+### Test infrastructure
+
+`_stubs` factory parametrized similar to GroupDialog tests but with `CleanupFindWorker` / `CleanupApplyWorker` / `CleanupProgressBridge`. The Open-GroupDialog test stubs the entire `GroupDialog` class to avoid the access violation that occurred when the real GroupDialog tried to build under a bare MagicMock runtime.
+
+### Files
+
+- `tests/unit/test_gui_dialogs_cleanup_coverage.py` (NEW, 31 tests, +~580 lines)
+- `docs/releases/v1.7.203.md`
+
+No source changes. No new lesson.
+
+### Next
+
+**v1.7.204** — `SourceAddDialog` (~320 stmts; form-based source create/edit with validation).
+
 ## [1.7.202] — 2026-05-13 — Round 5 Tier 1 ship 4: `GroupDialog`
 
 Closes the two-phase duplicate finder (Find → review → Apply) with worker stubbing for both phases. **Crosses the 60% milestone** on `gui/dialogs.py`.
