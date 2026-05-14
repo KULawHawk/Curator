@@ -4,6 +4,50 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.209] — 2026-05-13 — Round 5 Tier 2 ship 3: constellation docs sync
+
+Doc-only. Syncs Curator's status across the Ad Astra constellation docs to reflect v2.0-stamp-ready state.
+
+### What landed
+
+**`..\AD_ASTRA_CONSTELLATION.md` — Curator row updated:**
+- Status: `v1.7.148 mature` → **`v1.7.208 stamp-ready for v2.0`**
+- Ship count: 148 → **208**
+- Coverage: "55 modules at 100%" → **"76 of 78 source modules at 100%, 99.76% overall, 0 missing lines"**
+- Arcs closed: 5 → **8** (added CLI Coverage Arc, GUI Signals stretch, GUI Coverage Arc)
+- New: real-bug scorecard reference (4 bugs surfaced & fixed by coverage work)
+- Lessons captured: 95 → **105**
+- Pragma annotations: "Three" → **"79 documented across 25 files"**
+- Added pointer to `Curator/docs/RELEASE_NOTES_v2.0.md` (v1.7.208)
+
+**`..\CONCLAVE_BRIEF.md` — Curator-prerequisite status updated:**
+- §1: "As of 2026-05-11 Curator is at v1.7.39, ~98% Phase β complete" → **"STATUS UPDATE 2026-05-13: Curator now at v1.7.208 stamp-ready for v2.0. Prerequisite SATISFIED. Conclave Phase 0 unblocked from Curator's side."**
+- §2: Curator row updated to v1.7.208 with explicit prerequisite-cleared note + MCP-operational citation
+- §5: status preserved (was already correct — MCP shipped)
+
+**`..\NESTEGG_BRIEF_PENDING.md` — trigger status updated:**
+- Header status: "DO NOT GENERATE YET" → **"🟡 TRIGGER APPROACHING. Curator at v1.7.208 stamp-ready for v2.0."**
+- Trigger note: explicit reference to GUI Coverage Arc closed at v1.7.206, audit at v1.7.207, release notes at v1.7.208. **Awaiting Jake's stamp ceremony in The Log.**
+
+### What this means for the constellation
+
+- **Conclave Phase 0 is unblocked** from Curator's side (was waiting on stable MCP + stable Curator core; both now satisfied)
+- **Nestegg trigger is operationally satisfied** (Curator v2.0 stamp ceremony is the only remaining gate; that's a Log conversation)
+- **Atrium constellation map reflects current Curator state** for cross-pillar reference
+
+### Files
+
+- `..\AD_ASTRA_CONSTELLATION.md` (Curator row updated)
+- `..\CONCLAVE_BRIEF.md` (§1, §2 updated)
+- `..\NESTEGG_BRIEF_PENDING.md` (header status updated)
+- `docs/releases/v1.7.209.md`
+
+No source changes. No new lesson.
+
+### Next
+
+**v1.7.210** — Pre-v2.0 polish sweep (README badges, CHANGELOG "Coming in v2.0" preview, pyproject.toml version-bump consideration, doc index review).
+
 ## [1.7.208] — 2026-05-13 — Round 5 Tier 2 ship 2: v2.0 release notes synthesis
 
 Doc-only. Synthesizes the v2.0 release notes from the v1.7.151 draft + everything shipped through v1.7.207.

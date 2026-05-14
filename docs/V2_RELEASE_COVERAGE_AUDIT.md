@@ -49,18 +49,22 @@ QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/unit/ \
 
 ## Per-package breakdown
 
-### `curator/cli/` — 100% (CLI Coverage Arc closed v1.7.175)
+### `curator/cli/` — 99.53% (CLI Coverage Arc closed v1.7.175; 0 missing lines)
 
-10.73% → 99.43% → 100% across Rounds 3 + 4. The 10 pragmas added at the v1.7.175 arc close are all documented defensive boundaries (TB-size formatters, KeyboardInterrupt-during-confirm, None-default fallbacks).
+10.73% → 99.43% line coverage at v1.7.175, then →100% line + branch on cli/main.py after the v1.7.180 `_resolve_file` merge. Combined cli/* package: 2,282 stmts, 0 missing, 916 branches, **15 partial branches** → 99.53%.
 
-| Module | Stmts | Coverage |
-|---|---:|---:|
-| `cli/__init__.py` | small | 100% |
-| `cli/main.py` | 1,843 | **100.00%** |
-| `cli/mcp_keys.py` | 131 | 100.00% |
-| `cli/mcp_orphans.py` | 142 | 100.00% |
-| `cli/runtime.py` | (small) | 100% |
-| `cli/util.py` | (small) | 100% |
+The 16 pragmas added across the CLI Coverage Arc are all documented defensive boundaries (TB-size formatters, KeyboardInterrupt-during-confirm, None-default fallbacks, plugin-callback fallbacks).
+
+| Module | Stmts | Line coverage | Notes |
+|---|---:|---:|---|
+| `cli/__init__.py` | small | 100% | |
+| `cli/main.py` | 1,843 | **100.00%** | 16 pragmas (line+branch effectively 99.4%) |
+| `cli/mcp_keys.py` | 131 | 100.00% | |
+| `cli/mcp_orphans.py` | 142 | 100.00% | |
+| `cli/runtime.py` | (small) | 100% | 2 pragmas |
+| `cli/util.py` | (small) | 100% | |
+
+**Combined cli/* package: 0 missing lines, 15 partial branches.** Same pattern as gui/dialogs.py — branch-ending defensive paths where one direction was exercised and the other (rare) was not.
 
 ### `curator/gui/` — 99.76% (GUI Coverage Arc closed v1.7.206)
 
