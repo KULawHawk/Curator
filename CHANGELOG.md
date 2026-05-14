@@ -25,6 +25,44 @@ versioning where reasonable.
 
 ---
 
+## [1.7.211] — 2026-05-13 — Round 5 Tier 3 ship 1: Atrium plugin coverage audit
+
+**Tier 3 opens** per Jake's explicit go-ahead. Doc-only. Survey of all 3 charter `curatorplug-atrium-*` repos for coverage state + apex-accuracy doctrine alignment.
+
+### Headline
+
+| Plugin | Version | State | Coverage | Tests |
+|---|---:|---|---:|---:|
+| `curatorplug-atrium-safety` | **v0.4.0** | shipped + maintained | **94%** | 70 |
+| `curatorplug-atrium-citation` | **v0.2.0** | shipped + maintained | **94%** | 47 |
+| `curatorplug-atrium-reversibility` | DESIGN v0.3 | **DEFERRED indefinitely** | n/a | 0 |
+
+### What landed
+
+`docs/ATRIUM_PLUGIN_AUDIT.md` (NEW):
+- Per-plugin module-level coverage breakdown (safety: 5 modules, citation: 6 modules, reversibility: design-only)
+- Gap analysis for each plugin's <100% modules (safety: `plugin.py` 92%; citation: `cli.py` 87% + `plugin.py` 88% + `sweep.py` 98%)
+- Promotion estimate: **2 sub-ships per plugin → 4 sub-ships total** to reach 100% line + branch
+- Recommendation: **promote to apex-accuracy doctrine as a post-v2.0 stretch arc.** Atrium Principles 2 + 3 are the constitutional enforcement layer — they deserve the same rigor as the core they enforce. Patterns port cleanly (same pluggy framework, same Typer CliRunner approach).
+- atrium-reversibility recommendation: **leave deferred.** Per the v0.3 decision, no irreversible-op surface exists in Curator.
+
+### What this means
+
+**Do NOT block v2.0 stamp on plugin coverage.** Both shipped plugins are operationally stable at 94%. This is a post-v2.0 arc — estimated 4 sub-ships, smaller than the typical Curator arc.
+
+**Open question for The Log:** sequential per-plugin arc OR combined? Recommended combined (shared patterns + single pragma audit close).
+
+### Files
+
+- `docs/ATRIUM_PLUGIN_AUDIT.md` (NEW)
+- `docs/releases/v1.7.211.md`
+
+No source changes (in Curator). No new lesson.
+
+### Next
+
+**v1.7.212** — Conclave readiness check (Phase 0 prerequisites per CONCLAVE_BRIEF.md §7).
+
 ## [1.7.210] — 2026-05-13 — Round 5 Tier 2 ship 4: pre-v2.0 polish sweep
 
 Doc + README polish for the v2.0 release-ready state.
