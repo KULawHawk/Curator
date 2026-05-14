@@ -877,7 +877,7 @@ class HealthCheckDialog(QDialog):
         try:
             import curator
             out.append(_CheckResult("curator package", True, curator.__version__, severity="info"))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # pragma: no cover  # noqa: BLE001 -- import-side defensive boundary; curator package is installed in dev/CI per Lesson #91
             out.append(_CheckResult("curator package", False, str(e)))
         for mod_name, label in [
             ("curatorplug.atrium_citation", "atrium-citation"),
@@ -886,7 +886,7 @@ class HealthCheckDialog(QDialog):
             try:
                 mod = __import__(mod_name, fromlist=["__version__"])
                 out.append(_CheckResult(label, True, getattr(mod, "__version__", "?"), severity="info"))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # pragma: no cover  # noqa: BLE001 -- import-side defensive boundary; plugin imports succeed in dev/CI per Lesson #91
                 out.append(_CheckResult(label, False, str(e)))
         return out
 
@@ -895,7 +895,7 @@ class HealthCheckDialog(QDialog):
         try:
             import PySide6
             out.append(_CheckResult("PySide6", True, PySide6.__version__, severity="info"))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # pragma: no cover  # noqa: BLE001 -- PySide6 is a hard dependency; import failure means the GUI isn't running anyway. Per Lesson #91
             out.append(_CheckResult("PySide6", False, str(e)))
         try:
             import networkx
@@ -1943,7 +1943,7 @@ class GroupDialog(QDialog):
         # Highlight keeper rows green, duplicate rows yellow-ish
         for r in range(tbl.rowCount()):
             status_item = tbl.item(r, 3)
-            if status_item is None:
+            if status_item is None:  # pragma: no cover -- defensive; _render_find_report always populates col 3 above. Per Lesson #91
                 continue
             if "KEEPER" in status_item.text():
                 for c in range(tbl.columnCount()):
@@ -3801,7 +3801,7 @@ class TierDialog(QDialog):
                 if n < 1024 or unit == "TB":
                     return f"{n:.1f} {unit}" if unit != "B" else f"{n} {unit}"
                 n /= 1024
-            return f"{n:.1f} TB"
+            return f"{n:.1f} TB"  # pragma: no cover -- unreachable; the TB iteration always returns via `unit == "TB"` per Lesson #91
 
         self._lbl_summary.setText(
             f"Found <b>{report.candidate_count:,}</b> candidates "
@@ -3930,12 +3930,21 @@ class TierDialog(QDialog):
         Resolves the row→curator_id mapping via the UserRole data stored
         on the path column when the scan populated the table.
         """
-        from PySide6.QtWidgets import QMenu
-
         row = self._table.rowAt(pos.y())
         file_ent = self._resolve_row_to_file_entity(row)
         if file_ent is None:
             return
+        # v1.7.206: menu construction + exec extracted to a helper method
+        # for testability. _build_and_exec_context_menu is `# pragma: no
+        # cover` because menu.exec() is a blocking native QMenu slot that
+        # can't be tested under offscreen Qt. The action callbacks the
+        # menu wires up (_action_inspect / _action_set_status /
+        # _action_send_to_trash / _action_bulk_migrate) are all tested
+        # directly via TestActions / TestBulkMigrate. Per Lesson #91.
+        self._build_and_exec_context_menu(file_ent, pos)
+
+    def _build_and_exec_context_menu(self, file_ent, pos) -> None:  # pragma: no cover
+        from PySide6.QtWidgets import QMenu
 
         menu = QMenu(self)
 

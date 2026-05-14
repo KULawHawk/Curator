@@ -566,19 +566,24 @@ class TestContextMenu:
         dlg._on_table_context_menu(QPoint(99999, 99999))
         # No crash
 
-    def test_context_menu_with_resolved_file_skipped(self, qapp, qtbot):
-        """The context-menu builder (_on_table_context_menu lines 3922-3984)
-        is GUI-construction glue: builds a QMenu, adds actions, dispatches
-        to ``_action_*`` methods on click. ``menu.exec(...)`` is a
-        blocking native C++ slot that can't be cleanly monkeypatched in
-        the offscreen Qt platform.
-
-        Each action's callable is tested directly through the per-action
-        unit tests (TestActions, TestBulkMigrate). Pragma-marked at the
-        arc-close ship per Lesson #99 / Doctrine #17."""
-        pytest.skip(
-            "QMenu.exec blocks even under offscreen platform — see comment.",
-        )
+    def test_context_menu_dispatches_to_helper(self, qapp, qtbot):
+        """v1.7.206: _on_table_context_menu now delegates to a pragma'd
+        helper (_build_and_exec_context_menu) after the file_ent
+        resolution check. We test the dispatch by stubbing the helper —
+        verifies the dispatch line (the helper call) is exercised."""
+        from curator.gui.dialogs import TierDialog
+        from PySide6.QtCore import QPoint
+        rt = _make_runtime()
+        dlg = TierDialog(rt)
+        qtbot.addWidget(dlg)
+        f = _make_file_entity(status="active")
+        dlg._resolve_row_to_file_entity = MagicMock(return_value=f)
+        # Stub the helper to verify the dispatch fires (the helper
+        # itself is `# pragma: no cover` because it calls QMenu.exec
+        # which is a blocking native slot)
+        dlg._build_and_exec_context_menu = MagicMock()
+        dlg._on_table_context_menu(QPoint(10, 10))
+        dlg._build_and_exec_context_menu.assert_called_once()
 
 
 # ===========================================================================
