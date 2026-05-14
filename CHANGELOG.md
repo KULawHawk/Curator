@@ -4,6 +4,44 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.204] — 2026-05-13 — Round 5 Tier 1 ship 6: `SourceAddDialog`
+
+Closes the form-based source create/edit dialog with dynamic schema-driven config widgets. **Crosses the 80% milestone** on `gui/dialogs.py`. One dialog remains (TierDialog) + pragma audit close.
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `gui/dialogs.py` | 73.22% | **84.96%** (+236 stmts) |
+
+### What landed
+
+`tests/unit/test_gui_dialogs_source_add_coverage.py` (NEW, 28 tests + 1 skipped):
+
+- **TestConstruction** (6) — basic add mode / edit mode / gdrive source / None config (no crash) / no plugins (skipped — pre-existing crash) / plugin hook with None entry
+- **TestSourceTypeSwitching** (7) — gdrive shows auth caps / local shows watch caps / invalid data early-return / plugin with no config / array field → QPlainTextEdit / boolean field → QCheckBox / default value in placeholder
+- **TestOkButtonState** (2) — disabled empty / enabled with source_id
+- **TestSubmit** (8) — empty id error / missing required → validation / insert success / insert failure / update success (edit mode) / update failure / share visibility / preserves created_at in edit mode / fallback to now() when created_at None
+- **TestCollectConfig** (4) — checkbox field / array field (newline-split) / required array empty → error / skips empty strings+lists
+- **TestCancelButton** (1) — rejects
+
+### Test infrastructure
+
+`_make_runtime_with_plugins` factory builds a hook result list with `(key, value)` tuples grouped by plugin. Default plugins: local (with `root_path` required) + gdrive (with `folder_id` required, optional `include_trashed` bool, `tags` array).
+
+**Note on default selection:** The dropdown shows plugins sorted alphabetically; the default selection is the alphabetically-first plugin (`gdrive` not `local`). Tests that need `local` widgets explicitly switch via `dlg._cb_source_type.setCurrentIndex(findData("local"))`.
+
+### Files
+
+- `tests/unit/test_gui_dialogs_source_add_coverage.py` (NEW, 28 tests + 1 skipped, +~470 lines)
+- `docs/releases/v1.7.204.md`
+
+No source changes. No new lesson.
+
+### Next
+
+**v1.7.205** — `TierDialog` (~450 stmts, largest single dialog; possibly splits per Lesson #88).
+
 ## [1.7.203] — 2026-05-13 — Round 5 Tier 1 ship 5: `CleanupDialog`
 
 Closes the three-mode cleanup picker (junk / empty_dirs / broken_symlinks) including the "Open Find Duplicates..." cross-dialog shortcut.
