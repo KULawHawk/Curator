@@ -4,6 +4,58 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.205] — 2026-05-13 — Round 5 Tier 1 ship 7: `TierDialog` (last dialog)
+
+Closes the largest single dialog class (~450 stmts) — the Tools-menu tier-storage scan picker with right-click context menu, keyboard shortcuts (Enter/Del), and bulk-migrate flow. **Crosses 95% on `gui/dialogs.py`.**
+
+### Coverage delta
+
+| Module | Before | After |
+|---|---|---|
+| `gui/dialogs.py` | 84.96% | **96.92%** (+267 stmts) — 39 lines + 35 partial branches remaining for the pragma audit |
+
+### What landed
+
+`tests/unit/test_gui_dialogs_tier_coverage.py` (NEW, 44 tests + 1 skipped):
+
+- **TestConstruction** (2) — basic / with sources
+- **TestRecipeChange** (3) — min-age default updates per recipe / expired disables age / unknown recipe data path
+- **TestScanFlow** (6) — no candidates / with 4-status candidates / source filter / failure → critical / bad recipe → warning / audit-exception swallowed
+- **TestResolveRowToFile** (8) — negative / out-of-range / no path_item / no curator_id / malformed UUID / file_repo raises / file not found (QMessageBox.warning) / file found
+- **TestEventFilter** (4) — Enter → invokes inspect / Delete → invokes handler / other key → falls through / non-table obj → falls through
+- **TestKeyboardShortcuts** (2) — Enter shortcut no-row / Delete shortcut no-row (no-crash)
+- **TestActions** (8) — inspect success (FileInspectDialog stubbed) / inspect failure / set_status success (with audit) / set_status failure / set_status audit failure swallowed / send_to_trash confirm yes / cancel / failure
+- **TestContextMenu** (1 + 1 skipped) — no resolved file → early return / resolved file context menu (skipped: QMenu.exec is a blocking C++ slot)
+- **TestBulkMigrate** (8) — no selection / no root prefix / cancel target dialog / cancel confirm / plan failure / no matching moves / apply failure / mixed outcomes / many failures truncated
+- **TestSelectionHelpers** (1) — no selection returns empty list
+
+### Tier 1 progress
+
+| Ship | Module | Coverage |
+|---|---|---|
+| v1.7.196 | DIALOGS_DECOMPOSITION.md | doc |
+| v1.7.197 | helpers + result classes | 0% → 10.20% |
+| v1.7.198 | FileInspectDialog + ForecastDialog | 16.84% |
+| v1.7.199 | VersionStackDialog + ScanDialog | 29.63% |
+| v1.7.200 | BundleEditorDialog | 39.20% |
+| v1.7.201 | HealthCheckDialog + 🐛 bug fix | 49.02% |
+| v1.7.202 | GroupDialog | 60.77% |
+| v1.7.203 | CleanupDialog | 73.22% |
+| v1.7.204 | SourceAddDialog | 84.96% |
+| **v1.7.205** | **TierDialog (this ship)** | **96.92%** |
+| v1.7.206 (next) | pragma audit close | target 100% (or 99%+ with documented pragmas per Lesson #99) |
+
+### Files
+
+- `tests/unit/test_gui_dialogs_tier_coverage.py` (NEW, 44 tests + 1 skipped, +~620 lines)
+- `docs/releases/v1.7.205.md`
+
+No source changes. No new lesson.
+
+### Next
+
+**v1.7.206** — pragma audit close (final Tier 1 ship). 39 lines + 35 partials to review per Lesson #99 / Doctrine #17. Expecting 0-2 pragmas per Lesson #103.
+
 ## [1.7.204] — 2026-05-13 — Round 5 Tier 1 ship 6: `SourceAddDialog`
 
 Closes the form-based source create/edit dialog with dynamic schema-driven config widgets. **Crosses the 80% milestone** on `gui/dialogs.py`. One dialog remains (TierDialog) + pragma audit close.
