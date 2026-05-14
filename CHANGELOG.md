@@ -4,6 +4,38 @@ All notable changes to Curator are documented here. Format inspired by
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with semver
 versioning where reasonable.
 
+## [1.7.208] — 2026-05-13 — Round 5 Tier 2 ship 2: v2.0 release notes synthesis
+
+Doc-only. Synthesizes the v2.0 release notes from the v1.7.151 draft + everything shipped through v1.7.207.
+
+### What landed
+
+`docs/RELEASE_NOTES_v2.0.md` (NEW; replaces draft as the canonical release artifact):
+
+- **Headline** — 207 ships, 99.76% coverage, 76/78 modules at 100%, 8 closed arcs, 105 lessons, 4 bugs found+fixed
+- **What's new since v1.0.0rc1** — Migration Tracer Phases 1-4+Gamma, plugin ecosystem, MCP server, 3 source plugins, GUI v2 (8 modules at ≥99%), CLI surface (50+ commands), storage subsystem
+- **Coverage & Quality** — apex-accuracy doctrine story, the 105-lesson library, 8 closed multi-ship arcs, final per-package coverage state, real-bug scorecard
+- **Breaking changes** — None. Strictly additive v2.0.
+- **Known limitations** — 3 documented deferrals (sandbox-trash hang, mutation testing, cross-platform parity)
+- **Version strategy** — recommends v2.0.0 direct (no RC1 step) given the audit-pass state; alternative if Jake wants caution
+- **Roadmap to v2.0 ship** — Rounds 1-5 Tier 2 marked complete; v2.0 ceremony is the next gate
+- **Post-v2.0 queued workstreams** — Sentinel, GUI rules audit, Mutation Testing Arc, OneDrive plugin, PyPI publication
+- **Acknowledgments** — Ad Astra constellation, doctrine items #1-23, lessons #79-105, tool routing
+- **Bottom line** — 8-month arc verified; Curator ready for what comes next
+
+The original `docs/RELEASE_NOTES_v2.0_DRAFT.md` is retained as historical context (v1.7.151 planning artifact).
+
+### Files
+
+- `docs/RELEASE_NOTES_v2.0.md` (NEW)
+- `docs/releases/v1.7.208.md`
+
+No source changes. No new lesson.
+
+### Next
+
+**v1.7.209** — Constellation docs sync (Curator's row in AD_ASTRA_CONSTELLATION.md, CONCLAVE_BRIEF.md §1/§5, NESTEGG_BRIEF_PENDING.md trigger).
+
 ## [1.7.207] — 2026-05-13 — Round 5 Tier 2 ship 1: comprehensive coverage audit → **Curator 99.76% / 0 missing lines**
 
 **Tier 2 opens.** Doc-only. Comprehensive coverage audit for the v2.0 release candidate state.
