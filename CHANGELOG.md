@@ -6,6 +6,89 @@ versioning where reasonable.
 
 ---
 
+## [2.0.0-rc2] — 2026-05-13 — RC1 soak bugfix: MCP datetime wire-format regression
+
+**Trimmed ceremony.** First soak-period ship. A bug surfaced during RC1 soak by interactive testing against the running MCP server — exactly the failure mode the soak period exists to catch.
+
+### What this fixes
+
+**The bug.** Every MCP tool that returns a row containing a datetime field (`list_sources`, `query_files`, `query_audit_log`, `inspect_file`, `get_lineage`, `find_duplicates`, and — once their backing tables have data — `list_trashed`, `get_migration_status`) was rejected at the MCP layer with errors like:
+
+```
+MCP error -32602: Structured content does not match the tool's output schema:
+data/result/0/mtime must match format "date-time"
+```
+
+**Root cause.** SQLite TIMESTAMP columns round-trip through Python's `sqlite3` module as **naive** datetime values whose ISO format is `'2026-05-10 09:08:10.516556'` — space separator, no timezone offset. The MCP wire schema declares `format: date-time`, which requires RFC 3339 (T separator + timezone offset). Pydantic's default serializer for a naive datetime emits exactly the offending shape; the response gets dropped before the client sees it.
+
+This was anticipated in `src/curator/_compat/datetime.py`'s docstring (step 4 of the deferred tz-aware migration). The MCP wire boundary was the first place it bit.
+
+**Fix.** Introduce `UTCDatetime`, an `Annotated[datetime, AfterValidator(_as_utc), PlainSerializer(_to_iso_utc_offset, when_used="json")]` type at `src/curator/mcp/tools.py`. Naive datetimes are labeled UTC (no wall-clock shift, matching SQLite's `CURRENT_TIMESTAMP` convention); aware non-UTC datetimes are converted to UTC; the JSON wire form is forced to the explicit `+00:00` offset shape so any future drift to bare `Z` or no-offset fails the regression tests.
+
+Applied to six datetime fields:
+
+| Model | Field |
+|---|---|
+| `SourceInfo` | `created_at` |
+| `AuditEvent` | `occurred_at` |
+| `FileSummary` | `mtime` |
+| `TrashedFile` | `trashed_at` |
+| `MigrationJobInfo` | `started_at` (Optional) |
+| `MigrationJobInfo` | `completed_at` (Optional) |
+
+### Coverage
+
+`curator.mcp.tools` remains at **100% line + 100% branch** under the `tests/unit/` invocation (the standard ship-quality scope per DEFERRED_DECISIONS #1 sandbox workaround). The fix adds 21 statements + 4 branches; all exercised by the new `TestUTCDatetimeFieldType` class.
+
+| Coverage measurement | Stmts | Miss | Branch | BrPart | Cover |
+|---|---:|---:|---:|---:|---:|
+| Before (v2.0.0-rc1) | 215 | 0 | 66 | 0 | 100% |
+| After (this ship) | 236 | 0 | 70 | 0 | **100%** |
+
+### Also fixed in this ship
+
+- **`src/curator/__init__.py` version string** was `1.6.5` at HEAD `0ac0b94 v2.0.0-rc1` despite the rc1 stamp updating `pyproject.toml` to `2.0.0rc1`. The MCP `health_check()` tool reported the wrong version to every client. The working tree had an uncommitted in-flight fix (1.6.5 → 2.0.0rc1) which this ship subsumes and advances to `2.0.0rc2`. Confirmed end-to-end: `health_check()` now reports the right version.
+
+### Out of scope for this ship (deferred)
+
+Two minor findings from the same interactive test pass were flagged but explicitly deferred to keep this soak-period ship single-purpose:
+
+- **`find_duplicates(file_id=..., xxhash3_128=...)`** — both args; docs say "pass exactly one"; code silently prefers `xxhash3_128`. Document the precedence or raise. (Single-line fix; queued for v2.0.0-rc3 or v2.0.0 final.)
+- **Over-cap `limit` / `max_depth`** silently clamp. Doc-behavior aligned but no validation error. (Either accept or convert to validation error.)
+
+### Files
+
+- `src/curator/mcp/tools.py` — added `_as_utc`, `_to_iso_utc_offset`, `UTCDatetime`; updated 6 datetime field declarations
+- `src/curator/__init__.py` — `__version__` bumped to `2.0.0rc2` (also corrected the missed rc1 bump)
+- `pyproject.toml` — version bumped to `2.0.0rc2`
+- `tests/unit/mcp/test_tools.py` — added `TestUTCDatetimeFieldType` (9 tests: 3 validator-branch + 5 per-model wire-format + 1 end-to-end)
+- `CLAUDE.md` — status line + lesson cross-reference (Lesson #107)
+
+### Lesson captured (Lesson #107 — wire-format regression invisible to line+branch coverage)
+
+When a module's outputs cross a **wire boundary** with its own schema validation (MCP's JSON Schema, OpenAPI, Protobuf, GraphQL), source-level line + branch coverage on the producer module can be 100% while the **on-wire format** has an entirely separate bug that coverage instrumentation cannot see. The Python return value satisfies the producer's invariants; the JSON-dumped form does not satisfy the wire's invariants; line/branch coverage measures only the former.
+
+**Discovery in v2.0.0-rc2:** rc1 shipped with `mcp/` at the headline-claimed 100% line + branch coverage. The first interactive test pass against the running MCP server immediately surfaced 6 of 9 tools broken at the wire layer. The producer code paths were 100% covered; the wire-format contract was untested.
+
+**This is distinct from Lesson #93 (coverage continuity across test rewrites).** #93 is about a *missing-line list* moving covered→uncovered when tests are rewritten. #107 is about an entire **failure mode** (wire-schema rejection) that line/branch coverage was *never able* to see, because no source line corresponds to "the wire validator rejected this." A perfect coverage report from a refactor that doesn't change test scope can still leave the bug.
+
+**Why static analysis didn't catch it:** mypy sees `datetime` field with `format: date-time` schema and doesn't model that pydantic's default serializer for naive datetime produces non-RFC-3339 output. The schema declaration and the serializer are on opposite sides of pydantic's API surface.
+
+**Rule:** when adding a module whose outputs are wire-validated (MCP tool, FastAPI endpoint, OpenAPI handler, gRPC service), add at least one test per output model that:
+1. Builds the model with a realistic value (including edge cases like naive datetime where the model declares a typed datetime).
+2. JSON-dumps it via the model's `.model_dump_json()` (or framework equivalent).
+3. Asserts the dumped form against the **wire schema's regex/format constraint**, not just against the Python value's invariants.
+
+**How to apply this in Curator:** any future MCP tool that returns a model with a `format`-constrained field gets a `TestXxxWireFormat` test class alongside its `TestXxx` class. The new `TestUTCDatetimeFieldType` is the canonical pattern. Equivalent should be added when shipping new HTTP/REST surface (e.g. when Phase Gamma's `fastapi` work goes live).
+
+**Compounds with Lesson #93 and Lesson #100:** #93 is "coverage continuity"; #107 is "coverage scope"; #100 is "surface the gap, don't silently paper over it." Together they cover three distinct ways apex-accuracy can give a false-positive green light. Adopt all three before declaring a wire-facing module done.
+
+### Bottom line
+
+A real bug surfaced and fixed during RC1 soak — exactly the value the soak period is designed to extract. v2.0.0-rc2 advances toward a v2.0.0 stable stamp with one less production-surface defect and one more lesson on the books.
+
+---
+
 ## [2.0.0-rc1] — 2026-05-13 — 🎯 Release Candidate 1 — apex-accuracy milestone
 
 **LANDMARK SHIP. FULL CEREMONY.** Curator's v2.0 release candidate. The culmination of 213 prior versioned releases (v1.0.0rc1 → v1.7.213), 5 development rounds, 8 multi-ship engineering arcs, 105 numbered lessons, and 23 doctrine items.

@@ -49,13 +49,57 @@ design's optimistic assumptions, captured here for future maintainers):
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Annotated, Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field, PlainSerializer
 
 from curator.storage.queries import FileQuery
+
+
+# ---------------------------------------------------------------------------
+# UTC datetime field type (v2.0.0-rc2 — see CHANGELOG)
+#
+# SQLite stores Curator's timestamps as naive strings (Python sqlite3 default
+# emits ``'YYYY-MM-DD HH:MM:SS.ffffff'``). The MCP wire schema declares
+# datetime fields as ``format: date-time``, which the MCP layer validates
+# against RFC 3339 — a ``T`` separator AND a timezone offset are mandatory.
+# Naive datetimes serialized via pydantic's default produce neither and the
+# whole response is rejected. We coerce here (treating stored values as UTC,
+# matching SQLite's CURRENT_TIMESTAMP convention) and force the explicit
+# ``+00:00`` offset shape on the wire.
+# ---------------------------------------------------------------------------
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Coerce ``value`` to a timezone-aware UTC datetime.
+
+    Naive inputs are labeled UTC without shifting the wall clock; aware
+    inputs in any other zone are converted to UTC. Aware UTC inputs are
+    returned unchanged.
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _to_iso_utc_offset(value: datetime) -> str:
+    """Serialize a datetime as RFC 3339 with explicit ``+00:00`` offset.
+
+    Python's ``datetime.isoformat()`` emits ``+00:00`` for an aware UTC
+    datetime; pydantic's default JSON serializer emits ``Z`` instead.
+    Both are RFC 3339-valid, but Curator standardized on the ``+00:00``
+    form (see v2.0.0-rc2 CHANGELOG entry).
+    """
+    return value.isoformat()
+
+
+UTCDatetime = Annotated[
+    datetime,
+    AfterValidator(_as_utc),
+    PlainSerializer(_to_iso_utc_offset, return_type=str, when_used="json"),
+]
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
@@ -126,7 +170,7 @@ class SourceInfo(BaseModel):
             "in the index."
         ),
     )
-    created_at: datetime = Field(
+    created_at: UTCDatetime = Field(
         ..., description="When this source was first registered.",
     )
 
@@ -135,7 +179,7 @@ class AuditEvent(BaseModel):
     """One row in the response from query_audit_log."""
 
     audit_id: int = Field(..., description="Unique identifier for this audit event.")
-    occurred_at: datetime = Field(..., description="When this event was logged (UTC).")
+    occurred_at: UTCDatetime = Field(..., description="When this event was logged (UTC).")
     actor: str = Field(
         ...,
         description=(
@@ -178,7 +222,7 @@ class FileSummary(BaseModel):
         ..., description="Path within the source (NOT necessarily a local filesystem path).",
     )
     size: int = Field(..., description="File size in bytes.")
-    mtime: datetime = Field(..., description="Last-modified time of the file.")
+    mtime: UTCDatetime = Field(..., description="Last-modified time of the file.")
     xxhash3_128: str | None = Field(
         None,
         description=(
@@ -293,7 +337,7 @@ class TrashedFile(BaseModel):
     file_hash: str | None = Field(
         None, description="xxh3_128 of the file at trash time, if known.",
     )
-    trashed_at: datetime = Field(..., description="When the trash operation occurred.")
+    trashed_at: UTCDatetime = Field(..., description="When the trash operation occurred.")
     trashed_by: str = Field(
         ...,
         description=(
@@ -319,8 +363,8 @@ class MigrationJobInfo(BaseModel):
             "'completed', 'failed', 'cancelled'."
         ),
     )
-    started_at: datetime | None = None
-    completed_at: datetime | None = None
+    started_at: UTCDatetime | None = None
+    completed_at: UTCDatetime | None = None
     files_total: int = Field(..., description="Number of files planned for migration.")
     files_copied: int = Field(..., description="Number of files successfully migrated.")
     files_skipped: int = Field(..., description="Number of files skipped (already at dst, etc.).")

@@ -2,7 +2,7 @@
 
 This file is read automatically by Claude Code at session start. It encodes the project conventions Claude must respect without being re-asked every session.
 
-**Owner:** Jake Leese · **Updated:** 2026-05-13 (post-Round 5 complete — Lesson #106 retrospective)
+**Owner:** Jake Leese · **Updated:** 2026-05-13 (v2.0.0-rc2 — first RC soak bugfix, Lesson #107 captured)
 
 ---
 
@@ -10,7 +10,7 @@ This file is read automatically by Claude Code at session start. It encodes the 
 
 - **Name:** Curator. Repo: `https://github.com/KULawHawk/Curator.git`. Local root: `C:\Users\jmlee\Desktop\AL\Curator\`.
 - **Brand context:** Curator is one pillar within **Ad Astra** (the overarching umbrella). Governance constitution at `..\Atrium\CONSTITUTION.md` (v0.3 RATIFIED 2026-05-08). Constellation map at `..\AD_ASTRA_CONSTELLATION.md`.
-- **Status: 🎯 v2.0.0-rc1 STAMPED (2026-05-13).** **214 ships total** (v1.0.0rc1 → v2.0.0-rc1, replacing v1.7.213 as HEAD). **Rounds 1–5 COMPLETE.** Round 5 final tally: Tier 1 (11 ships, v1.7.196-206) closed GUI Coverage Arc (gui/dialogs.py at 99.05%, 4,460 GUI stmts at ≥99%); Tier 2 (4 ships, v1.7.207-210) v2.0 RC1 prep — comprehensive coverage audit (99.76% Curator-wide, 0 missing lines!), release notes synthesis, constellation docs sync, README polish; Tier 3 (3 ships, v1.7.211-213) Atrium plugin coverage audit + Conclave Phase 0 readiness check (prerequisites CLEARED) + Nestegg trigger announcement. **76 of 78 source modules at 100% line + branch**. **8 multi-ship arcs closed** total. **4 real bugs surfaced & fixed by coverage work**. **Lessons through #106**. v2.0.0 stable release pending Jake's stamp ceremony in The Log after RC1 soak period. See `docs/RELEASE_NOTES_v2.0.md` for the formal narrative.
+- **Status: 🎯 v2.0.0-rc2 STAMPED (2026-05-13).** **215 ships total** (v1.0.0rc1 → v2.0.0-rc2, replacing v1.7.213 as HEAD). v2.0.0-rc2 is the first RC1 soak bugfix — MCP datetime wire-format regression broke 6 of 9 tools whenever they had data to return; fixed via a dedicated `UTCDatetime` field type. **First real bug surfaced during v2.0 RC soak — exactly the value the soak period exists to extract.** **Rounds 1–5 COMPLETE.** Round 5 final tally: Tier 1 (11 ships, v1.7.196-206) closed GUI Coverage Arc (gui/dialogs.py at 99.05%, 4,460 GUI stmts at ≥99%); Tier 2 (4 ships, v1.7.207-210) v2.0 RC1 prep — comprehensive coverage audit (99.76% Curator-wide, 0 missing lines!), release notes synthesis, constellation docs sync, README polish; Tier 3 (3 ships, v1.7.211-213) Atrium plugin coverage audit + Conclave Phase 0 readiness check (prerequisites CLEARED) + Nestegg trigger announcement. **76 of 78 source modules at 100% line + branch**. **8 multi-ship arcs closed** total. **4 real bugs surfaced & fixed by coverage work**. **Lessons through #106**. v2.0.0 stable release pending Jake's stamp ceremony in The Log after RC1 soak period. See `docs/RELEASE_NOTES_v2.0.md` for the formal narrative.
 - **Python:** 3.13.12 in `.venv`. Windows 11 only (see Doctrine principle 3 below).
 
 ---
@@ -83,7 +83,7 @@ Claude should *proactively recommend* moving work to a different tool when:
 
 ## Doctrine
 
-These are non-negotiable. Read once, apply always. Lessons #79–105 below (#96–101 captured retroactively from Round 3 implicit patterns; #102 from Round 4 v1.7.180; #103–105 captured retroactively from Round 4 mid-Tier-4 implicit patterns); check CHANGELOG for #106+.
+These are non-negotiable. Read once, apply always. Lessons #79–107 below (#96–101 captured retroactively from Round 3 implicit patterns; #102 from Round 4 v1.7.180; #103–105 captured retroactively from Round 4 mid-Tier-4 implicit patterns; #106 from Round 5 v1.7.213; #107 from v2.0.0-rc2); check CHANGELOG for #108+.
 
 ### 1. APEX PRINCIPLE — ACCURACY
 
@@ -369,6 +369,26 @@ When one Ad Astra pillar's progress unlocks work in another pillar (Curator v2.0
 - Closed/archived when trigger fires and target pillar acknowledges (mark ✅ FIRED, link to target's first ship that acted on it)
 
 **Compounds with Lesson #92 (tool routing) and Lesson #100 (surface for human decision):** trigger detection is the *machine-readable* counterpart to the *human-readable* deferred-decisions index. Both pattern explicit communication across session/tool/human boundaries.
+
+### 25. Wire-format regression invisible to line+branch coverage (Lesson #107 — v2.0.0-rc2)
+
+When a module's outputs cross a **wire boundary** with its own schema validation (MCP JSON Schema, OpenAPI, Protobuf, GraphQL, gRPC), source-level line + branch coverage on the producer module can be 100% while the **on-wire format** has an entirely separate bug that coverage instrumentation cannot see. The Python return value satisfies the producer's invariants; the JSON-dumped form does not satisfy the wire's invariants; line/branch coverage measures only the former.
+
+**Discovery in v2.0.0-rc2:** v2.0.0-rc1 shipped with `mcp/` at the headline-claimed 100% line + branch. The first interactive test pass against the running MCP server immediately surfaced 6 of 9 tools broken at the wire layer. Naive datetimes stored in SQLite were serialized as `'YYYY-MM-DD HH:MM:SS.ffffff'`, which the MCP layer's `format: date-time` validator rejects. The producer code paths were 100% covered; the wire-format contract was untested.
+
+**This is distinct from Lesson #93 and Lesson #100:**
+- #93 (coverage continuity): missing-line list moves covered→uncovered across test rewrites. Solved by comparing pre/post `--cov-report=term-missing`.
+- #107 (coverage scope): an entire **failure mode** (wire-schema rejection) that line/branch coverage was *never able to see*, because no source line corresponds to "the wire validator rejected this." A perfect coverage report from a refactor that doesn't change test scope can still leave the bug.
+- #100 (surface for human decision): the producer side of the same story — flagging without auto-fixing. #107 is about *finding* the gap; #100 is about *handling* it once found.
+
+**Why static analysis didn't catch it:** mypy sees a `datetime` field with `format: date-time` schema and doesn't model that pydantic's default serializer for naive datetime produces non-RFC-3339 output. The schema declaration and the serializer are on opposite sides of pydantic's API surface.
+
+**Rule:** when adding a module whose outputs are wire-validated (MCP tool, FastAPI endpoint, gRPC service), add at least one test per output model that:
+1. Builds the model with a realistic value (including edge cases like naive datetime where the model declares a typed datetime).
+2. JSON-dumps it via the model's `.model_dump_json()` (or framework equivalent).
+3. Asserts the dumped form against the **wire schema's regex/format constraint**, not just against the Python value's invariants.
+
+**How to apply in Curator:** any future MCP tool that returns a model with a `format`-constrained field gets a `TestXxxWireFormat` test class alongside its `TestXxx` class. `TestUTCDatetimeFieldType` in `tests/unit/mcp/test_tools.py` is the canonical pattern. Equivalent should be added when shipping new HTTP/REST surface (Phase Gamma's `fastapi` work, when it lights up).
 
 ---
 

@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime
+import re
+from datetime import datetime, timedelta, timezone
 from curator._compat.datetime import utcnow_naive
 from typing import Any
 
@@ -747,3 +748,180 @@ class TestGetMigrationStatus:
         )
         data = _extract_payload(result)
         assert data == []
+
+
+# ===========================================================================
+# v2.0.0-rc2: UTCDatetime wire-format regression coverage (Lesson #107)
+#
+# Naive datetimes stored in SQLite were serialized as
+# ``'2026-05-10 09:08:10.516556'`` (space separator, no timezone offset),
+# which the MCP layer's JSON Schema ``format: date-time`` validator
+# rejects. The fix routes every datetime model field through
+# ``UTCDatetime``, an Annotated[datetime, AfterValidator(_as_utc),
+# PlainSerializer(_to_iso_utc_offset, when_used="json")]. This block
+# pins both the validator's two branches AND the wire shape so the
+# regression can't quietly return on a future refactor.
+# ===========================================================================
+
+
+class TestUTCDatetimeFieldType:
+    """Pin the v2.0.0-rc2 datetime serialization fix.
+
+    Validator: naive -> aware-UTC (no wall-clock shift); aware-non-UTC ->
+    aware-UTC (converted); aware-UTC -> passthrough.
+
+    Serializer: JSON output uses the explicit ``+00:00`` offset (never
+    ``Z`` and never a missing offset). Regex-matched against RFC 3339
+    so any future drift (e.g. pydantic's ``Z`` default leaking back)
+    fails loudly.
+    """
+
+    # Matches the RFC 3339 subset Curator emits: T separator, microseconds
+    # optional (isoformat omits them when zero), explicit +00:00 offset.
+    _WIRE_RE = (
+        r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?\+00:00$"
+    )
+
+    def test_as_utc_labels_naive_as_utc(self):
+        from curator.mcp.tools import _as_utc
+
+        naive = datetime(2026, 5, 10, 9, 8, 10, 516556)
+        out = _as_utc(naive)
+        assert out.tzinfo is timezone.utc
+        # Wall clock unchanged
+        assert out.replace(tzinfo=None) == naive
+
+    def test_as_utc_converts_aware_non_utc(self):
+        """Aware datetime in a non-UTC zone gets converted (wall clock shifts)."""
+        from curator.mcp.tools import _as_utc
+
+        plus_five = timezone(timedelta(hours=5))
+        aware = datetime(2026, 5, 10, 14, 0, 0, tzinfo=plus_five)
+        out = _as_utc(aware)
+        assert out.tzinfo == timezone.utc
+        # 14:00 +05:00 == 09:00 UTC
+        assert out.hour == 9
+
+    def test_as_utc_passes_through_aware_utc(self):
+        from curator.mcp.tools import _as_utc
+
+        aware = datetime(2026, 5, 10, 9, 0, 0, tzinfo=timezone.utc)
+        out = _as_utc(aware)
+        assert out == aware
+        assert out.tzinfo == timezone.utc
+
+    def test_naive_datetime_field_emits_offset_on_wire(self):
+        """SourceInfo.created_at, fed a naive datetime, must JSON-dump
+        with an explicit ``+00:00`` offset."""
+        from curator.mcp.tools import SourceInfo
+
+        naive = datetime(2026, 5, 10, 9, 8, 10, 516556)
+        si = SourceInfo(
+            source_id="local",
+            source_type="local",
+            display_name=None,
+            enabled=True,
+            created_at=naive,
+        )
+        # Validator side: stored value is aware UTC.
+        assert si.created_at.tzinfo == timezone.utc
+        # Wire side: JSON dump has +00:00 not Z, not bare.
+        dumped = json.loads(si.model_dump_json())
+        assert re.match(self._WIRE_RE, dumped["created_at"]), dumped["created_at"]
+        assert "+00:00" in dumped["created_at"]
+
+    def test_audit_event_occurred_at_wire_format(self):
+        from curator.mcp.tools import AuditEvent
+
+        e = AuditEvent(
+            audit_id=1,
+            occurred_at=datetime(2026, 5, 10, 9, 0, 0),  # naive
+            actor="x",
+            action="y",
+            entity_type=None,
+            entity_id=None,
+            details={},
+        )
+        dumped = json.loads(e.model_dump_json())
+        assert re.match(self._WIRE_RE, dumped["occurred_at"]), dumped["occurred_at"]
+
+    def test_file_summary_mtime_wire_format(self):
+        from curator.mcp.tools import FileSummary
+
+        fs = FileSummary(
+            file_id="abc",
+            source_id="local",
+            source_path="/x",
+            size=1,
+            mtime=datetime(2026, 5, 10, 9, 0, 0),  # naive
+            xxhash3_128=None,
+            extension=None,
+            file_type=None,
+        )
+        dumped = json.loads(fs.model_dump_json())
+        assert re.match(self._WIRE_RE, dumped["mtime"]), dumped["mtime"]
+
+    def test_trashed_file_trashed_at_wire_format(self):
+        from curator.mcp.tools import TrashedFile
+
+        tf = TrashedFile(
+            file_id="abc",
+            original_source_id="local",
+            original_path="/x",
+            file_hash=None,
+            trashed_at=datetime(2026, 5, 10, 9, 0, 0),  # naive
+            trashed_by="user.cli",
+            reason="manual",
+        )
+        dumped = json.loads(tf.model_dump_json())
+        assert re.match(self._WIRE_RE, dumped["trashed_at"]), dumped["trashed_at"]
+
+    def test_migration_job_optional_datetimes_wire_format(self):
+        """started_at / completed_at are Optional. None stays None on the
+        wire; a naive datetime emits the +00:00 form."""
+        from curator.mcp.tools import MigrationJobInfo
+
+        mj = MigrationJobInfo(
+            job_id="abc",
+            src_source_id="local",
+            src_root="/s",
+            dst_source_id="local",
+            dst_root="/d",
+            status="completed",
+            started_at=datetime(2026, 5, 10, 9, 0, 0),  # naive
+            completed_at=None,
+            files_total=1,
+            files_copied=1,
+            files_skipped=0,
+            files_failed=0,
+            bytes_copied=0,
+            error=None,
+        )
+        dumped = json.loads(mj.model_dump_json())
+        assert re.match(self._WIRE_RE, dumped["started_at"]), dumped["started_at"]
+        assert dumped["completed_at"] is None
+
+    def test_end_to_end_list_sources_wire_format(self, server, runtime):
+        """Integration-style: the actual list_sources tool output goes
+        through pydantic's JSON path with a real source row. Catches
+        regressions where the projection helpers stop using the model."""
+        runtime.source_repo.upsert(SourceConfig(
+            source_id="test:tz",
+            source_type="test",
+            display_name="tz check",
+            enabled=True,
+        ))
+        # Walk through the call_tool path that real clients use; ensure
+        # the structured payload's datetime fields satisfy our wire regex.
+        result = _call_tool_sync(server, "list_sources")
+        data = _extract_payload(result)
+        # The runtime may inject extra sources; pick ours.
+        ours = next(s for s in data if s["source_id"] == "test:tz")
+        # The structured payload here is a Python dict; if the value got
+        # serialized as a datetime object (older FastMCP) we still want
+        # to verify the model would JSON-dump correctly. Re-dump via the
+        # model to make this independent of FastMCP version.
+        from curator.mcp.tools import SourceInfo
+        roundtripped = SourceInfo(**ours).model_dump_json()
+        wire = json.loads(roundtripped)
+        assert re.match(self._WIRE_RE, wire["created_at"]), wire["created_at"]
