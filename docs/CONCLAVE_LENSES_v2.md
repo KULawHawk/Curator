@@ -1,6 +1,7 @@
 # Conclave Lens Roster v2 — Expanded with 2025-2026 State of the Art
 
-**Status:** v0.3 — RATIFIED 2026-05-14 by Jake Leese (chat reply "yes" to the v0.3 amendment proposal at `Conclave/docs/proposals/LENSES_v2_v03_PROPOSED_AMENDMENT.md`).
+**Status:** v0.4 — RATIFIED 2026-05-24 by Jake Leese (chat reply "a" to the v0.4
+amendment proposal at `Conclave/docs/proposals/LENSES_v2_v04_PROPOSED_AMENDMENT.md`).
 **Date:** 2026-05-08 (v0.2); 2026-05-14 (v0.3 amendment)
 **Authority:** Subordinate to `Atrium/CONSTITUTION.md` and `CONCLAVE_PROPOSAL.md` v0.1.
 **Knowledge cutoff disclosure:** This roster reflects my knowledge as of January 2026. Fast-moving categories (frontier VLMs, OCR APIs) need re-validation when Conclave build begins. See §4 below for the validation methodology.
@@ -11,7 +12,7 @@
 
 The original `CONCLAVE_PROPOSAL.md` v0.1 proposed 9 Lenses. Jake asked: "are those the best 9, or could we expand if each truly has a unique way of approaching sources?"
 
-The honest answer: 9 is a reasonable starting set but missing four genuinely distinct extraction approaches that have matured in 2024-2025. With those additions and one consolidation, the v2 roster is **12 Lenses**.
+The honest answer: 9 is a reasonable starting set but missing four genuinely distinct extraction approaches that have matured in 2024-2025. With those additions and one consolidation, the v2 roster is **12 Lenses**. **(The v0.3 amendment expanded to 16 entries adding LENS-14/15/16/17; the v0.4 amendment adds LENS-18 for an 18-Lens roster — see the revision log below.)**
 
 Each Lens earns its slot by the **distinctness criterion**: its failure modes must be uncorrelated with at least 80% of the other Lenses on the same content. If two Lenses fail on the same content for the same reasons, they don't add ensemble value — they're voting redundancy.
 
@@ -29,9 +30,9 @@ Lenses that fail this check get consolidated or replaced. Lenses that pass it ea
 
 ---
 
-## v2 Roster: 12 Lenses
+## v2 Roster: 18 Lenses
 
-### Extraction Lenses (11)
+### Extraction Lenses (16)
 
 #### Lens 1: PdfText — Native PDF text-layer extraction
 - **Library:** pdfplumber (jsvine/pdfplumber, MIT) [stable since 2018; mature]
@@ -108,12 +109,12 @@ Lenses that fail this check get consolidated or replaced. Lenses that pass it ea
 - **Re-validate:** Frontier of open-weight VLMs is moving fast; check current best when building. Mistral, Pixtral, InternVL3 are alternatives.
 
 #### Lens 10: MinerU — Comprehensive integrated pipeline
-- **Library:** MinerU (Shanghai AI Laboratory, opendatalab/MinerU, AGPL-3) [actively developed 2024-2025; license watch item]
+- **Library:** MinerU (Shanghai AI Laboratory, opendatalab/MinerU, custom "MinerU Open Source License" — Apache-2.0-based with commercial-use threshold + SaaS attribution clause) [actively developed 2024-2026; license-state-drift watch item — see License watch below].
 - **Method:** Comprehensive pipeline including layout detection, formula recognition, table recognition, OCR fallback, reading order, and Markdown emission. Different orchestration philosophy than Marker.
 - **Distinct because:** Different orchestration choices than Marker (e.g., dedicated formula recognizer); different failure profile.
 - **Failure mode:** Heavyweight install; AGPL-3 license requires care for commercial integration.
 - **Cost:** ~20-30s/page on GPU.
-- **License watch:** AGPL-3. Compatible with personal / open-source use; restrictive for proprietary integration.
+- **License watch:** **Surface (a) — code-repo LICENSE:** has migrated since v0.3 ratification. **Originating CL-37 incident (2026-05-08 → 2026-05-14):** MinerU re-licensed from **AGPL-3.0** (the v0.3-recorded state) to a custom **"MinerU Open Source License"** based on Apache-2.0 with additional clauses; the unannounced upstream migration is the originating incident that captured `Conclave/docs/LESSONS_LEARNED.md` CL-37 (build-time re-fetch + SHA256 + cascade-amendment protocol for source-of-authority license-state drift). **Surface-(b) — bundled-model cleanup (MinerU 3.0.0 → 3.1.0):** non-permissively-licensed bundled models were explicitly removed — `doclayoutyolo` + `mfd_yolov8` (AGPL-3.0) + `layoutreader` (CC-BY-NC-SA). Live bundled-model set is now permissively licensed (PDF-Extract-Kit layout / UniMERNet formula / table-recognition / OCR-fallback / reading-order — see `Conclave/docs/SPEC_LENS_10_MinerU.md` §4 for the per-component bundle-composition fingerprint baseline). This is the originating instance of the surface-(b)-cleanliness-by-composition pattern captured as `Conclave/docs/LESSONS_LEARNED.md` CL-72. **Surface (d) — commercial-use / field-of-use:** the custom license adds a **100M-MAU OR $20M-monthly-revenue threshold** above which a commercial agreement is required, AND a **SaaS attribution clause**; both are surface-(d) restrictions a code-LICENSE-only re-fetch would miss (CL-64 four-surface refinement). **Subprocess isolation per CL-35 remains binding as precautionary insurance** even though the live surface (a) no longer compels copyleft-axis isolation — the bundle composition can re-migrate at any future release, and a process boundary is cheap insurance against that re-migration (CL-72 surface-(b)-cleanliness-by-composition precautionary-binding corollary). Build-chat MUST re-fetch all four surfaces + verify bundle-composition fingerprint + record commercial-eligibility status at install time per the canonical LENS-10 spec §4.
 - **Re-validate:** Active development; current version matters. Verify license at build time.
 - **Note:** Could be alternative to Marker rather than addition. Decision OQ-9 (new): include both for ensemble diversity, OR pick one to reduce overhead?
 
@@ -164,6 +165,16 @@ Lenses that fail this check get consolidated or replaced. Lenses that pass it ea
 - **License watch:** MIT for both candidates. Clean.
 - **Re-validate:** Math-OCR is a fast-moving field; check newer transformer models (Texify by VikParuchuri, Nougat-math, Donut-math fine-tunes).
 - **Source-corpus implication:** v1.0 release-gate test corpus MUST include math-heavy content — regression equations in validity studies, scoring formulas, conversion algorithms with formal notation, statistical appendices, decision-rule equations. See `TEST_CORPUS_AUDIT_2026-05-14.md` (WC-005, pending).
+
+#### Lens 18: Docling — Modular document conversion (4th comprehensive extractor)
+- **Library:** Docling (docling-project/docling, MIT) PRIMARY — IBM Research + LF AI & Data Foundation governance, 2024-2026 active. Default-pipeline bundled models: Heron (Apache-2, RT-DETR v2 layout) + TableFormer (Apache-2 / CDLA-Permissive-2.0, tables) + EasyOCR (Apache-2, CRAFT+CRNN OCR). Opt-in end-to-end VLM: GraniteDocling-258M (Apache-2, IBM Granite). Opt-in enrichments: CodeFormulaV2 (CDLA-Permissive-2.0, formula→LaTeX) + DocumentFigureClassifier-v2.5 (MIT, figure classification).
+- **Method:** Pluggable multi-stage PDF-to-`DoclingDocument` conversion pipeline. Default mode runs layout → OCR (when text layer absent) → table recognition → formula → figure classification, emitting a unified `DoclingDocument` block-tree with per-component provenance hints (which sub-component produced which block). Optional `docling_vlm_mode=True` switches to end-to-end GraniteDocling-258M inference; the LENS-18 spec §4 CL-70/CL-71 anti-hallucination triad binds (grounding-prompt + honest per-`Element` `self_confidence` + mandatory downstream LENS-12 grounding). Invoked in-process as a Python library (CL-35 subprocess discipline N/A per CL-67 — pure-MIT code + permissively-licensed bundled models, no copyleft-propagation axis).
+- **Distinct because:** **Fourth comprehensive extractor admitted on the architectural-diversity-as-primary-CL-3-axis rationale (OQ-9 REOPENED 2026-05-20).** Conclave Doctrine v1.4 §2 CL-3 codifies that architectural diversity — different orchestration philosophies producing uncorrelated failure modes — is the load-bearing distinctness criterion; license-family diversity is desirable secondary resilience but is NOT itself a CL-3 axis. Three comprehensive extractors with orthogonal `method_family`-named WHATs vote in parallel on the same comprehensive-extraction class: LENS-05 `pdf_to_markdown_pipeline` (Markdown stream) + LENS-10 `comprehensive_pipeline_alternative` (Markdown-with-embedded-LaTeX-and-structured-tables) + LENS-18 `modular_document_conversion` (`DoclingDocument`-with-per-component-provenance). Their emitted outputs are structurally distinct; their failure modes are uncorrelated; agreement across the three is meaningful CL-3 evidence. Per-component `Element.structured["docling_provenance"]` exposes which sub-component (layout / OCR / table / figure / formula / VLM) produced each Element — visibility no other Lens carries.
+- **Failure mode:** Modular-pipeline-class for CL-30 purposes (NOT single-model end-to-end) — per-component failure isolation: layout-stage degradation, OCR-fallback firing on missing text layer, TableFormer low-confidence on degraded tables, opt-in VLM mode generative-text fabrication risk (mitigated by the §4 triad). Returns degraded-mode (CL-30 + CL-36 per-condition `decision_trace`) on insufficient VRAM, sub-300-DPI rasterization, or per-page-timeout breach. GPU strongly recommended; CPU fallback is opt-in and very slow.
+- **Cost:** Free; local compute. **Default mode:** ~5-10 s/page on GPU (~6 GB VRAM minimum for bundled-model set). **VLM mode:** ~15-25 s/page on GPU (~12 GB VRAM minimum for GraniteDocling-258M). Bundled-model one-time download is ~5 GB combined.
+- **License watch:** **All four CL-64 surfaces clean** at 2026-05-19 Phase 1.A re-verification: (a) code-repo LICENSE — pure MIT; (b) model-weights — Apache-2 throughout the default pipeline + opt-in VLM, CDLA-Permissive-2.0 on the opt-in CodeFormulaV2 weights (unconventional applied-to-weights, functionally permissive; recorded as literal SPDX `"CDLA-Permissive-2.0"` per LENS-18 spec §4.2); (c) transitive / system-dependency — no GPL/AGPL in the default pipeline; (d) commercial-use / field-of-use — none. **Foundation governance** (IBM Research + LF AI & Data Foundation) means surface-(a) re-licensing requires multi-party review (LF policy + IBM contributor governance) — a forward-looking *prior-on-drift-cadence* annotation; NOT a CL-37 protocol relaxation. CL-37 build-time re-fetch + SHA256 + bundle-composition fingerprint per CL-72 binds regardless. Three Phase 1.A non-blocking awareness items (recorded per CL-67): CDLA-Permissive-2.0 applied to model weights is unusual; Heron's training-data lineage (DocLayNetV2 + Workshop2013) is not in the HuggingFace YAML — recorded as informational provenance, not a fifth verification surface unless Jake later authorizes; GraniteDocling-258M "Responsible Use and Limitations" is non-binding guidance under Apache-2.0 § 4(b), watched for clause-promotion drift.
+- **Re-validate:** Active development; foundation-stewarded reduces drift cadence vs vendor-stewarded (but does not eliminate it); build-chat re-fetches all four surfaces + verifies bundle-composition fingerprint per CL-72 at install time. Current Docling version at Phase 1.A time: v2.94.0 (PyPI 2026-05-18).
+- **Source-corpus implication:** v1.0 release-gate test corpus references the existing LENS-05 + LENS-10 rows as proximate-precedent until queue #22 absorbs LENS-18-specific rows into `TEST_CORPUS_SURVEY.md` §4.0 + `TEST_CORPUS_TAXONOMY.md` Part 2 §D + `TEST_HARNESS_BENCHMARK_DESIGN.md` §2.2.
 
 ### Verification Lens (1)
 
@@ -234,6 +245,8 @@ Honest exclusions, with reasoning:
 In addition to OQ-1 through OQ-8 in CONCLAVE_PROPOSAL.md §9:
 
 - **OQ-9.** Marker vs MinerU as primary "comprehensive PDF-to-Markdown" Lens — include both for diversity, OR pick one? (**RESOLVED 2026-05-14 (v0.3):** ADDITION — both included. Jake's anchor is "overbuilt by intent"; functional redundancy is intentional belt-and-suspenders per the licensing-backup rationale he articulated (GOT-OCR Apache-2 is the cleanest license-failure-mode backup for Marker GPL-3, even though functionally weaker). The 17-Lens roster locks no-drops + per-Lens toggle.)
+
+  **REOPENED 2026-05-20 → RESOLVED 2026-05-20 (v0.4): ADDITION** — Jake REOPENED OQ-9 with a substantive new rationale (`Conclave/docs/CONCLAVE_DOCTRINE.md` v1.4 §2 CL-3 Pattern, PR #82 merged 2026-05-20): *architectural diversity — orthogonal `method_family`-bearing emitted outputs producing uncorrelated failure modes — is the LOAD-BEARING CL-3 distinctness criterion; license-family diversity is desirable secondary resilience but is NOT itself a CL-3 axis.* Under that rationale the question "is Docling a 4th meaningful comprehensive-extractor candidate?" turns on architectural diversity, not on license-family diversity. Phase 1.A four-surface license re-verification (2026-05-19, full provenance in user-memory `conclave_phase_1a_brief.md`) verified Docling is strictly permissive across all four CL-64 surfaces. The architectural axis is decisive: LENS-05 emits Markdown, LENS-10 emits Markdown-with-embedded-LaTeX, LENS-18 Docling emits `DoclingDocument`-with-per-component-provenance — three structurally distinct outputs voting in parallel, agreement across the three is meaningful CL-3 evidence, ensemble accuracy benefits. **The three-license-family portfolio** (LENS-05 GPL-3-with-commercial-exception + LENS-10 custom-Apache-2-based-with-bundled-permissive-models + LENS-18 pure-MIT-with-Apache-2-bundled-models) is a strong secondary resilience asset, but is NOT the CL-3 admission criterion. LENS-18 admitted as the 4th comprehensive extractor. See §Lens 18 above.
 - **OQ-10.** Validation Lens (ColPaliVerify) vote weight semantics — should "not grounded" reduce other Lenses' weight, or just flag for review? (Recommendation: flag for review; reducing weights gets complicated fast.)
 - **OQ-11.** Lens version pinning policy — pin to specific versions for reproducibility, or allow auto-update for accuracy improvements? (Recommendation: pin to tested versions; bump per-Lens version requires re-running the validation suite.)
 - **OQ-12.** Ground-truth assessment for benchmarking — which assessment serves as the canonical "we know what extraction looks like" reference? (Recommendation: use Jake's already-indexed RCS Vol. 1 since it has the most curation history.)
@@ -256,6 +269,27 @@ The roster should be reviewed:
 ## Revision log
 
 * **2026-05-14 v0.2 → v0.3** — Adds four new Lens entries (LENS-14 HtrLens, LENS-15 FormFieldLens, LENS-16 HierarchyLens, LENS-17 FormulaLens), expands configurable subset presets (introduces "Forensic" 12-Lens preset and "Comprehensive" 17-Lens preset), surfaces OQ-23 (ReviewConsole LensControl cascade) + OQ-24 (HtrLens library choice) + OQ-25 (HierarchyLens library choice). Resolves OQ-9 (MinerU as alternative or addition?) as ADDITION per Jake's "overbuilt" anchor. Proposed in `Conclave/docs/proposals/LENSES_v2_v03_PROPOSED_AMENDMENT.md` v0.1 under WC-004 (2026-05-14 evening). Ratified by chat reply "yes". Frozen import at `Conclave/docs/imports/CONCLAVE_LENSES_v2.md` synced per `Conclave/docs/imports/IMPORTS_LOG.md` procedure same-day under Conclave WC-006.
+* **2026-05-24 v0.3 → v0.4** — Adds §Lens 18 Docling (modular document
+  conversion, IBM Research + LF AI & Data Foundation governance, pure MIT
+  code + Apache-2 bundled models + opt-in GraniteDocling-258M VLM) as the
+  **4th comprehensive extractor** on the architectural-diversity-as-primary-
+  CL-3-axis rationale (OQ-9 REOPENED 2026-05-20 → RESOLVED 2026-05-20
+  ADDITION per `Conclave/docs/CONCLAVE_DOCTRINE.md` v1.4 §2 CL-3 Pattern,
+  PR #82). Updates §Lens 10 MinerU License watch to record the AGPL-3 →
+  custom-Apache-2-based migration history (the originating CL-37 incident,
+  2026-05-08 → 2026-05-14) + the MinerU 3.0.0 → 3.1.0 bundle-composition
+  cleanup (the originating CL-72 instance — surface-(b)-cleanliness-by-
+  composition) + the live custom-license commercial-use threshold (100M
+  MAU / $20M monthly revenue) + SaaS attribution clause (CL-64 surface-(d)
+  restrictions). Resolves OQ-9 reopening (paragraph appended to existing
+  OQ-9 entry, point-in-time preserving the v0.3 ADDITION resolution per
+  CL-57). Mechanical reconcile of v0.3 staleness: `## v2 Roster:` header
+  `12` → `18`; `### Extraction Lenses (11)` → `(16)`; "Why this addendum
+  exists" prose carries an appended pointer to this revision log. Proposed
+  in `Conclave/docs/proposals/LENSES_v2_v04_PROPOSED_AMENDMENT.md` v0.1.
+  Ratified by chat reply "a". Frozen import at `Conclave/docs/imports/
+  CONCLAVE_LENSES_v2.md` synced per `Conclave/docs/imports/IMPORTS_LOG.md`
+  procedure as a follow-on Conclave-side commit (queue #21).
 
 ---
 
