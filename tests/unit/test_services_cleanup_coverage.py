@@ -184,7 +184,10 @@ class TestFindBrokenSymlinks:
         def _exists(self, *, follow_symlinks=True):
             if self == fake_link:
                 return False
-            return original_exists(self, follow_symlinks=follow_symlinks)
+            # Path.exists() gained ``follow_symlinks`` in 3.12; 3.11 rejects the kwarg.
+            if sys.version_info >= (3, 12):
+                return original_exists(self, follow_symlinks=follow_symlinks)
+            return original_exists(self)
 
         monkeypatch.setattr(Path, "exists", _exists)
 
