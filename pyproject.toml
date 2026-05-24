@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "curator"
-version = "2.0.0rc2"
+version = "2.0.0rc3"
 description = "Content-aware artifact intelligence layer for files"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -154,6 +154,19 @@ curator = ["py.typed", "storage/schema_v1.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# v2.0.0-rc3: put the repo root on sys.path so the shared-stub import idiom
+# ``from tests.unit.test_migration_plan_apply import (...)`` resolves under
+# **bare** ``pytest`` invocation, not just ``python -m pytest``.
+#
+# Why this matters: ``python -m pytest`` adds CWD to sys.path automatically
+# (Python's -m semantics). Bare ``pytest`` does not. CI (.github/workflows/
+# test.yml) invokes bare ``pytest`` from the repo root; without this entry,
+# 10 test modules that re-export stubs from test_migration_plan_apply.py
+# (per CLAUDE.md §"Stub patterns (Lesson #84)") fail at collection with
+# ``ModuleNotFoundError: No module named 'tests'``. Local TDD via
+# ``python -m pytest`` masked the gap from v1.7.213 through v2.0.0-rc2.
+# Lesson #108 captures the full divergence story.
+pythonpath = ["."]
 # asyncio_mode is omitted until pytest-asyncio is installed and we have
 # async tests (Phase Beta). It currently emits a PytestConfigWarning.
 # Default invocation skips:

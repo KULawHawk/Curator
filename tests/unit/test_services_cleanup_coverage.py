@@ -6,6 +6,7 @@ Targets the 50 uncovered lines + 9 partial branches.
 from __future__ import annotations
 
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -152,7 +153,10 @@ class TestFindBrokenSymlinks:
         def _exists(self, *, follow_symlinks=True):
             if self == fake_link:
                 return False  # broken
-            return original_exists(self, follow_symlinks=follow_symlinks)
+            # Path.exists() gained ``follow_symlinks`` in 3.12; 3.11 rejects the kwarg.
+            if sys.version_info >= (3, 12):
+                return original_exists(self, follow_symlinks=follow_symlinks)
+            return original_exists(self)
 
         monkeypatch.setattr(Path, "is_symlink", _is_symlink)
         monkeypatch.setattr(Path, "exists", _exists)
@@ -180,7 +184,10 @@ class TestFindBrokenSymlinks:
         def _exists(self, *, follow_symlinks=True):
             if self == fake_link:
                 return False
-            return original_exists(self, follow_symlinks=follow_symlinks)
+            # Path.exists() gained ``follow_symlinks`` in 3.12; 3.11 rejects the kwarg.
+            if sys.version_info >= (3, 12):
+                return original_exists(self, follow_symlinks=follow_symlinks)
+            return original_exists(self)
 
         monkeypatch.setattr(Path, "exists", _exists)
 
