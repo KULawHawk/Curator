@@ -58,11 +58,36 @@ No production source touched. `pyproject.toml` and `src/curator/__init__.py` get
 
 ### Files
 
-- `pyproject.toml` — `version = "2.0.0rc3"`; **added `pythonpath = ["."]` to `[tool.pytest.ini_options]`** (the actual fix)
+- `pyproject.toml` — `version = "2.0.0rc3"`; **added `pythonpath = ["."]` to `[tool.pytest.ini_options]`** (the primary fix)
 - `src/curator/__init__.py` — `__version__ = "2.0.0rc3"`
+- `tests/unit/test_services_cleanup_coverage.py` — **Python 3.11 compatibility shim** (follow-up; see "Also fixed" below)
 - `CHANGELOG.md` — this entry
 - `docs/releases/v2.0.0-rc3.md` — release notes
 - `CLAUDE.md` — status line bumped; Lesson #108 added as Doctrine #26
+
+### Also fixed in this ship — Python 3.11 compatibility in cleanup-coverage test
+
+PR #5's first CI run validated the pythonpath fix (collection succeeded on all 3 cells, including Python 3.11) — but Python 3.11 then **surfaced a separate pre-existing bug** that had been hidden for 80+ red-CI runs: `tests/unit/test_services_cleanup_coverage.py::TestFindBrokenSymlinks::test_finds_broken_link_via_mocked_path_methods` monkeypatches `Path.exists()` with a wrapper that calls `original_exists(self, follow_symlinks=follow_symlinks)`. The `follow_symlinks=` kwarg was added to `pathlib.Path.exists()` in Python **3.12** ([cpython#cb19388](https://github.com/python/cpython/issues/97527)); it doesn't exist in 3.11. Result on 3.11 (after collection finally succeeded post-pythonpath-fix): `TypeError: Path.exists() got an unexpected keyword argument 'follow_symlinks'` — `INTERNALERROR` mid-suite, killing the rest of the 3.11 cell.
+
+Fix (3-line addition):
+
+```python
+def _exists(self, *, follow_symlinks=True):
+    if self == fake_link:
+        return False  # broken
+    # Path.exists() gained ``follow_symlinks`` in 3.12; 3.11 rejects the kwarg.
+    if sys.version_info >= (3, 12):
+        return original_exists(self, follow_symlinks=follow_symlinks)
+    return original_exists(self)
+```
+
+Plus `import sys` at the top of the file. No production source touched. No test logic changed — only the version-gate around the stdlib API call.
+
+**Why this bug existed:** the test was written when 3.12 was already the developer's local Python (`.venv` is currently 3.13). The wrapper mirrored the 3.12+ `Path.exists` signature without thinking about the 3.11 cell in CI. Static analysis didn't catch it because the wrapper was a local closure, not a typed override, and pytest collection-time imports don't exercise the wrapper.
+
+**Lesson family:** this is a textbook example of Lesson #108's "CI green is a separate signal from local green" rule. The bug had been live for an unknown number of ships — possibly since `test_services_cleanup_coverage.py` was first introduced (v1.7.142, per its module docstring). The 80-run CI-red window hid both the pythonpath issue AND this one. Per Doctrine #26, **future Python-version-spanning monkeypatches on stdlib APIs need an explicit `sys.version_info` gate by default** — captured as an inline note in Lesson #108's body, not a separate numbered lesson (the doctrine-grade rule is already there; this is a concrete instance).
+
+**Bundled into v2.0.0-rc3 (not split into rc4):** Jake's call per the in-PR `AskUserQuestion` decision point. Rationale: single-ship cycle gets all 3 CI cells green in one CI run, the fix is mechanically minimal (3 lines + 1 import), and splitting would burn an extra CI cycle plus an extra ship-ceremony pass for no observable benefit. The brief's "don't rewrite tests" guidance was scoped around what the pythonpath problem alone seemed to need; PR #5's first CI run added new information.
 
 ### Verification (local, pre-merge)
 
