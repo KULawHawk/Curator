@@ -2,7 +2,7 @@
 
 This file is read automatically by Claude Code at session start. It encodes the project conventions Claude must respect without being re-asked every session.
 
-**Owner:** Jake Leese · **Updated:** 2026-05-13 (v2.0.0-rc2 — first RC soak bugfix, Lesson #107 captured)
+**Owner:** Jake Leese · **Updated:** 2026-05-24 (v2.0.0-rc3 — second RC soak bugfix, Lesson #108 captured)
 
 ---
 
@@ -10,7 +10,7 @@ This file is read automatically by Claude Code at session start. It encodes the 
 
 - **Name:** Curator. Repo: `https://github.com/KULawHawk/Curator.git`. Local root: `C:\Users\jmlee\Desktop\AL\Curator\`.
 - **Brand context:** Curator is one pillar within **Ad Astra** (the overarching umbrella). Governance constitution at `..\Atrium\CONSTITUTION.md` (v0.3 RATIFIED 2026-05-08). Constellation map at `..\AD_ASTRA_CONSTELLATION.md`.
-- **Status: 🎯 v2.0.0-rc2 STAMPED (2026-05-13).** **215 ships total** (v1.0.0rc1 → v2.0.0-rc2, replacing v1.7.213 as HEAD). v2.0.0-rc2 is the first RC1 soak bugfix — MCP datetime wire-format regression broke 6 of 9 tools whenever they had data to return; fixed via a dedicated `UTCDatetime` field type. **First real bug surfaced during v2.0 RC soak — exactly the value the soak period exists to extract.** **Rounds 1–5 COMPLETE.** Round 5 final tally: Tier 1 (11 ships, v1.7.196-206) closed GUI Coverage Arc (gui/dialogs.py at 99.05%, 4,460 GUI stmts at ≥99%); Tier 2 (4 ships, v1.7.207-210) v2.0 RC1 prep — comprehensive coverage audit (99.76% Curator-wide, 0 missing lines!), release notes synthesis, constellation docs sync, README polish; Tier 3 (3 ships, v1.7.211-213) Atrium plugin coverage audit + Conclave Phase 0 readiness check (prerequisites CLEARED) + Nestegg trigger announcement. **76 of 78 source modules at 100% line + branch**. **8 multi-ship arcs closed** total. **4 real bugs surfaced & fixed by coverage work**. **Lessons through #106**. v2.0.0 stable release pending Jake's stamp ceremony in The Log after RC1 soak period. See `docs/RELEASE_NOTES_v2.0.md` for the formal narrative.
+- **Status: 🎯 v2.0.0-rc3 STAMPED (2026-05-24).** **216 ships total** (v1.0.0rc1 → v2.0.0-rc3, replacing v2.0.0-rc2 as HEAD). v2.0.0-rc3 is the **second RC soak bugfix** — `pytest`-bare CI invocation diverged from `python -m pytest` local-TDD invocation, causing `ModuleNotFoundError: No module named 'tests'` at collection time on every `main` push for 80+ runs since 2026-05-13. Fix is a one-line `pythonpath = ["."]` in `[tool.pytest.ini_options]`. **CI green is a separate signal from local green** — the entire v2.0 RC arc shipped on red CI without anyone noticing; the apex-accuracy headline numbers (`99.76% line + branch`, `0 missing lines`, `3,349 tests passing`) were measured locally only. Meta-process gap surfaced to Jake per Lesson #100: candidate doctrine amendment (CI-green-before-next-ship in 14-step Ship Workflow) queued for The Log decision. **Rounds 1–5 COMPLETE.** Round 5 final tally: Tier 1 (11 ships, v1.7.196-206) closed GUI Coverage Arc (gui/dialogs.py at 99.05%, 4,460 GUI stmts at ≥99%); Tier 2 (4 ships, v1.7.207-210) v2.0 RC1 prep — comprehensive coverage audit (99.76% Curator-wide, 0 missing lines!), release notes synthesis, constellation docs sync, README polish; Tier 3 (3 ships, v1.7.211-213) Atrium plugin coverage audit + Conclave Phase 0 readiness check (prerequisites CLEARED) + Nestegg trigger announcement. **76 of 78 source modules at 100% line + branch**. **8 multi-ship arcs closed** total. **4 real bugs surfaced & fixed by coverage work**. **Lessons through #108**. v2.0.0 stable release pending Jake's stamp ceremony in The Log after RC soak period — now with first **independently CI-verified** green run as soak baseline. See `docs/RELEASE_NOTES_v2.0.md` for the formal narrative.
 - **Python:** 3.13.12 in `.venv`. Windows 11 only (see Doctrine principle 3 below).
 
 ---
@@ -83,7 +83,7 @@ Claude should *proactively recommend* moving work to a different tool when:
 
 ## Doctrine
 
-These are non-negotiable. Read once, apply always. Lessons #79–107 below (#96–101 captured retroactively from Round 3 implicit patterns; #102 from Round 4 v1.7.180; #103–105 captured retroactively from Round 4 mid-Tier-4 implicit patterns; #106 from Round 5 v1.7.213; #107 from v2.0.0-rc2); check CHANGELOG for #108+.
+These are non-negotiable. Read once, apply always. Lessons #79–108 below (#96–101 captured retroactively from Round 3 implicit patterns; #102 from Round 4 v1.7.180; #103–105 captured retroactively from Round 4 mid-Tier-4 implicit patterns; #106 from Round 5 v1.7.213; #107 from v2.0.0-rc2; #108 from v2.0.0-rc3); check CHANGELOG for #109+.
 
 ### 1. APEX PRINCIPLE — ACCURACY
 
@@ -110,7 +110,7 @@ Cross-platform parity is **SUSPENDED** (documented in `docs/PLATFORM_SCOPE.md`).
 
 ### 5. Lesson capture
 
-After every ship, write down lessons in the CHANGELOG entry's "Lesson captured" section. Number sequentially. Latest is #95 (v1.7.93b — arc-closure landmark for Migration Phase Gamma). Lessons compound — read prior ones before tackling unfamiliar territory. **See Lesson Adoption Protocol at top of this file — adopting lessons is REQUIRED, not optional.**
+After every ship, write down lessons in the CHANGELOG entry's "Lesson captured" section. Number sequentially. Latest is #108 (v2.0.0-rc3 — pytest invocation divergence between local TDD and CI). Lessons compound — read prior ones before tackling unfamiliar territory. **See Lesson Adoption Protocol at top of this file — adopting lessons is REQUIRED, not optional.**
 
 ### 6. Mid-ship is not acceptable session-end state (Lesson #86)
 
@@ -389,6 +389,37 @@ When a module's outputs cross a **wire boundary** with its own schema validation
 3. Asserts the dumped form against the **wire schema's regex/format constraint**, not just against the Python value's invariants.
 
 **How to apply in Curator:** any future MCP tool that returns a model with a `format`-constrained field gets a `TestXxxWireFormat` test class alongside its `TestXxx` class. `TestUTCDatetimeFieldType` in `tests/unit/mcp/test_tools.py` is the canonical pattern. Equivalent should be added when shipping new HTTP/REST surface (Phase Gamma's `fastapi` work, when it lights up).
+
+### 26. Pytest invocation divergence between local TDD and CI (Lesson #108 — v2.0.0-rc3)
+
+`python -m pytest` and bare `pytest` are **not interchangeable**. Python's `-m` flag adds the current working directory to `sys.path` automatically; bare `pytest` invokes its own console-script entry point and does no such thing. For test suites that use **intra-`tests/` cross-module imports** (e.g. `from tests.unit.test_migration_plan_apply import StubX` — the shared-stub pattern from Lesson #84), the two invocations behave differently: `python -m pytest` works (CWD on `sys.path`, `tests` resolves as a PEP 420 namespace package); bare `pytest` fails with `ModuleNotFoundError: No module named 'tests'`.
+
+**Discovery in v2.0.0-rc3:** CI (`pytest tests/...`) had been red on `main` for **80+ consecutive pushes since at least 2026-05-13**, predating v1.7.213's stamp. Local TDD (`python -m pytest`) and the standing `CLAUDE.md` §"Running tests" examples never exercised the same invocation as CI. Apex-accuracy headline numbers (`99.76% line + branch`, `0 missing lines`, `3,349 tests passing`) for v1.7.213, v2.0.0-rc1, and v2.0.0-rc2 were all measured locally only. The bug had been live since the first `from tests.unit.X import Y` line landed (Lesson #84's stub-sharing pattern).
+
+**This is distinct from Lessons #93 and #107:**
+
+- **#93** (coverage continuity): missing-line list moves covered→uncovered when test design changes. Regression in **coverage scope**. Solved by `diff` of `--cov-report=term-missing`.
+- **#107** (coverage scope): a *failure mode* (wire-schema rejection) sits outside the source-line/branch space coverage instruments. Regression in **observed surface**. Solved by adding wire-shape regression tests.
+- **#108** (collector reach): a *test discovery* (not execution) regression sits outside any coverage measurement, because failing modules don't even reach the import line under one invocation but do under another. Solved by aligning local + CI invocation idioms.
+
+Together these three lessons describe **three orthogonal false-positive-green-light failure modes**. All three must be considered before declaring a wire-facing module — or an entire release — apex-accurate.
+
+**Why static analysis didn't catch it:** mypy/ruff don't simulate pytest's import mechanism. The shared-stub import is a syntactically and semantically valid Python statement at type-check time; it only fails when pytest discovers the test and Python's import machinery looks up `tests` against whatever `sys.path` pytest set up. Path setup happens outside the source — it's a tooling concern, not a code concern.
+
+**Rule:**
+
+1. **For any project using intra-test cross-module imports, set `pythonpath = ["."]` in `[tool.pytest.ini_options]` — full stop.** This eliminates the divergence and is documented at https://docs.pytest.org/en/stable/reference/reference.html#confval-pythonpath. Available since pytest 7.0.
+2. **`python -m pytest` vs bare `pytest` matters for CI parity.** If CI uses bare `pytest` (the standard install layout), local TDD docs must either also use bare `pytest`, or the config must make the two equivalent (option 1).
+3. **CI green is a separate signal from local green.** Apex-accuracy claims that depend on test execution counts should be verified against the most recent CI run, not just the local terminal.
+
+**How to apply in Curator:** the `pythonpath = ["."]` config is now in `pyproject.toml`. Future ships need not think about this again — the divergence is closed. The meta-process gap (CI-green-before-next-ship as a 14-step Ship Workflow step) is **surfaced to Jake per Lesson #100** — that doctrine amendment is Jake's call from The Log, not the executor's.
+
+**Compounds with Lessons #84, #92, #93, #100, #107:**
+
+- #84 (shared-stub pattern): the pattern this regression broke. Still the right pattern — just needs the invocation discipline to back it up.
+- #92 (tool routing): invocation discipline within a single tool is the micro-version of tool routing. Same kind of decision, different scope.
+- #100: the candidate doctrine amendment for CI-green-as-ship-gate is deferred to Jake's call. Code surfaces, Jake decides.
+- #93 and #107: same week, same shape, different layers. Three soak-period bugfixes in two weeks have surfaced three orthogonal apex-accuracy false-positive modes. The soak period is doing exactly what it's designed to do.
 
 ---
 

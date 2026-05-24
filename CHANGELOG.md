@@ -6,6 +6,147 @@ versioning where reasonable.
 
 ---
 
+## [2.0.0-rc3] — 2026-05-24 — RC soak bugfix: CI test collection regression (`ModuleNotFoundError: No module named 'tests'`)
+
+**Trimmed ceremony.** Second soak-period ship. A *CI-only* regression — invisible to every local coverage measurement that produced the v2.0 apex-accuracy headline numbers — surfaced when the v2.0.0-rc1 / rc2 stamps finally got attention. The fix is a single line of pytest config; the lessons are larger.
+
+### What this fixes
+
+**The symptom.** Every push to `main` for **80+ consecutive runs** (since at least 2026-05-13, predating v1.7.213) failed the `pytest (windows-latest / Python 3.{11,12,13})` workflow at collection time:
+
+```
+ImportError while importing test module 'D:\a\Curator\Curator\tests\unit\test_<name>.py'.
+E   ModuleNotFoundError: No module named 'tests'
+```
+
+Ten test modules failed to collect — all of them users of the **shared-stub import idiom** documented in `CLAUDE.md` §"Stub patterns (Lesson #84)":
+
+```python
+from tests.unit.test_migration_plan_apply import (
+    NOW, StubAuditRepository, StubFileRepository, ...
+)
+```
+
+Affected modules: `test_gui_main_window_part{2..5}_coverage.py`, `test_migration_autostrip.py`, `test_migration_cross_source.py`, `test_migration_dispatcher_coverage.py`, `test_migration_execution.py`, `test_migration_persistent_jobs.py`, `test_migration_persistent_progress.py`.
+
+**The root cause.** Pytest invocation divergence between local TDD and CI:
+
+| Invocation | Where used | CWD on `sys.path`? | Result |
+|---|---|---|---|
+| `python -m pytest tests/...` | Local (per CLAUDE.md §"Running tests") | **Yes** (Python's `-m` semantics) | `from tests.unit.X` resolves; `tests` is a PEP 420 namespace pkg rooted at CWD |
+| `pytest tests/ -q ...` | CI (`.github/workflows/test.yml:152`) | **No** (bare pytest does not add CWD) | `import tests` → `ModuleNotFoundError` |
+
+`tests/__init__.py` doesn't exist (only `tests/unit/__init__.py`, `tests/integration/__init__.py`, etc.). Under `python -m pytest`, CWD is on `sys.path`, so `tests` resolves as a namespace package and the imports work. Under bare `pytest`, neither CWD nor anything that would make `tests` resolvable is added. The shared-stub imports fail. Local TDD masked the gap for **the entire v2.0 RC arc**.
+
+**The fix.** One-line addition to `pyproject.toml` `[tool.pytest.ini_options]`:
+
+```toml
+pythonpath = ["."]
+```
+
+This is the canonical pytest answer for "make my source / test layout importable" — documented at https://docs.pytest.org/en/stable/reference/reference.html#confval-pythonpath, available since pytest 7.0, and Curator requires pytest ≥8.0 (`pyproject.toml` `dev` extras), so the dependency is already satisfied. The repo root joins `sys.path` for both `python -m pytest` and bare `pytest`; the invocation divergence is closed.
+
+### Why static analysis didn't catch it
+
+- Pytest collection errors don't fire mypy or ruff — they're discovered at import time.
+- The local `python -m pytest` invocation in CLAUDE.md §"Running tests" is correct; bare `pytest` in `test.yml` is also correct *given* a `pythonpath`. Neither file is wrong in isolation; the gap is in their interaction.
+- The Lesson Adoption Protocol at the top of `CLAUDE.md` asks future sessions to read recent lessons before shipping. It does not ask future sessions to verify CI is green before stamping the next ship. See "Surfaced for Jake" below.
+
+### Coverage
+
+No production source touched. `pyproject.toml` and `src/curator/__init__.py` get a version bump (`2.0.0rc2 → 2.0.0rc3`); the `__version__` constant is exercised by `health_check()`'s tests. No coverage delta vs v2.0.0-rc2.
+
+### Files
+
+- `pyproject.toml` — `version = "2.0.0rc3"`; **added `pythonpath = ["."]` to `[tool.pytest.ini_options]`** (the actual fix)
+- `src/curator/__init__.py` — `__version__ = "2.0.0rc3"`
+- `CHANGELOG.md` — this entry
+- `docs/releases/v2.0.0-rc3.md` — release notes
+- `CLAUDE.md` — status line bumped; Lesson #108 added as Doctrine #26
+
+### Verification (local, pre-merge)
+
+Bare `pytest` reproduces the CI failure on v2.0.0-rc2 HEAD:
+
+```
+$ .\.venv\Scripts\pytest.exe tests/unit/test_migration_autostrip.py --collect-only
+ImportError while importing test module ...
+E   ModuleNotFoundError: No module named 'tests'
+```
+
+After the fix, the same invocation collects all 10 previously-failing modules:
+
+```
+$ .\.venv\Scripts\pytest.exe tests/unit/test_migration_autostrip.py \
+    tests/unit/test_migration_cross_source.py \
+    tests/unit/test_migration_dispatcher_coverage.py \
+    tests/unit/test_migration_execution.py \
+    tests/unit/test_migration_persistent_jobs.py \
+    tests/unit/test_migration_persistent_progress.py \
+    tests/unit/test_gui_main_window_part{2,3,4,5}_coverage.py \
+    --collect-only -q
+... 388 tests collected in 1.54s
+```
+
+Full unit collection under bare pytest: **3364/3366 collected (2 deselected as `slow` markers)** — matches `python -m pytest` results. Full suite pass status will be confirmed by CI on the v2.0.0-rc3 PR (the actual purpose of this ship).
+
+### Surfaced for Jake — meta-process gap
+
+While diagnosing this, the GitHub Actions run history revealed something larger than a one-line config fix: **CI has been red for 80+ consecutive pushes to `main` since at least 2026-05-13.** Every ship in this window — v1.7.213, v2.0.0-rc1, v2.0.0-rc2 — stamped on red CI. The "apex-accuracy" headline numbers (`99.76% line + branch`, `0 missing lines`, `3,349 tests passing`) were all measured locally and never independently verified by CI in this window.
+
+Per Lesson #100 (surface for human decision, don't auto-amend doctrine): **this finding deserves a doctrine amendment, but the amendment is Jake's call, not the executor's.** Three candidate framings, ordered by my recommendation:
+
+1. **CI-green-before-next-ship** as a step in the 14-step Ship Workflow (between current step 12 "Push" and step 13 "Cleanup"). Cost: one CI poll per ship (~3–4 min wall, parallel to next-task setup). Benefit: this entire class of regression becomes impossible.
+2. **Periodic CI-status audit** — explicit doctrine that every Nth ship (or at every arc closure) the Code session must read `gh run list --workflow=test.yml --branch=main --limit=10` and report status before continuing. Cheaper than (1) but lets gaps accumulate.
+3. **No change** — accept that local pass + reasonable test discipline catches enough, and that CI is one signal among several.
+
+My recommendation is **option 1** (cheap, deterministic, and would have caught this exact failure on the first v1.7.213 push). But the right answer involves Jake's view of how much friction is tolerable per ship, and that decision belongs in The Log.
+
+### Lesson captured (Lesson #108 — pytest invocation divergence between local TDD and CI)
+
+`python -m pytest` and bare `pytest` are **not interchangeable**. Python's `-m` flag adds the current working directory to `sys.path` automatically; bare `pytest` invokes its own console-script entry point and does no such thing. For test suites that use **intra-`tests/` cross-module imports** (e.g. `from tests.unit.test_migration_plan_apply import StubX`) — common when sharing fixtures or stubs that can't live in `conftest.py` — the two invocations behave differently:
+
+- `python -m pytest tests/...` works: CWD is on `sys.path`, `tests` resolves as a PEP 420 namespace package even without `tests/__init__.py`.
+- `pytest tests/...` fails: nothing puts the repo root on `sys.path`, and pytest's own `rootdir` detection inserts `tests/` itself (not its parent), so `import tests` fails with `ModuleNotFoundError`.
+
+**Discovery in v2.0.0-rc3:** CHANGELOG entries from v1.7.213 onward documented apex-accuracy claims at "100% line + branch under `pytest tests/unit/`" — but the standing CLAUDE.md §"Running tests" examples all use `python -m pytest`. Local TDD therefore never exercised the same invocation as CI. The bug had been live since the first `from tests.unit.X import Y` line landed (Lesson #84's stub-sharing pattern, captured early in the migration arc). It surfaced only when someone read the CI runs.
+
+**This is distinct from Lesson #93 (coverage continuity across test rewrites) and Lesson #107 (wire-format invisible to line+branch):**
+
+- #93: missing-line list moves covered → uncovered when test design changes. Solved by `diff` of `--cov-report=term-missing`.
+- #107: a *failure mode* (wire-schema rejection) sits outside the source-line/branch space coverage instruments. Solved by adding wire-shape regression tests.
+- #108: a *test discovery* (not execution) regression sits outside any coverage measurement, because the failing modules don't even get to the import line. Solved by aligning local + CI invocation idioms.
+
+Together these three lessons describe **three orthogonal false-positive-green-light failure modes**:
+- #93 = "the new tests don't cover what the old tests did" (regression in coverage scope)
+- #107 = "the source-line coverage is complete but the wire shape is broken" (regression in observed surface)
+- #108 = "the local coverage is complete but the CI's collector can't even reach the test code" (regression in collector reach)
+
+**Why static analysis didn't catch #108:** mypy/ruff don't simulate pytest's import mechanism. The shared-stub import is a syntactically and semantically valid Python statement at type-check time; it only fails when pytest discovers the test and Python's import machinery looks up `tests` against whatever `sys.path` pytest set up. The path setup happens *outside* the source — it's a tooling concern, not a code concern.
+
+**Rule:**
+
+1. **For any project that uses intra-test cross-module imports (e.g. shared stubs / fixtures imported by path), set `pythonpath = ["."]` in `[tool.pytest.ini_options]` — full stop.** This eliminates the divergence and is documented at https://docs.pytest.org/en/stable/reference/reference.html#confval-pythonpath. Available since pytest 7.0.
+2. **The `python -m pytest` vs `pytest` distinction matters for CI parity.** If CI uses bare `pytest` (which is fine — it's the standard install layout), local TDD scripts in `CLAUDE.md`-equivalent docs must either also use bare `pytest`, or the config must make the two equivalent (option 1).
+3. **CI green is a separate signal from local green.** Apex-accuracy claims that depend on test execution counts (e.g. "3,349 tests pass") should be verified against the most recent CI run, not just the local terminal. The meta-process gap surfaced this ship is queued for Jake's doctrine call (see "Surfaced for Jake" above).
+
+**How to apply in Curator:** the `pythonpath = ["."]` config is now in. Future ships need not think about this again — the divergence is closed. The meta-lesson — *match local and CI invocation idioms, and audit CI status as part of the ship workflow* — is for Jake to fold into doctrine after evaluating the three options listed above.
+
+**Compounds with Lessons #92, #93, #100, #107:**
+
+- #92 (tool routing): part of "tool discipline" is **invocation discipline** within a single tool. Using `python -m pytest` for local TDD and bare `pytest` in CI is a routing micro-decision that has macro consequences.
+- #93: same family — "tests pass under invocation X but coverage scope under invocation Y is different." #93 was scope-of-source-coverage; #108 is scope-of-test-collection. Same shape, different layer.
+- #100: the doctrine amendment for CI-green-as-ship-gate is **explicitly deferred** to Jake's call per #100's "surface, don't auto-amend" rule.
+- #107: same week, same shape. Different layer. Three soak-period bugfixes in two weeks have surfaced three distinct apex-accuracy false-positive modes. The soak period is doing exactly what it's designed to do.
+
+### Bottom line
+
+A one-line pytest config fix closes a CI regression that has been red for 80+ consecutive pushes. The fix is uncontroversial; the meta-lesson — that apex-accuracy claims require *both* local and CI verification, and that ship workflow doctrine should enforce this — is surfaced for Jake's review per Lesson #100 / Doctrine #18.
+
+v2.0.0-rc3 advances toward v2.0.0 stable with **green CI on `main`** as the first independent confirmation that the apex-accuracy headline numbers are real on the runner, not just on the developer's machine.
+
+---
+
 ## [2.0.0-rc2] — 2026-05-13 — RC1 soak bugfix: MCP datetime wire-format regression
 
 **Trimmed ceremony.** First soak-period ship. A bug surfaced during RC1 soak by interactive testing against the running MCP server — exactly the failure mode the soak period exists to catch.
