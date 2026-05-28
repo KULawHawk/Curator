@@ -1,8 +1,7 @@
 # Conclave Lens Roster v2 — Expanded with 2025-2026 State of the Art
 
-**Status:** v0.4 — RATIFIED 2026-05-24 by Jake Leese (chat reply "a" to the v0.4
-amendment proposal at `Conclave/docs/proposals/LENSES_v2_v04_PROPOSED_AMENDMENT.md`).
-**Date:** 2026-05-08 (v0.2); 2026-05-14 (v0.3 amendment)
+**Status:** v0.5 — RATIFIED 2026-05-28 by Jake Leese (per `Conclave/docs/CONCLAVE_OVERSEER_STATE_PART3_PART12.md` §10 post-PR-#120 entry directing queue #25 cross-tree sync ceremony; underlying GD-1/2/6 dispositions ratified in Conclave PR [#120](https://github.com/KULawHawk/Conclave/pull/120) (merge `4115ffb`, 2026-05-28) per `Conclave/docs/CONCLAVE_DOCTRINE.md` v1.5 CL-77 Big-5 dominance walks).
+**Date:** 2026-05-08 (v0.2); 2026-05-14 (v0.3 amendment); 2026-05-24 (v0.4 amendment); 2026-05-28 (v0.5 amendment)
 **Authority:** Subordinate to `Atrium/CONSTITUTION.md` and `CONCLAVE_PROPOSAL.md` v0.1.
 **Knowledge cutoff disclosure:** This roster reflects my knowledge as of January 2026. Fast-moving categories (frontier VLMs, OCR APIs) need re-validation when Conclave build begins. See §4 below for the validation methodology.
 
@@ -72,7 +71,7 @@ Lenses that fail this check get consolidated or replaced. Lenses that pass it ea
 - **Distinct because:** Designed for the specific PDF→Markdown task; tuned for academic/scientific layouts.
 - **Failure mode:** Heavily scanned-only docs; non-Latin scripts.
 - **Cost:** ~10-15s/page on GPU. Free.
-- **License watch:** GPL-3 with commercial exception — read terms before commercial deployment.
+- **License watch:** GPL-3 with commercial exception. **GD-2 RESOLVED 2026-05-28 per `Conclave/docs/CONCLAVE_DOCTRINE.md` v1.5 CL-77 Big-5 dominance walk — A LOCKED (accept outright; CL-15 + CL-35 subprocess-isolation pattern retained as precautionary insurance per CL-72 surface-(b)-cleanliness-by-composition corollary).** Big-5 dominance walk (+/=/−) per CL-77 binding governance: **A (accept; subprocess retained)** = / = / = / = / + — CLI is most-stable contract surface; subprocess pattern adds a Big-5-additive resilience tie-breaker. **B (drop Marker, recover via GotOcrUnified)** = / − / = / = / = — collapses the 4-comprehensive-extractor architectural-diversity portfolio per `Conclave/docs/CONCLAVE_DOCTRINE.md` v1.4 §2 CL-3 (architectural diversity is the load-bearing CL-3 axis). **C (re-implement)** − / − / = / = / =. A dominates B + C. Conclave's non-commercial / research / academic deployment scope per CL-77 makes GPL-3-with-commercial-exception fully compatible. Disposition stamped into `Conclave/docs/SPEC_LENS_05_MarkerPdf.md` §4 LICENSE WATCH by PR #120 (`4115ffb`). Full walks in PR #120 description.
 - **Re-validate:** Frequent updates; check current version.
 
 #### Lens 6: NougatScience — Scientific paper specialist
@@ -81,6 +80,7 @@ Lenses that fail this check get consolidated or replaced. Lenses that pass it ea
 - **Distinct because:** Equation-aware (preserves LaTeX). Preserves academic-paper structure (abstracts, citations, figure references).
 - **Failure mode:** Non-academic content; modern non-arXiv layouts.
 - **Cost:** ~10-20s/page on GPU. Free.
+- **License watch:** Code-repo MIT (HuggingFace `facebook/nougat-base`); **model weights CC-BY-NC-4.0** (non-commercial). **GD-1 RESOLVED 2026-05-28 per `Conclave/docs/CONCLAVE_DOCTRINE.md` v1.5 CL-77 Big-5 dominance walk — A LOCKED (accept; CC-BY-NC weights compatible with Conclave's non-commercial / research / academic deployment scope per CL-77 binding governance).** Big-5 dominance walk (+/=/−) per CL-77: **A (accept)** = / = / = / = / = — preserves arXiv-trained distinctness, the load-bearing distinctness criterion for LENS-06. **B (force re-run on alternative weights/model)** ? / ? / ? / ? / − — forces re-train / re-run + loses arXiv-trained distinctness. **C (drop Nougat)** − / − / − / = / = — loses the scientific-paper specialist and weakens the academic-content extraction capability. A dominates B + C. CL-37 build-time re-fetch + SHA256 protocol applies. Disposition stamped into `Conclave/docs/SPEC_LENS_06_NougatScience.md` §4 LICENSE WATCH by PR #120 (`4115ffb`). Full walks in PR #120 description.
 - **Re-validate:** Lower priority — well-established.
 
 #### Lens 7: TableSurgeon — Table specialist (combined approach)
@@ -106,6 +106,7 @@ Lenses that fail this check get consolidated or replaced. Lenses that pass it ea
 - **Distinct because:** Provides redundancy AND offline-capability (per Constitution Aim 3 self-sufficiency). When VisionLocal and VisionClaude agree, very high confidence.
 - **Failure mode:** Lower accuracy ceiling than frontier APIs.
 - **Cost:** Free; ~15-30s/page on GPU (8-16GB VRAM).
+- **License watch:** **PRIMARY** Qwen2-VL-7B (Apache-2) — clean across all four CL-64 surfaces. **FALLBACK** Llama-3.2-Vision-11B (Meta custom commercial-use-restricted license — `LLAMA 3.2 COMMUNITY LICENSE AGREEMENT`). **GD-6 RESOLVED 2026-05-28 per `Conclave/docs/CONCLAVE_DOCTRINE.md` v1.5 CL-77 Big-5 dominance walk — A LOCKED (accept opt-in FALLBACK path; Meta-custom-commercial-use-restricted compatible with Conclave's non-commercial / research / academic deployment scope per CL-77 binding governance).** Big-5 dominance walk (+/=/−) per CL-77: **A (accept opt-in FALLBACK)**, **B (drop FALLBACK; primary-only)**, and **C (replace with alternative open-weight VLM)** are Big-5-tied at the in-scope non-commercial-deployment ceiling; tie-breaker preserves the existing spec text + the CL-71 worked example (multi-model FALLBACK architecture-rotation pattern). A+ amendment (formalizing the opt-in invocation gate language in LENS-09 spec) DEFERRED to queue #24 Doctrine soak. Build-chat MUST re-fetch the Meta license at install time + record commercial-eligibility status per CL-37. Disposition stamped into `Conclave/docs/SPEC_LENS_09_VisionLocal.md` §4 LICENSE WATCH by PR #120 (`4115ffb`). Full walks in PR #120 description.
 - **Re-validate:** Frontier of open-weight VLMs is moving fast; check current best when building. Mistral, Pixtral, InternVL3 are alternatives.
 
 #### Lens 10: MinerU — Comprehensive integrated pipeline
@@ -290,6 +291,68 @@ The roster should be reviewed:
   Ratified by chat reply "a". Frozen import at `Conclave/docs/imports/
   CONCLAVE_LENSES_v2.md` synced per `Conclave/docs/imports/IMPORTS_LOG.md`
   procedure as a follow-on Conclave-side commit (queue #21).
+* **2026-05-28 v0.4 → v0.5** — Stamps the GD-1 / GD-2 / GD-6 license-decision
+  dispositions ratified in Conclave PR
+  [#120](https://github.com/KULawHawk/Conclave/pull/120) (merge `4115ffb`,
+  Phase I → II unpause ceremony, 2026-05-28) into the source-of-authority
+  Lens roster per `Conclave/docs/COORDINATION_ANNEX.md` §2 cross-tree sync
+  ceremony (Conclave-side Architect's Brief queue #25). The underlying
+  dispositions are products of `Conclave/docs/CONCLAVE_DOCTRINE.md` v1.5
+  CL-77 binding governance: license picks evaluate against the Big 5 —
+  accuracy, comprehensiveness, fidelity, validity, reliability — in that
+  order; no Big-5 regression is acceptable; other considerations
+  (overengineering, license hygiene, audit clarity) are tie-breakers,
+  never overrides; Conclave's deployment scope is non-commercial /
+  research / academic, so CC-BY-NC, GPL-3-with-commercial-exception, and
+  Meta-custom-commercial-use-restricted licenses are ACCEPTABLE.
+  **§Lens 5 (MarkerPdf) License watch** refreshed to record **GD-2 A
+  LOCKED** (accept outright; CL-15 + CL-35 subprocess pattern retained per
+  CL-72 surface-(b)-cleanliness-by-composition precautionary-binding
+  corollary); A dominates B + C on the per-CL-77 Big-5 dominance walk —
+  A = / = / = / = / + (CLI most-stable contract surface + subprocess
+  Big-5-additive resilience) vs B = / − / = / = / = (collapses
+  4-comprehensive-extractor architectural diversity per Doctrine v1.4 §2
+  CL-3) vs C − / − / = / = / = (re-implement).
+  **§Lens 6 (NougatScience) License watch** added to record **GD-1 A
+  LOCKED** (accept; CC-BY-NC-4.0 model weights compatible with the
+  non-commercial deployment scope); A dominates B + C — A = / = / = / =
+  / = (preserves arXiv-trained distinctness — the LENS-06 load-bearing
+  distinctness criterion) vs B ? / ? / ? / ? / − (forces re-train /
+  re-run + loses distinctness) vs C − / − / − / = / = (loses scientific-
+  paper specialist). CL-37 build-time re-fetch + SHA256 protocol applies.
+  **§Lens 9 (VisionLocal) License watch** added to record **GD-6 A
+  LOCKED** (accept opt-in FALLBACK path for Llama-3.2-Vision-11B
+  Meta-custom-commercial-use-restricted); A / B / C Big-5-tied at the
+  non-commercial-deployment ceiling — tie-breaker preserves the spec +
+  the CL-71 worked example (multi-model FALLBACK architecture-rotation
+  pattern); A+ amendment formalizing the opt-in invocation gate language
+  in LENS-09 spec DEFERRED to queue #24 Doctrine soak. **GD-7 (LENS-10
+  bundled-components — A+C LOCKED — install-time + periodic CI re-
+  verification)** is in-spec only — no Curator amendment needed; GD-7's
+  disposition is stamped into `Conclave/docs/SPEC_LENS_10_MinerU.md` §4
+  LICENSE WATCH (already reflected in this file's existing §Lens 10
+  License watch v0.4 text). The three GD-1 / GD-2 / GD-6 dispositions are
+  stamped into Conclave's respective Lens spec §4 LICENSE WATCH sections
+  (`SPEC_LENS_05_MarkerPdf.md` / `SPEC_LENS_06_NougatScience.md` /
+  `SPEC_LENS_09_VisionLocal.md`) by PR #120 itself; this v0.5 amendment
+  mirrors them into the source-of-authority Lens roster per the
+  established cross-tree sync precedent (v0.4 sync 2026-05-24 = Curator
+  PR [#4](https://github.com/KULawHawk/Curator/pull/4) + Conclave PR
+  [#93](https://github.com/KULawHawk/Conclave/pull/93)). Full per-GD Big-
+  5 dominance walks (+/=/−) are recorded in PR #120 description.
+  Mechanical reconcile of v0.4 status frontmatter: `**Status:** v0.4
+  RATIFIED 2026-05-24` → `v0.5 RATIFIED 2026-05-28`; `**Date:**` line
+  extended with the v0.4 + v0.5 amendment dates. Frozen import at
+  `Conclave/docs/imports/CONCLAVE_LENSES_v2.md` synced per
+  `Conclave/docs/imports/IMPORTS_LOG.md` procedure as a follow-on
+  Conclave-side commit (queue #25, Conclave PR follow-on to this Curator
+  PR). Ratification authority: Conclave Architect's Brief §10 post-PR-#120
+  active-entry direction of queue #25 + PR #120's prior ratification of
+  the underlying GD-1 / GD-2 / GD-6 dispositions (this amendment is the
+  source-of-authority mirror of already-ratified content per the v0.4
+  cross-tree sync precedent — no separate proposal-file ceremony is
+  required when the dispositions were ratified upstream and the Brief
+  directs the sync explicitly).
 
 ---
 
