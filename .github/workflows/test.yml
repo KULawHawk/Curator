@@ -110,11 +110,11 @@ jobs:
         # CI verified 9/9 GREEN on fa16240 before merge. v6 separates
         # credential persistence to a separate file by default; Curator
         # does not use credentials post-checkout, so the change is safe.
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python ${{ matrix.python-version }}
         # v1.7.67: bumped from @v5 (Node 20, deprecated) to @v6 (Node 24).
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
