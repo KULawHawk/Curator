@@ -198,9 +198,11 @@ Lenses that fail this check get consolidated or replaced. Lenses that pass it ea
 | **Cheap-and-fast** | 5 | + OcrPaddle + TableSurgeon | Routine indexing where cost matters | ~15 min |
 | **Balanced** | 8 | + MarkerPdf + VisionLocal + FormFieldLens | **NEW DEFAULT** for assessments with forms (the majority of psychometric content) | ~35 min |
 | **Forensic** (new) | 12 | + HtrLens + HierarchyLens + FormulaLens + VisionClaude | High-content-diversity assessments — handwriting, deep structure, math, semantic-VLM confirmation | ~75 min |
-| **Full ensemble** | 16 | + GotOcrUnified + NougatScience + MinerU + ColPaliVerify | Full roster except Adjudicator (which runs only on disagreement). High-stakes assessments where ≥99.5% accuracy is required + reproducibility for audit. | ~90-120 min |
-| **Comprehensive** (new) | 17 | + Adjudicator (always-on) | Maximum-confidence runs where adjudication runs on every claim, not just on disagreement. Forensic / clinical / legal-review grade. | ~120-150 min |
+| **Full ensemble** | 17 | + GotOcrUnified + NougatScience + MinerU + ColPaliVerify + Docling | Full roster except Adjudicator (which runs only on disagreement). High-stakes assessments where ≥99.5% accuracy is required + reproducibility for audit. | ~90-120 min |
+| **Comprehensive** (new) | 18 | + Adjudicator (always-on) | Maximum-confidence runs where adjudication runs on every claim, not just on disagreement. Forensic / clinical / legal-review grade. | ~120-150 min |
 | **Custom** | user-configurable | Per-Lens toggle via ReviewConsole LensControl panel (OQ-23 cascade) | Anything else; per-deployment AND per-document overrides | varies |
+
+**Amendment 2026-10-23 (Jake, 7:18 PM CT, answer "A" on the Docling card):** Docling (Lens 18) joins **Full ensemble** and therefore **Comprehensive**. The v0.5 rows left it out of both even though Full ensemble is defined as the full roster except the Adjudicator. Ruling pattern (recorded so it never re-asks): a preset named for every Lens includes every Lens, so a Lens added to the roster later joins Full ensemble and Comprehensive automatically. In code the two rows are derived from the registered roster (`conclave_contracts/src/conclave/contracts/presets.py` `derive_full_rows`). The wallclock column is unchanged and does not yet reflect Docling's added cost.
 
 \* Wallclock estimates assume a 100-page assessment on a single GPU host; scales sub-linearly with parallel-extract-friendly Lenses.
 
@@ -269,6 +271,13 @@ The roster should be reviewed:
 
 ## Revision log
 
+* **2026-10-23 v0.5 amendment (synced upstream 2026-10-28)** — Full
+  ensemble 16 → 17 and Comprehensive 17 → 18 by adding Docling, per Jake's
+  answer "A" (7:18 PM CT 2026-10-23) on the Conclave blueprint 2.3 Docling
+  card. The 18-Lens roster itself is unchanged; the version label stays v0.5.
+  Synced verbatim from Conclave's frozen import
+  `Conclave/docs/imports/CONCLAVE_LENSES_v2.md`, which carried it first
+  (see Conclave `docs/imports/IMPORTS_LOG.md`).
 * **2026-05-14 v0.2 → v0.3** — Adds four new Lens entries (LENS-14 HtrLens, LENS-15 FormFieldLens, LENS-16 HierarchyLens, LENS-17 FormulaLens), expands configurable subset presets (introduces "Forensic" 12-Lens preset and "Comprehensive" 17-Lens preset), surfaces OQ-23 (ReviewConsole LensControl cascade) + OQ-24 (HtrLens library choice) + OQ-25 (HierarchyLens library choice). Resolves OQ-9 (MinerU as alternative or addition?) as ADDITION per Jake's "overbuilt" anchor. Proposed in `Conclave/docs/proposals/LENSES_v2_v03_PROPOSED_AMENDMENT.md` v0.1 under WC-004 (2026-05-14 evening). Ratified by chat reply "yes". Frozen import at `Conclave/docs/imports/CONCLAVE_LENSES_v2.md` synced per `Conclave/docs/imports/IMPORTS_LOG.md` procedure same-day under Conclave WC-006.
 * **2026-05-24 v0.3 → v0.4** — Adds §Lens 18 Docling (modular document
   conversion, IBM Research + LF AI & Data Foundation governance, pure MIT
